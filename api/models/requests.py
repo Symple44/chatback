@@ -1,6 +1,6 @@
 # api/models/requests.py
 from pydantic import BaseModel, Field, EmailStr, validator, UUID4
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any
 from datetime import datetime
 
 class MessageData(BaseModel):
@@ -74,14 +74,7 @@ class ChatRequest(BaseModel):
                 "application": "cmmanager"
             }
         }
-        # Configuration Pydantic
-        from_attributes = True  # Pour la compatibilité avec SQLAlchemy
-        validate_assignment = True  # Valider les assignations après l'initialisation
-        arbitrary_types_allowed = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            UUID4: lambda v: str(v)
-        }
+        from_attributes = True
 
 class SessionCreate(BaseModel):
     user_id: UUID4 = Field(..., description="Identifiant de l'utilisateur")
