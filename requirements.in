@@ -22,6 +22,7 @@ memory-profiler
 # Elasticsearch et Vectorisation
 elasticsearch
 elastic-transport
+langchain-elasticsearch
 
 # LangChain et intégrations
 langchain
