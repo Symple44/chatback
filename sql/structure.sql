@@ -24,7 +24,7 @@ CREATE TABLE chat_sessions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     session_context JSONB DEFAULT '{}',
     is_active BOOLEAN DEFAULT true,
-    metadata JSONB DEFAULT '{}'
+    session_metadata JSONB DEFAULT '{}'
 );
 
 -- Table de l'historique des chats
@@ -51,7 +51,7 @@ CREATE TABLE referenced_documents (
     page_number INTEGER,
     relevance_score FLOAT,
     content_snippet TEXT,
-    metadata JSONB DEFAULT '{}'
+    document_metadata JSONB DEFAULT '{}'
 );
 
 -- Table des métriques d'utilisation

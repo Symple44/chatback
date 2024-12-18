@@ -8,7 +8,7 @@ class DocumentReference(BaseModel):
     page: Optional[int] = Field(None, ge=1)
     score: float = Field(..., ge=0.0, le=1.0)
     content: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default={})
+    document_metadata: Dict[str, Any] = Field(default={})
 
     @validator('score')
     def validate_score(cls, v):
@@ -43,7 +43,7 @@ class SessionResponse(BaseModel):
     updated_at: datetime
     session_context: Optional[Dict[str, Any]] = Field(default={})
     is_active: bool = Field(default=True)
-    metadata: Optional[Dict[str, Any]] = Field(default={})
+    session_metadata: Optional[Dict[str, Any]] = Field(default={})
 
     class Config:
         json_schema_extra = {
@@ -57,7 +57,7 @@ class SessionResponse(BaseModel):
                     "preferences": {}
                 },
                 "is_active": True,
-                "metadata": {
+                "session_metadata": {
                     "source": "web_interface",
                     "user_agent": "Mozilla/5.0..."
                 }
@@ -75,7 +75,7 @@ class ChatResponse(BaseModel):
     application: Optional[str] = None
     fragments: Optional[List[DocumentFragment]] = None
     similar_questions: Optional[List[SimilarQuestion]] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    chat_metadata: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     # Ajout de champs pour le suivi et le contexte
@@ -105,7 +105,7 @@ class ChatResponse(BaseModel):
                         "page": 1,
                         "score": 0.95,
                         "content": "Extrait du document...",
-                        "metadata": {
+                        "chat_metadata": {
                             "source": "documentation",
                             "last_updated": "2024-01-15"
                         }
@@ -130,7 +130,7 @@ class ChatResponse(BaseModel):
                         "timestamp": "2024-01-15T10:30:00Z"
                     }
                 ],
-                "metadata": {
+                "chat_metadata": {
                     "model_version": "1.0",
                     "tokens_used": 150
                 }

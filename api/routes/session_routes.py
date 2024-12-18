@@ -49,10 +49,10 @@ async def create_session(data: SessionCreate, components=Depends(get_components)
                 session_id=str(uuid.uuid4()),
                 session_context={
                     "created_at": datetime.utcnow().isoformat(),
-                    "source": data.metadata.get("source", "unknown"),
+                    "source": data.session_metadata.get("source", "unknown"),
                     "history": []
                 },
-                metadata=data.metadata
+                _metadata=data.session_metadata
             )
             session.add(new_session)
             await session.commit()

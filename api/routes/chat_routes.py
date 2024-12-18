@@ -84,7 +84,7 @@ async def process_chat_message(
             relevant_docs = await components.es_client.search_documents(
                 query=request.query,
                 vector=query_vector,
-                metadata={"application": request.application} if request.application else None,
+                chat_metadata={"application": request.application} if request.application else None,
                 size=settings.MAX_RELEVANT_DOCS
             )
 
@@ -108,7 +108,7 @@ async def process_chat_message(
         documents_used = [
             {
                 "title": doc.get('title', 'Unknown'),
-                "page": doc.get('metadata', {}).get('page', 'N/A'),
+                "page": doc.get('chat_metadata', {}).get('page', 'N/A'),
                 "score": doc.get('score', 0.0),
                 "content": doc.get('content', '')[:500]  # Limiter la taille du contenu
             }
@@ -150,7 +150,7 @@ async def process_chat_message(
                 "similarity": q["similarity"],
                 "timestamp": q["created_at"]
             } for q in similar_questions],
-            metadata={
+            chat_metadata={
                 "model_version": settings.VERSION,
                 "tokens_used": len(response.split()),
                 "source": "cache" if similar_questions and similar_questions[0]['similarity'] > 0.98 else "generation"
@@ -205,7 +205,7 @@ async def stream_chat_response(
 
             # Envoi des métadonnées à la fin
             yield {
-                "event": "metadata",
+                "event": "chat_metadata",
                 "data": {
                     "documents_used": len(relevant_docs),
                     "processing_time": time.time() - start_time

@@ -51,7 +51,7 @@ class ChatSession(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     session_context = Column(JSONB, default={})
     is_active = Column(Boolean, default=True)
-    session_metadata = Column(JSONB, default={})
+    chat_metadata = Column(JSONB, default={})
 
     # Relations
     user = relationship("User", back_populates="sessions")
@@ -72,7 +72,7 @@ class ChatSession(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_active': self.is_active,
-            'session_metadata': self.session_metadata
+            '_metadata': self.chat_metadata
         }
 
 class ChatHistory(Base):
@@ -142,7 +142,7 @@ class ReferencedDocument(Base):
     page_number = Column(Integer)
     relevance_score = Column(Float)
     content_snippet = Column(Text)
-    metadata = Column(JSONB, default={})
+    document_metadata = Column(JSONB, default={})
 
     # Relations
     chat_history = relationship("ChatHistory", back_populates="referenced_documents")
@@ -150,7 +150,7 @@ class ReferencedDocument(Base):
     __table_args__ = (
         Index('idx_ref_doc_chat_history', chat_history_id),
         Index('idx_ref_doc_relevance', relevance_score.desc()),
-        Index('idx_ref_doc_metadata', metadata, postgresql_using='gin'),
+        Index('idx_ref_doc_metadata', document_metadata, postgresql_using='gin'),
     )
 
     def to_dict(self):
@@ -161,7 +161,7 @@ class ReferencedDocument(Base):
             'page_number': self.page_number,
             'relevance_score': round(self.relevance_score, 4) if self.relevance_score else None,
             'content_snippet': self.content_snippet,
-            'metadata': self.metadata
+            'document_metadata': self.document_metadata
         }
 
 class UsageMetric(Base):

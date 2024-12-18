@@ -6,11 +6,11 @@ from datetime import datetime
 class MessageData(BaseModel):
     content: str = Field(..., min_length=1, max_length=4096)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    metadata: Optional[Dict] = Field(default={})
+    session_metadata: Optional[Dict] = Field(default={})
 
 class ChatContext(BaseModel):
     history: List[Dict[str, str]] = Field(default_factory=list)
-    metadata: Dict[str, Union[str, int, float, bool]] = Field(default={})
+    chat_metadata: Dict[str, Union[str, int, float, bool]] = Field(default={})
     preferences: Dict[str, Union[str, int, float, bool]] = Field(default={})
 
 class ChatRequest(BaseModel):
@@ -67,7 +67,7 @@ class ChatRequest(BaseModel):
                         {"role": "user", "content": "Question précédente"},
                         {"role": "assistant", "content": "Réponse précédente"}
                     ],
-                    "metadata": {"source": "web_interface"},
+                    "chat_metadata": {"source": "web_interface"},
                     "preferences": {"response_length": "detailed"}
                 },
                 "language": "fr",
@@ -78,13 +78,13 @@ class ChatRequest(BaseModel):
 
 class SessionCreate(BaseModel):
     user_id: UUID4 = Field(..., description="Identifiant de l'utilisateur")
-    metadata: Optional[Dict[str, Any]] = Field(default={})
+    session_metadata: Optional[Dict[str, Any]] = Field(default={})
 
     class Config:
         json_schema_extra = {
             "example": {
                 "user_id": "123e4567-e89b-12d3-a456-426614174000",
-                "metadata": {
+                "session_metadata": {
                     "source": "web_app",
                     "user_agent": "Mozilla/5.0..."
                 }
