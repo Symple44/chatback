@@ -36,6 +36,35 @@ class SimilarQuestion(BaseModel):
     similarity: float = Field(..., ge=0.0, le=1.0)
     timestamp: datetime
 
+class SessionResponse(BaseModel):
+    session_id: str = Field(..., description="Identifiant unique de la session")
+    user_id: UUID4
+    created_at: datetime
+    updated_at: datetime
+    session_context: Optional[Dict[str, Any]] = Field(default={})
+    is_active: bool = Field(default=True)
+    metadata: Optional[Dict[str, Any]] = Field(default={})
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session_id": "session-123456789",
+                "user_id": "123e4567-e89b-12d3-a456-426614174000",
+                "created_at": "2024-01-15T10:30:00Z",
+                "updated_at": "2024-01-15T10:30:00Z",
+                "session_context": {
+                    "history": [],
+                    "preferences": {}
+                },
+                "is_active": True,
+                "metadata": {
+                    "source": "web_interface",
+                    "user_agent": "Mozilla/5.0..."
+                }
+            }
+        }
+        from_attributes = True
+
 class ChatResponse(BaseModel):
     response: str = Field(..., min_length=1)
     session_id: str = Field(..., min_length=32, max_length=64)
