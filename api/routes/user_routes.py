@@ -24,7 +24,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     preferences: Dict
 
-@router.post("/", response_model=UserResponse)
+@router.post("/new", response_model=UserResponse)
 async def create_user(
     user_data: UserCreate,
     components=Depends(get_components)
@@ -80,7 +80,7 @@ async def get_user(
         logger.error(f"Erreur lors de la récupération de l'utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/{user_id}")
+@router.delete("/del/{user_id}")
 async def delete_user(
     user_id: str,
     components=Depends(get_components)
