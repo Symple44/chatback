@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Chemins et fichiers
     DOCUMENTS_DIR: str = "documents"
     SYNC_STATUS_FILE: str = "sync_status.json"
-    GOOGLE_DRIVE_CREDENTIALS_PATH: str = "core/storage/credentials.json"
+    GOOGLE_DRIVE_CREDENTIALS_PATH: str = "/home/oweoai/aisymple-project/credentials/google.json"
     
     # Configuration Base de données
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/db")
