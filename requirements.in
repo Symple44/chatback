@@ -12,6 +12,7 @@ sse-starlette
 
 # Base de données
 sqlalchemy
+sqlalchemy-utils
 asyncpg
 psycopg2-binary
 alembic

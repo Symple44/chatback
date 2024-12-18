@@ -1,6 +1,7 @@
 # core/database/models.py
 from sqlalchemy import Column, String, DateTime, Float, Integer, Boolean, ForeignKey, Text, Index, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB, vector
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -82,8 +83,8 @@ class ChatHistory(Base):
     user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     query = Column(Text, nullable=False)
     response = Column(Text, nullable=False)
-    query_vector = Column(vector(settings.ELASTICSEARCH_EMBEDDING_DIM))
-    response_vector = Column(vector(settings.ELASTICSEARCH_EMBEDDING_DIM))
+    query_vector = Column(Vector(settings.ELASTICSEARCH_EMBEDDING_DIM))
+    response_vector = Column(Vector(settings.ELASTICSEARCH_EMBEDDING_DIM))
     confidence_score = Column(Float, nullable=False, default=0.0)
     tokens_used = Column(Integer, nullable=False, default=0)
     processing_time = Column(Float, nullable=False, default=0.0)
