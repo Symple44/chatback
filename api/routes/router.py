@@ -4,6 +4,7 @@ from .chat_routes import router as chat_router
 from .session_routes import router as session_router
 from .history_routes import router as history_router
 from .health_routes import router as health_router
+from .user_routes import router as user_router
 
 router = APIRouter(prefix="")
 
