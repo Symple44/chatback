@@ -51,7 +51,7 @@ class ChatSession(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     session_context = Column(JSONB, default={})
     is_active = Column(Boolean, default=True)
-    metadata = Column(JSONB, default={})
+    session_metadata = Column(JSONB, default={})
 
     # Relations
     user = relationship("User", back_populates="sessions")
