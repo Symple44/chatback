@@ -6,6 +6,8 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 python-multipart
+pydantic[email]
+email-validator
 sse-starlette
 
 # Base de données
