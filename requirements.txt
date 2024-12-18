@@ -25,8 +25,8 @@ elastic-transport==8.10.0
 langchain>=0.1.0
 langchain-core>=0.1.5
 langchain-community>=0.1.0
-langchain-huggingface==0.1.2
-sentence-transformers==2.2.2
+langchain-huggingface==0.1.6
+sentence-transformers>=2.6.2
 
 # Traitement du langage et IA
 transformers==4.35.2
