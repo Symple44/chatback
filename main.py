@@ -88,6 +88,7 @@ class ComponentManager:
         """Initialise tous les composants."""
         try:
             if self.initialized:
+                logger.debug("Initialisation déjà réalisée.")
                 return
                 
             logger.info("Initialisation des composants...")
