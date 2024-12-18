@@ -43,6 +43,11 @@ safetensors
 faiss-cpu
 pgvector
 
+# Utilitaires asynchrones
+aiohttp
+aiofiles  # Ajouté pour les opérations fichiers asynchrones
+httpx
+
 # Google Drive
 google-auth
 google-auth-oauthlib
