@@ -1,4 +1,4 @@
-# /api/routes/user_routes.py
+# api/routes/user_routes.py
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict
 from pydantic import BaseModel, EmailStr
