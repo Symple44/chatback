@@ -216,6 +216,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gestion du cycle de vie de l'application."""
+    await components.initialize()
+    yield
+    await components.cleanup()
+
+app.router.lifespan_context = lifespan
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Endpoint WebSocket pour le streaming des réponses."""
