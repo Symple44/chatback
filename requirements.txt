@@ -4,6 +4,7 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.2
 pydantic-settings==2.1.0
 python-multipart==0.0.6
+sse-starlette==1.6.5
 
 # Base de données
 sqlalchemy==2.0.23
@@ -20,20 +21,24 @@ memory-profiler==0.61.0
 elasticsearch==8.11.0
 elastic-transport==8.10.0
 
+# LangChain et intégrations
+langchain==0.0.340
+langchain-core==0.1.0
+langchain-community==0.0.8
+langchain-huggingface==0.0.6
+sentence-transformers==2.2.2
+
 # Traitement du langage et IA
 transformers==4.35.2
 torch==2.1.1
-sentence-transformers==2.2.2
 tokenizers==0.15.0
 accelerate==0.24.1
 optimum==1.14.0
 safetensors==0.4.0
 
-# LangChain et embeddings
-langchain==0.0.340
-langchain-core>=0.1.5,<0.2
-langchain-community==0.0.8
+# Recherche vectorielle
 faiss-cpu==1.7.4
+pgvector==0.2.3
 
 # Traitement des PDFs et images
 PyPDF2==3.0.1
