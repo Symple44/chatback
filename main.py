@@ -12,7 +12,7 @@ from typing import Optional
 
 # Imports internes
 from core.config import settings
-from core.database import DatabaseManager
+from core.database.manager import DatabaseManager
 from core.cache import RedisCache
 from core.vectorstore.search import ElasticsearchClient
 from core.llm.model import ModelInference
