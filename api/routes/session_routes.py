@@ -1,4 +1,4 @@
-# /api/routes/session_routes.py
+# api/routes/session_routes.py
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict
 from pydantic import BaseModel
