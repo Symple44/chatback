@@ -20,25 +20,40 @@ class SessionResponse(BaseModel):
     messages_count: int
 
 @router.post("/new", response_model=SessionResponse)
-async def create_session(
-    data: SessionCreate,
-    components=Depends(get_components)
-) -> Dict:
-    """
-    Crée une nouvelle session pour l'utilisateur.
-    """
-    try:
-        # Vérifier si l'utilisateur existe
-        user = await components.db.get_user(data.user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+async def create_session(data: SessionCreate, components=Depends(get_components)) -> Dict:
+    async with components.db.session_factory() as session:
+        try:
+            # Vérification de l'existence des sessions actives
+            active_sessions = await session.execute(
+                select(ChatSession)
+                .where(
+                    and_(
+                        ChatSession.user_id == data.user_id,
+                        ChatSession.is_active == True,
+                        ChatSession.updated_at >= datetime.utcnow() - timedelta(hours=24)
+                    )
+                )
+            )
+            
+            if active_sessions.scalar_one_or_none():
+                # Réutilisation de la session existante
+                return active_sessions.scalar_one_or_none()
 
-        session = await components.session_manager.create_session(data.user_id)
-        logger.info(f"Nouvelle session créée: {session['session_id']}")
-        return session
-    except Exception as e:
-        logger.error(f"Erreur création session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            # Création d'une nouvelle session
+            new_session = ChatSession(
+                user_id=data.user_id,
+                session_id=str(uuid.uuid4()),
+                session_context={
+                    "created_at": datetime.utcnow().isoformat(),
+                    "source": data.metadata.get("source", "unknown"),
+                    "history": []
+                }
+            )
+            session.add(new_session)
+            await session.commit()
+            await session.refresh(new_session)
+            
+            return new_session
 
 @router.get("/user/{user_id}", response_model=List[SessionResponse])
 async def get_user_sessions(

@@ -48,10 +48,21 @@ class ChatResponse(BaseModel):
     similar_questions: Optional[List[SimilarQuestion]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Ajout de champs pour le suivi et le contexte
+    conversation_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Contexte de la conversation actuelle"
+    )
+    
+    recommended_actions: Optional[List[str]] = Field(
+        default=None,
+        description="Actions recommandées basées sur la réponse"
+    )
 
     @validator('confidence_score', 'processing_time')
     def round_floats(cls, v):
-        return round(v, 4)
+        return round(v, 4) if v is not None else v
 
     class Config:
         json_schema_extra = {

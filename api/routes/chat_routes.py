@@ -17,6 +17,8 @@ from core.utils.metrics import metrics
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+# api/routes/chat_routes.py
+
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
@@ -27,34 +29,63 @@ async def process_chat_message(
     Traite une requête de chat et retourne une réponse complète.
     """
     start_time = datetime.utcnow()
-    try:
-        # Vérification de l'utilisateur
-        async with get_session_manager().get_session() as session:
-            user = await components.db.get_user(request.user_id)
-            if not user:
-                raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+    session_manager = get_session_manager()
 
-        # Préparation du contexte de recherche
+    try:
+        # 1. Vérification et récupération de l'utilisateur
+        async with session_manager.get_session() as session:
+            user = await session.execute(
+                select(User).where(User.id == request.user_id)
+            )
+            user = user.scalar_one_or_none()
+            if not user:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Utilisateur non trouvé"
+                )
+
+            # 2. Gestion de la session
+            session_id = request.session_id or str(uuid.uuid4())
+            chat_session = await session.execute(
+                select(ChatSession).where(
+                    ChatSession.session_id == session_id
+                )
+            )
+            chat_session = chat_session.scalar_one_or_none()
+
+            if not chat_session:
+                chat_session = ChatSession(
+                    user_id=str(request.user_id),
+                    session_id=session_id,
+                    session_context=request.context.model_dump() if request.context else {}
+                )
+                session.add(chat_session)
+                await session.flush()
+
+        # 3. Préparation du contexte de recherche
         query_vector = await components.model.create_embedding(request.query)
         
-        # Recherche de questions similaires
+        # 4. Recherche de questions similaires
         similar_questions = await components.db.find_similar_questions(
             vector=query_vector,
             threshold=0.95,
             limit=3
         )
 
-        # Si une question très similaire existe, utiliser sa réponse
+        # 5. Traitement de la réponse
         if similar_questions and similar_questions[0]['similarity'] > 0.98:
+            # Utilisation d'une réponse existante très similaire
             response = similar_questions[0]['response']
-            logger.info("Réponse existante trouvée avec forte similarité")
+            confidence_score = similar_questions[0]['similarity']
             metrics.increment_counter("cache_hits")
+            relevant_docs = []
         else:
             # Recherche de documents pertinents
             relevant_docs = await components.es_client.search_documents(
                 query=request.query,
                 vector=query_vector,
-                metadata={"application": request.application} if request.application else None
+                metadata={"application": request.application} if request.application else None,
+                size=settings.MAX_RELEVANT_DOCS
             )
 
             # Génération de la réponse
@@ -64,42 +95,82 @@ async def process_chat_message(
                 conversation_history=request.context.history if request.context else [],
                 language=request.language
             )
+            confidence_score = max((doc.get('score', 0) for doc in relevant_docs), default=0.0)
             metrics.increment_counter("new_responses")
 
-        # Création du vecteur de réponse
+        # 6. Création du vecteur de réponse
         response_vector = await components.model.create_embedding(response)
         
-        # Calcul du temps de traitement
+        # 7. Calcul du temps de traitement
         processing_time = (datetime.utcnow() - start_time).total_seconds()
-        
-        # Sauvegarde en arrière-plan
+
+        # 8. Préparation des documents référencés
+        documents_used = [
+            {
+                "title": doc.get('title', 'Unknown'),
+                "page": doc.get('metadata', {}).get('page', 'N/A'),
+                "score": doc.get('score', 0.0),
+                "content": doc.get('content', '')[:500]  # Limiter la taille du contenu
+            }
+            for doc in relevant_docs[:3]  # Limiter à 3 documents
+        ] if relevant_docs else []
+
+        # 9. Sauvegarde en arrière-plan
         background_tasks.add_task(
-            save_interaction,
-            components=components,
-            request=request,
+            components.db.save_chat_interaction,
+            session_id=session_id,
+            user_id=str(request.user_id),
+            query=request.query,
             response=response,
             query_vector=query_vector,
             response_vector=response_vector,
-            processing_time=processing_time
+            confidence_score=confidence_score,
+            tokens_used=len(request.query.split()) + len(response.split()),
+            processing_time=processing_time,
+            referenced_docs=documents_used,
+            additional_data={
+                "application": request.application,
+                "language": request.language,
+                "similar_questions_found": len(similar_questions)
+            }
         )
 
+        # 10. Construction et renvoi de la réponse
         return ChatResponse(
             response=response,
-            session_id=request.session_id or str(uuid.uuid4()),
+            session_id=session_id,
             conversation_id=str(uuid.uuid4()),
-            documents_used=relevant_docs[:3] if 'relevant_docs' in locals() else [],
-            confidence_score=similar_questions[0]['similarity'] if similar_questions else 0.0,
+            documents_used=documents_used,
+            confidence_score=confidence_score,
             processing_time=processing_time,
             application=request.application,
-            similar_questions=similar_questions
+            similar_questions=[{
+                "query": q["query"],
+                "response": q["response"],
+                "similarity": q["similarity"],
+                "timestamp": q["created_at"]
+            } for q in similar_questions],
+            metadata={
+                "model_version": settings.VERSION,
+                "tokens_used": len(response.split()),
+                "source": "cache" if similar_questions and similar_questions[0]['similarity'] > 0.98 else "generation"
+            },
+            timestamp=datetime.utcnow()
         )
 
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(f"Erreur traitement message: {e}")
+        logger.error(f"Erreur traitement message: {e}", exc_info=True)
         metrics.increment_counter("chat_errors")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Une erreur est survenue lors du traitement",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
 
 @router.get("/stream")
 async def stream_chat_response(

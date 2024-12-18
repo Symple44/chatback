@@ -91,35 +91,35 @@ class DatabaseManager:
                 logger.error(f"Erreur sauvegarde chat: {e}")
                 return None
 
-    async def find_similar_questions(
-        self,
-        vector: List[float],
-        threshold: float = 0.8,
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def find_similar_questions(self, vector: List[float], threshold: float = 0.8, limit: int = 5) -> List[Dict[str, Any]]:
         async with self.session_factory() as session:
             try:
-                # Conversion en texte SQL compatible avec pgvector
-                vector_str = f"[{','.join(map(str, vector))}]"
+                # Modification de la requête pour utiliser la fonction cosine_similarity
                 query = text("""
-                    SELECT 
-                        ch.query,
-                        ch.response,
-                        1 - (ch.query_vector <=> :vector) as similarity,
-                        ch.confidence_score,
-                        ch.created_at,
-                        u.username
-                    FROM chat_history ch
-                    JOIN users u ON ch.user_id = u.id
-                    WHERE 1 - (ch.query_vector <=> :vector) > :threshold
-                    ORDER BY similarity DESC
+                    WITH vector_matches AS (
+                        SELECT 
+                            ch.id,
+                            ch.query,
+                            ch.response,
+                            ch.confidence_score,
+                            ch.created_at,
+                            u.username,
+                            1 - (ch.query_vector <=> :vector::vector) as similarity
+                        FROM chat_history ch
+                        JOIN users u ON ch.user_id = u.id
+                        WHERE ch.created_at > NOW() - INTERVAL '30 days'
+                    )
+                    SELECT *
+                    FROM vector_matches
+                    WHERE similarity > :threshold
+                    ORDER BY similarity DESC, created_at DESC
                     LIMIT :limit
                 """)
-
+    
                 result = await session.execute(
                     query,
                     {
-                        "vector": vector_str,
+                        "vector": f"[{','.join(map(str, vector))}]",
                         "threshold": threshold,
                         "limit": limit
                     }
