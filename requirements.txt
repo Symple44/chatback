@@ -1,0 +1,77 @@
+# Base FastAPI
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+
+# Base de données
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# Cache et Monitoring
+redis==5.0.1
+psutil==5.9.6
+memory-profiler==0.61.0
+
+# Elasticsearch et Vectorisation
+elasticsearch==8.11.0
+elastic-transport==8.10.0
+
+# Traitement du langage et IA
+transformers==4.35.2
+torch==2.1.1
+sentence-transformers==2.2.2
+tokenizers==0.15.0
+accelerate==0.24.1
+optimum==1.14.0
+safetensors==0.4.0
+
+# LangChain et embeddings
+langchain==0.0.340
+langchain-core==0.1.0
+langchain-community==0.0.8
+faiss-cpu==1.7.4
+
+# Traitement des PDFs et images
+PyPDF2==3.0.1
+pdf2image==1.16.3
+Pillow==10.1.0
+PyMuPDF==1.23.7
+python-magic==0.4.27
+
+# Google Drive
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+google-api-python-client==2.108.0
+
+# Utilitaires et optimisation
+python-dotenv==1.0.0
+tenacity==8.2.3
+aiohttp==3.9.1
+httpx==0.25.2
+urllib3==2.1.0
+pathspec==0.11.2
+packaging==23.2
+typing-extensions==4.8.0
+typing-inspect==0.9.0
+
+# Gestion des logs
+python-json-logger==2.0.7
+structlog==23.2.0
+loguru==0.7.2
+
+# Tests
+pytest==7.4.3
+pytest-asyncio==0.23.2
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+hypothesis==6.90.0
+httpx==0.25.2  
+
+# Sécurité
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
