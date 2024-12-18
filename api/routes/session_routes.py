@@ -2,31 +2,34 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, List
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy import and_
+from sqlalchemy.future import select
+
 from ..dependencies import get_components
+from ..models.requests import SessionCreate
+from ..models.responses import SessionResponse
 from core.utils.logger import get_logger
 
 logger = get_logger("session_routes")
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-class SessionCreate(BaseModel):
-    user_id: str
-
-class SessionResponse(BaseModel):
-    session_id: str
-    user_id: str
-    created_at: datetime
-    last_activity: datetime
-    messages_count: int
-
 @router.post("/new", response_model=SessionResponse)
 async def create_session(data: SessionCreate, components=Depends(get_components)) -> Dict:
-    async with components.db.session_factory() as session:
-        try:
-            # Vérification de l'existence des sessions actives
+    """Crée une nouvelle session pour l'utilisateur."""
+    try:
+        # Vérification de l'utilisateur
+        async with components.db.session_factory() as session:
+            user = await session.execute(
+                select(User).where(User.id == data.user_id)
+            )
+            user = user.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+
+            # Vérification des sessions actives existantes
             active_sessions = await session.execute(
-                select(ChatSession)
-                .where(
+                select(ChatSession).where(
                     and_(
                         ChatSession.user_id == data.user_id,
                         ChatSession.is_active == True,
@@ -34,10 +37,11 @@ async def create_session(data: SessionCreate, components=Depends(get_components)
                     )
                 )
             )
-            
-            if active_sessions.scalar_one_or_none():
+            active_session = active_sessions.scalar_one_or_none()
+
+            if active_session:
                 # Réutilisation de la session existante
-                return active_sessions.scalar_one_or_none()
+                return active_session.to_dict()
 
             # Création d'une nouvelle session
             new_session = ChatSession(
@@ -47,54 +51,83 @@ async def create_session(data: SessionCreate, components=Depends(get_components)
                     "created_at": datetime.utcnow().isoformat(),
                     "source": data.metadata.get("source", "unknown"),
                     "history": []
-                }
+                },
+                metadata=data.metadata
             )
             session.add(new_session)
             await session.commit()
             await session.refresh(new_session)
             
-            return new_session
+            logger.info(f"Nouvelle session créée: {new_session.session_id}")
+            return new_session.to_dict()
+            
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Erreur création session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/user/{user_id}", response_model=List[SessionResponse])
-async def get_user_sessions(
-    user_id: str,
-    components=Depends(get_components)
-) -> List[Dict]:
-    """
-    Récupère toutes les sessions d'un utilisateur.
-    """
+async def get_user_sessions(user_id: str, components=Depends(get_components)) -> List[Dict]:
+    """Récupère toutes les sessions d'un utilisateur."""
     try:
-        sessions = await components.session_manager.get_user_sessions(user_id)
-        return sessions
+        async with components.db.session_factory() as session:
+            result = await session.execute(
+                select(ChatSession)
+                .where(ChatSession.user_id == user_id)
+                .order_by(ChatSession.updated_at.desc())
+            )
+            sessions = result.scalars().all()
+            return [s.to_dict() for s in sessions]
+            
     except Exception as e:
         logger.error(f"Erreur récupération sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/del/{session_id}")
-async def delete_session(
-    session_id: str,
-    components=Depends(get_components)
-) -> Dict:
-    """
-    Supprime une session et son historique.
-    """
+async def delete_session(session_id: str, components=Depends(get_components)) -> Dict:
+    """Supprime une session et son historique."""
     try:
-        # Vérifier si la session existe
-        session = await components.session_manager.get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Session non trouvée")
+        async with components.db.session_factory() as session:
+            # Vérification de l'existence de la session
+            result = await session.execute(
+                select(ChatSession).where(ChatSession.session_id == session_id)
+            )
+            chat_session = result.scalar_one_or_none()
             
-        # Supprimer l'historique de la session
-        await components.db.delete_session_history(session_id)
-        
-        # Supprimer la session
-        await components.session_manager.delete_session(session_id)
-        
-        logger.info(f"Session supprimée: {session_id}")
-        return {"message": "Session supprimée avec succès"}
-        
+            if not chat_session:
+                raise HTTPException(status_code=404, detail="Session non trouvée")
+            
+            # Suppression de la session
+            await session.delete(chat_session)
+            await session.commit()
+            
+            logger.info(f"Session supprimée: {session_id}")
+            return {"message": "Session supprimée avec succès"}
+            
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(f"Erreur lors de la suppression de la session: {e}")
+        logger.error(f"Erreur suppression session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{session_id}")
+async def get_session_info(session_id: str, components=Depends(get_components)) -> Dict:
+    """Récupère les informations d'une session spécifique."""
+    try:
+        async with components.db.session_factory() as session:
+            result = await session.execute(
+                select(ChatSession).where(ChatSession.session_id == session_id)
+            )
+            chat_session = result.scalar_one_or_none()
+            
+            if not chat_session:
+                raise HTTPException(status_code=404, detail="Session non trouvée")
+                
+            return chat_session.to_dict()
+            
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Erreur récupération session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
