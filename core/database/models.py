@@ -1,3 +1,4 @@
+# core/database/models.py
 from sqlalchemy import Column, String, DateTime, Float, Integer, Boolean, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, FLOAT
 from sqlalchemy.orm import relationship
