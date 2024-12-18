@@ -29,12 +29,12 @@ langchain-huggingface==0.1.2
 sentence-transformers>=2.6.2
 
 # Traitement du langage et IA
-transformers==4.35.2
-torch==2.1.1
+transformers>=4.35.2
+torch>=2.1.1
 tokenizers>=0.19.1
-accelerate==0.24.1
-optimum==1.14.0
-safetensors==0.4.0
+accelerate>=0.24.1
+optimum>=1.14.0
+safetensors>=0.4.0
 
 # Recherche vectorielle
 faiss-cpu==1.7.4
