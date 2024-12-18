@@ -52,6 +52,16 @@ class DatabaseSessionManager:
     async def close(self):
         """Ferme toutes les connexions."""
         await self.engine.dispose()
+    
+    async def get_user_by_email(self, email: str):
+        """Récupère un utilisateur par son email."""
+        from .models import User  # Import local pour éviter les imports circulaires
+        
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.email == email)
+            )
+            return result.scalar_one_or_none()
 
     async def health_check(self) -> bool:
         """Vérifie l'état de la connexion à la base de données."""

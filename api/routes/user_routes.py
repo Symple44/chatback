@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from ..dependencies import get_components
 from core.utils.logger import get_logger
+from core.database.models import User
 
 logger = get_logger("user_routes")
 router = APIRouter(prefix="/users", tags=["users"])
@@ -33,29 +34,37 @@ async def create_user(
     Crée un nouvel utilisateur.
     """
     try:
-        # Vérifier si l'email existe déjà
-        existing_user = await components.db.get_user_by_email(user_data.email)
-        if existing_user:
-            raise HTTPException(
-                status_code=400,
-                detail="Un utilisateur avec cet email existe déjà"
+        async with components.db.session_factory() as session:
+            # Vérifier si l'email existe déjà
+            result = await session.execute(
+                select(User).where(User.email == user_data.email)
             )
+            existing_user = result.scalar_one_or_none()
+            
+            if existing_user:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Un utilisateur avec cet email existe déjà"
+                )
 
-        # Création de l'utilisateur
-        user_id = str(uuid.uuid4())
-        user = {
-            "id": user_id,
-            "email": user_data.email,
-            "username": user_data.username,
-            "full_name": user_data.full_name,
-            "created_at": datetime.utcnow(),
-            "preferences": user_data.preferences
-        }
-        
-        await components.db.create_user(user)
-        logger.info(f"Nouvel utilisateur créé: {user_id}")
-        return user
-        
+            # Création de l'utilisateur
+            user = User(
+                id=uuid.uuid4(),
+                email=user_data.email,
+                username=user_data.username,
+                full_name=user_data.full_name,
+                preferences=user_data.preferences
+            )
+            
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            
+            logger.info(f"Nouvel utilisateur créé: {user.id}")
+            return user.to_dict()
+            
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Erreur lors de la création de l'utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))
