@@ -1,14 +1,13 @@
 # core/database/models.py
 from sqlalchemy import Column, String, DateTime, Float, Integer, Boolean, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, FLOAT
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from typing import List
 import uuid
 from datetime import datetime
 
-Base = declarative_base()
+from .base import Base
 
 class User(Base):
     __tablename__ = 'users'
