@@ -29,7 +29,7 @@ async def create_session(
     """
     try:
         # Vérifier si l'utilisateur existe
-        user = await components.db_manager.get_user(data.user_id)
+        user = await components.db.get_user(data.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
 
@@ -70,7 +70,7 @@ async def delete_session(
             raise HTTPException(status_code=404, detail="Session non trouvée")
             
         # Supprimer l'historique de la session
-        await components.db_manager.delete_session_history(session_id)
+        await components.db.delete_session_history(session_id)
         
         # Supprimer la session
         await components.session_manager.delete_session(session_id)

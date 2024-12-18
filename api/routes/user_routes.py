@@ -34,7 +34,7 @@ async def create_user(
     """
     try:
         # Vérifier si l'email existe déjà
-        existing_user = await components.db_manager.get_user_by_email(user_data.email)
+        existing_user = await components.db.get_user_by_email(user_data.email)
         if existing_user:
             raise HTTPException(
                 status_code=400,
@@ -52,7 +52,7 @@ async def create_user(
             "preferences": user_data.preferences
         }
         
-        await components.db_manager.create_user(user)
+        await components.db.create_user(user)
         logger.info(f"Nouvel utilisateur créé: {user_id}")
         return user
         
@@ -69,7 +69,7 @@ async def get_user(
     Récupère les informations d'un utilisateur.
     """
     try:
-        user = await components.db_manager.get_user(user_id)
+        user = await components.db.get_user(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
         return user
@@ -90,7 +90,7 @@ async def delete_user(
     """
     try:
         # Vérifier si l'utilisateur existe
-        user = await components.db_manager.get_user(user_id)
+        user = await components.db.get_user(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
         
@@ -98,10 +98,10 @@ async def delete_user(
         await components.session_manager.delete_user_sessions(user_id)
         
         # Supprimer l'historique de chat
-        await components.db_manager.delete_user_history(user_id)
+        await components.db.delete_user_history(user_id)
         
         # Supprimer l'utilisateur
-        await components.db_manager.delete_user(user_id)
+        await components.db.delete_user(user_id)
         
         logger.info(f"Utilisateur supprimé: {user_id}")
         return {"message": "Utilisateur supprimé avec succès"}
