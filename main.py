@@ -203,8 +203,7 @@ manager = ConnectionManager()
 app = FastAPI(
     title=settings.APP_NAME,
     description="Assistant documentaire avec support vectoriel",
-    version=settings.VERSION,
-    lifespan=lifespan
+    version=settings.VERSION
 )
 
 # Configuration CORS
