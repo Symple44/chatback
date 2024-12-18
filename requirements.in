@@ -1,0 +1,76 @@
+# requirements.in
+# pip-compile --output-file=requirements.txt requirements.in
+# Base FastAPI
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+sse-starlette
+
+# Base de données
+sqlalchemy
+asyncpg
+psycopg2-binary
+alembic
+
+# Cache et Monitoring
+redis
+psutil
+memory-profiler
+
+# Elasticsearch et Vectorisation
+elasticsearch
+elastic-transport
+
+# LangChain et intégrations
+langchain
+langchain-core
+langchain-community
+langchain-huggingface
+sentence-transformers
+
+# Traitement du langage et IA
+transformers
+torch
+tokenizers
+accelerate
+optimum
+safetensors
+
+# Recherche vectorielle
+faiss-cpu
+pgvector
+
+# Google Drive
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+
+# Utilitaires et optimisation
+python-dotenv
+tenacity
+aiohttp
+httpx
+urllib3
+pathspec
+packaging
+typing-extensions
+typing-inspect
+
+# Gestion des logs
+python-json-logger
+structlog
+loguru
+
+# Tests
+pytest
+pytest-asyncio
+pytest-cov
+pytest-mock
+hypothesis
+
+# Sécurité
+python-jose[cryptography]
+passlib[bcrypt]
