@@ -144,6 +144,19 @@ class ChatResponse(BaseModel):
             UUID4: lambda v: str(v)
         }
 
+class UserResponse(BaseModel):
+    id: UUID
+    email: EmailStr
+    username: str
+    full_name: str
+    created_at: datetime
+    last_login: Optional[datetime] = None
+    user_metadata: Dict[str, Any] = Field(default={})
+    is_active: bool = Field(default=True)
+
+    class Config:
+        from_attributes = True
+
 class ErrorResponse(BaseModel):
     detail: str
     error_code: str

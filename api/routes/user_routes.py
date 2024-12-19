@@ -2,20 +2,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
 import uuid
 from datetime import datetime
 from ..dependencies import get_components
+from ..models.requests import UserCreate
+from ..models.responses import UserResponse
 from core.utils.logger import get_logger
 from core.database.models import User
 
 logger = get_logger("user_routes")
 router = APIRouter(prefix="/users", tags=["users"])
-
-class UserCreate(BaseModel):
-    email: EmailStr
-    username: str
-    full_name: str
-    preferences: Dict = {}
 
 class UserResponse(BaseModel):
     id: str
@@ -53,7 +50,8 @@ async def create_user(
                 email=user_data.email,
                 username=user_data.username,
                 full_name=user_data.full_name,
-                preferences=user_data.preferences
+                user_metadata=user_data.user_metadata,
+                is_active=True
             )
             
             session.add(user)

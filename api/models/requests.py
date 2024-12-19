@@ -1,6 +1,7 @@
 # api/models/requests.py
 from pydantic import BaseModel, Field, EmailStr, validator, UUID4
 from typing import Optional, Dict, List, Union, Any
+from uuid import UUID
 from datetime import datetime
 
 class MessageData(BaseModel):
@@ -91,3 +92,22 @@ class SessionCreate(BaseModel):
             }
         }
         from_attributes = True
+        
+class UserCreate(BaseModel):
+    email: EmailStr = Field(..., description="Email de l'utilisateur")
+    username: str = Field(..., min_length=3, max_length=50)
+    full_name: str = Field(..., min_length=3, max_length=100)
+    user_metadata: Dict[str, Any] = Field(default={})
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com",
+                "username": "johndoe",
+                "full_name": "John Doe",
+                "user_metadata": {
+                    "preferences": {},
+                    "settings": {}
+                }
+            }
+        }
