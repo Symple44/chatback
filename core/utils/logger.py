@@ -3,7 +3,7 @@ import logging
 import json
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 import os
