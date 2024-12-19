@@ -11,6 +11,7 @@ import os
 import traceback
 import threading
 from functools import wraps
+import aiofiles
 from concurrent.futures import ThreadPoolExecutor
 import gzip
 
