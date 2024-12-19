@@ -1,45 +1,231 @@
+# core/document_processing/pdf_processor.py
+from typing import List, Dict, Tuple, Generator, Optional
 from PyPDF2 import PdfReader
-from core.search import ElasticsearchClient
+import fitz
 import os
+from pathlib import Path
+import asyncio
+from datetime import datetime
+
+from core.utils.logger import get_logger
+from core.vectorstore.search import ElasticsearchClient
+from .image_processing import PDFImageProcessor
+
+logger = get_logger("pdf_processor")
 
 class PDFProcessor:
     def __init__(self, es_client: ElasticsearchClient):
+        """
+        Initialise le processeur PDF.
+        
+        Args:
+            es_client: Client Elasticsearch pour l'indexation
+        """
         self.es_client = es_client
+        self.image_processor = PDFImageProcessor()
+        self.temp_dir = Path("temp/pdf")
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def extract_text_from_pdf(file_path: str) -> str:
+    async def process_pdf(
+        self,
+        file_path: str,
+        extract_images: bool = True
+    ) -> Dict[str, any]:
+        """
+        Traite un fichier PDF complet.
+        
+        Args:
+            file_path: Chemin du fichier PDF
+            extract_images: Si True, extrait aussi les images
+            
+        Returns:
+            Contenu et métadonnées du PDF
+        """
+        try:
+            logger.info(f"Traitement du PDF: {file_path}")
+            
+            # Extraction du texte
+            text_content = await self.extract_text(file_path)
+            
+            # Extraction des images si demandé
+            images = []
+            if extract_images:
+                images = await self.image_processor.extract_images_from_pdf(file_path)
+            
+            # Lecture des métadonnées
+            metadata = await self._extract_metadata(file_path)
+            
+            return {
+                "content": text_content,
+                "images": images,
+                "metadata": metadata,
+                "processed_at": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Erreur traitement PDF {file_path}: {e}")
+            raise
+
+    async def extract_text(self, file_path: str) -> str:
+        """
+        Extrait le texte d'un PDF.
+        
+        Args:
+            file_path: Chemin du fichier PDF
+            
+        Returns:
+            Texte extrait
+        """
         logger.info(f"Extraction du texte de {file_path}")
         text_content = ""
+        
+        try:
+            doc = fitz.open(file_path)
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                # Ajout du numéro de page et du texte
+                text_content += f"\n=== Page {page_num + 1} ===\n{text}"
+                
+                logger.debug(f"Page {page_num + 1} extraite")
+            
+            return text_content
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de l'extraction: {e}")
+            raise
+        finally:
+            if 'doc' in locals():
+                doc.close()
+
+    async def _extract_metadata(self, file_path: str) -> Dict[str, any]:
+        """
+        Extrait les métadonnées d'un PDF.
+        
+        Args:
+            file_path: Chemin du fichier PDF
+            
+        Returns:
+            Métadonnées du PDF
+        """
         try:
             with open(file_path, 'rb') as file:
                 reader = PdfReader(file)
-                for page_num, page in enumerate(reader.pages, 1):
-                    text = page.extract_text()
-                    text_content += f"\n=== Page {page_num} ===\n{text}"
-                    logger.info(f"Page {page_num} extraite avec succès")
+                info = reader.metadata
+                
+                return {
+                    "title": info.get("/Title", ""),
+                    "author": info.get("/Author", ""),
+                    "subject": info.get("/Subject", ""),
+                    "creator": info.get("/Creator", ""),
+                    "producer": info.get("/Producer", ""),
+                    "creation_date": info.get("/CreationDate", ""),
+                    "modification_date": info.get("/ModDate", ""),
+                    "pages": len(reader.pages)
+                }
+                
         except Exception as e:
-            logger.error(f"Erreur lors de l'extraction: {e}")
-        return text_content
+            logger.error(f"Erreur extraction métadonnées: {e}")
+            return {}
 
-    def index_pdfs_in_directory(self, directory: str):
+    async def index_pdf(
+        self,
+        file_path: str,
+        metadata: Optional[Dict] = None
+    ) -> bool:
         """
-        Indexe récursivement les PDFs d'un répertoire dans Elasticsearch
+        Indexe un PDF dans Elasticsearch.
+        
+        Args:
+            file_path: Chemin du fichier PDF
+            metadata: Métadonnées additionnelles
+            
+        Returns:
+            Succès de l'indexation
         """
-        for subdir, _, files in os.walk(directory):
-            product = os.path.basename(subdir)
-            for filename in files:
-                if filename.endswith(".pdf"):
-                    file_path = os.path.join(subdir, filename)
+        try:
+            # Extraction du contenu
+            content = await self.extract_text(file_path)
+            
+            # Métadonnées du document
+            doc_metadata = await self._extract_metadata(file_path)
+            if metadata:
+                doc_metadata.update(metadata)
+            
+            # Indexation
+            await self.es_client.index_document(
+                title=Path(file_path).name,
+                content=content,
+                metadata=doc_metadata
+            )
+            
+            logger.info(f"PDF indexé avec succès: {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur indexation PDF {file_path}: {e}")
+            return False
+
+    async def index_directory(
+        self,
+        directory: str,
+        recursive: bool = True
+    ) -> Tuple[int, int]:
+        """
+        Indexe récursivement les PDFs d'un répertoire.
+        
+        Args:
+            directory: Répertoire à indexer
+            recursive: Si True, indexe aussi les sous-répertoires
+            
+        Returns:
+            Tuple (nombre de succès, nombre d'échecs)
+        """
+        success = 0
+        failed = 0
+        
+        try:
+            for root, _, files in os.walk(directory):
+                if not recursive and root != directory:
+                    continue
+                
+                for filename in files:
+                    if not filename.lower().endswith('.pdf'):
+                        continue
+                        
+                    file_path = os.path.join(root, filename)
                     try:
-                        for text, page_number in self.extract_text_from_pdf(file_path):
-                            self.es_client.index_document(
-                                title=filename,
-                                content=text,
-                                metadata={
-                                    "product": product,
-                                    "page": page_number
-                                }
-                            )
-                        print(f"Indexed: {filename}")
+                        if await self.index_pdf(
+                            file_path,
+                            metadata={"directory": root}
+                        ):
+                            success += 1
+                        else:
+                            failed += 1
                     except Exception as e:
-                        print(f"Failed to index {filename}: {e}")
+                        logger.error(f"Échec indexation {filename}: {e}")
+                        failed += 1
+            
+            logger.info(f"Indexation terminée: {success} succès, {failed} échecs")
+            return success, failed
+            
+        except Exception as e:
+            logger.error(f"Erreur indexation répertoire: {e}")
+            return success, failed
+
+    async def cleanup(self):
+        """Nettoie les ressources temporaires."""
+        try:
+            # Nettoyage du répertoire temporaire
+            for file in self.temp_dir.glob("*"):
+                file.unlink()
+            
+            # Nettoyage du processeur d'images
+            self.image_processor.cleanup()
+            
+            logger.info("Ressources PDF nettoyées")
+            
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources PDF: {e}")
