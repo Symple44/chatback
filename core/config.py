@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     MAX_RESPONSE_LENGTH: int = 2000
     STREAM_CHUNK_SIZE: int = 20
     STREAM_DELAY: float = 0.05
+
+    # Traitement des documents
+    PDF_TEMP_DIR: str = "temp/pdf"
+    PDF_IMAGE_QUALITY: int = 85
+    PDF_MAX_IMAGE_SIZE: Tuple[int, int] = (800, 800)
+    SUPPORTED_FORMATS: List[str] = ['.pdf', '.docx', '.txt']
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
