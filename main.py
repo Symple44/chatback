@@ -3,6 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Back
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
+from starlette.staticfiles import StaticFiles
 import asyncio
 import os
 import uvicorn
@@ -21,7 +22,7 @@ from core.llm.model import ModelInference
 from core.document_processing.extractor import DocumentExtractor
 from core.document_processing.pdf_processor import PDFProcessor
 from core.storage.sync_manager import DocumentSyncManager
-from core.utils.logger import get_logger
+from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
 from core.utils.memory_manager import MemoryManager
 from core.utils.system_optimizer import SystemOptimizer
@@ -57,14 +58,17 @@ class ComponentManager:
                 os.makedirs(dir_name, exist_ok=True)
 
             # Initialisation des composants principaux
+            es_client = ElasticsearchClient()
+            await es_client.initialize()
+
             components_to_init = {
                 "db": get_session_manager(settings.DATABASE_URL),
                 "cache": RedisCache(),
-                "es_client": ElasticsearchClient(),
+                "es_client": es_client,
                 "model": ModelInference(),
                 "doc_extractor": DocumentExtractor(),
-                "pdf_processor": PDFProcessor(self.es_client),
-                "sync_manager": DocumentSyncManager(),
+                "pdf_processor": PDFProcessor(es_client),
+                "sync_manager": DocumentSyncManager(es_client),
                 "memory_manager": MemoryManager()
             }
 
@@ -156,9 +160,10 @@ components = ComponentManager()
 async def lifespan(app: FastAPI):
     """Gestion du cycle de vie de l'application."""
     try:
-        # Initialisation du logger en premier
+        # Initialisation des services de base
         await logger_manager.initialize()
-        # Puis le reste des composants
+        await metrics.initialize()
+        # Initialisation des composants
         await components.initialize()
         yield
     finally:
@@ -185,6 +190,9 @@ app.add_middleware(
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Fichiers statiques
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Documentation personnalisée
 @app.get("/docs", include_in_schema=False)
