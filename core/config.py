@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     ENV: str = os.getenv("ENV", "production")
+
+    # Paramètres hardware
+    USE_CPU_ONLY: str = os.getenv("USE_CPU_ONLY", "true")
+    MAX_THREADS: str = os.getenv("MAX_THREADS", "8")
+    BATCH_SIZE: str = os.getenv("BATCH_SIZE", "1")
     
     # Sécurité
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key")
@@ -41,6 +46,8 @@ class Settings(BaseSettings):
     ELASTICSEARCH_PASSWORD: str = os.getenv("ELASTICSEARCH_PASSWORD", "")
     ELASTICSEARCH_VERIFY_CERTS: bool = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "false").lower() == "true"
     ELASTICSEARCH_CA_CERTS: Optional[str] = os.getenv("ELASTICSEARCH_CA_CERTS")
+    ELASTICSEARCH_CLIENT_CERT: Optional[str] = os.getenv("ELASTICSEARCH_CLIENT_CERT")
+    ELASTICSEARCH_CLIENT_KEY: Optional[str] = os.getenv("ELASTICSEARCH_CLIENT_KEY")
     ELASTICSEARCH_INDEX_PREFIX: str = os.getenv("ELASTICSEARCH_INDEX_PREFIX", "chat")
     ELASTICSEARCH_EMBEDDING_DIM: int = 384  # Dimension des embeddings
 
@@ -116,6 +123,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"
         
         # Configuration personnalisée
         @classmethod
