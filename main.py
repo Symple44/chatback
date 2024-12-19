@@ -19,6 +19,7 @@ from core.cache import RedisCache
 from core.vectorstore.search import ElasticsearchClient
 from core.llm.model import ModelInference
 from core.document_processing.extractor import DocumentExtractor
+from core.document_processing.pdf_processor import PDFProcessor
 from core.storage.sync_manager import DocumentSyncManager
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
@@ -62,6 +63,7 @@ class ComponentManager:
                 "es_client": ElasticsearchClient(),
                 "model": ModelInference(),
                 "doc_extractor": DocumentExtractor(),
+                "pdf_processor": PDFProcessor(self.es_client),
                 "sync_manager": DocumentSyncManager(),
                 "memory_manager": MemoryManager()
             }
