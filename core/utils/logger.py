@@ -131,6 +131,12 @@ class LoggerManager:
         # Démarrage du worker de traitement des logs
         asyncio.create_task(self._process_log_queue())
 
+    async def initialize(self):
+        """Initialise la queue de logs et démarre le traitement."""
+        if self.log_queue is None:
+            self.log_queue = asyncio.Queue()
+            asyncio.create_task(self._process_log_queue())
+
     async def _process_log_queue(self):
         """Traite la file d'attente des logs."""
         while True:
@@ -152,6 +158,8 @@ class LoggerManager:
                 await f.write(json.dumps(entry) + "\n")
         except Exception as e:
             print(f"Erreur écriture log: {e}")
+            
+    logger_manager = LoggerManager()
 
     def get_logger(
         self,
@@ -212,7 +220,7 @@ class LoggerManager:
             logger.addHandler(console_handler)
 
         self.loggers[name] = logger
-        return logger
+        return logger_manager.get_logger(name, level, extra_fields)
 
     async def cleanup_old_logs(self, days: int = 30):
         """
