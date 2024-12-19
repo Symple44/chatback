@@ -13,6 +13,8 @@ from langchain_core.documents import Document
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from core.document_processing.pdf_processor import PDFProcessor
+from core.document_processing.image_processing import PDFImageProcessor
 
 logger = get_logger(__name__)
 
@@ -29,6 +31,7 @@ class DocumentSyncManager:
         self.es_client = es_client
         self.docs_dir = docs_dir
         self.sync_file = sync_file
+        self.pdf_processor = PDFProcessor(es_client)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,
