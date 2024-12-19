@@ -1,6 +1,6 @@
 # core/config.py
 from pydantic_settings import BaseSettings
-from typing import Dict, Optional, List, Union
+from typing import Dict, Optional, List, Union, Tuple
 from pathlib import Path
 import os
 from dotenv import load_dotenv
