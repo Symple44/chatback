@@ -68,6 +68,12 @@ packaging
 typing-extensions
 typing-inspect
 
+# Traitement PDF et Images
+pdf2image
+Pillow
+PyMuPDF
+PyPDF2
+
 # Gestion des logs
 python-json-logger
 structlog
