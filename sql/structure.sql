@@ -11,7 +11,7 @@ CREATE TABLE users (
     full_name VARCHAR(255) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     last_login TIMESTAMP WITH TIME ZONE,
-    preferences JSONB DEFAULT '{}',
+    user_metadata JSONB DEFAULT '{}',
     is_active BOOLEAN DEFAULT true
 );
 
@@ -39,7 +39,7 @@ CREATE TABLE chat_history (
     confidence_score FLOAT,
     tokens_used INTEGER,
     processing_time FLOAT,
-    additional_data JSONB DEFAULT '{}',
+    chat_metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -63,6 +63,7 @@ CREATE TABLE usage_metrics (
     response_time FLOAT,
     status_code INTEGER,
     error_message TEXT,
+    metric_metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -84,8 +85,11 @@ CREATE INDEX idx_chat_history_query_text ON chat_history USING gin(to_tsvector('
 CREATE INDEX idx_chat_history_response_text ON chat_history USING gin(to_tsvector('french', response));
 
 -- Index pour les données JSON
-CREATE INDEX idx_chat_sessions_context ON chat_sessions USING gin(session_context);
-CREATE INDEX idx_chat_history_additional_data ON chat_history USING gin(additional_data);
+CREATE INDEX idx_users_metadata ON users USING gin(user_metadata);
+CREATE INDEX idx_chat_sessions_metadata ON chat_sessions USING gin(session_metadata);
+CREATE INDEX idx_chat_history_metadata ON chat_history USING gin(chat_metadata);
+CREATE INDEX idx_referenced_documents_metadata ON referenced_documents USING gin(document_metadata);
+CREATE INDEX idx_usage_metrics_metadata ON usage_metrics USING gin(metric_metadata);
 
 -- Trigger pour mettre à jour updated_at automatiquement
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -102,7 +106,7 @@ CREATE TRIGGER update_chat_sessions_updated_at
     EXECUTE PROCEDURE update_updated_at_column();
 
 -- Vue pour les statistiques utilisateur
-CREATE VIEW user_chat_statistics AS
+CREATE OR REPLACE VIEW user_chat_statistics AS
 SELECT 
     u.id as user_id,
     u.username,
