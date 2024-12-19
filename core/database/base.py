@@ -1,10 +1,18 @@
 # core/database/base.py
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.asyncio import create_async_engine
-from typing import Optional
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+from typing import Optional, Dict, Any
+import asyncio
+from datetime import datetime
+
+from core.config import settings
+from core.utils.logger import get_logger
+from core.utils.metrics import metrics
+
+logger = get_logger("database")
 
 # Création de la classe de base pour les modèles SQLAlchemy
 Base = declarative_base()
@@ -19,12 +27,13 @@ class DatabaseSessionManager:
         """
         self.engine = create_async_engine(
             database_url,
-            echo=False,  # Mettre à True pour voir les requêtes SQL
-            future=True,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=1800
+            echo=settings.DEBUG,
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_MAX_OVERFLOW,
+            pool_timeout=30,  # secondes
+            pool_recycle=1800,  # 30 minutes
+            pool_pre_ping=True,
+            poolclass=AsyncAdaptedQueuePool
         )
         
         self.session_factory = sessionmaker(
@@ -35,15 +44,31 @@ class DatabaseSessionManager:
             autoflush=False
         )
 
+        self.health_check_lock = asyncio.Lock()
+        self._last_health_check: Optional[datetime] = None
+        self._health_check_interval = 60  # secondes
+
     async def create_all(self):
         """Crée toutes les tables définies dans les modèles."""
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        try:
+            async with self.engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("Tables de base de données créées avec succès")
+                metrics.increment_counter("database_schema_updates")
+        except Exception as e:
+            logger.error(f"Erreur lors de la création des tables: {e}")
+            metrics.increment_counter("database_schema_errors")
+            raise
 
     async def drop_all(self):
         """Supprime toutes les tables."""
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+        try:
+            async with self.engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+                logger.warning("Toutes les tables ont été supprimées")
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression des tables: {e}")
+            raise
 
     async def get_session(self) -> AsyncSession:
         """Retourne une nouvelle session de base de données."""
@@ -51,36 +76,94 @@ class DatabaseSessionManager:
 
     async def close(self):
         """Ferme toutes les connexions."""
-        await self.engine.dispose()
-    
-    async def get_user_by_email(self, email: str):
-        """Récupère un utilisateur par son email."""
-        from .models import User  # Import local pour éviter les imports circulaires
-        
-        async with self.session_factory() as session:
-            result = await session.execute(
-                select(User).where(User.email == email)
-            )
-            return result.scalar_one_or_none()
+        try:
+            await self.engine.dispose()
+            logger.info("Connexions à la base de données fermées")
+        except Exception as e:
+            logger.error(f"Erreur lors de la fermeture des connexions: {e}")
+            raise
 
-    async def health_check(self) -> bool:
-        """Vérifie l'état de la connexion à la base de données."""
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Vérifie l'état de la connexion à la base de données.
+        
+        Returns:
+            Dict contenant l'état de santé
+        """
+        async with self.health_check_lock:
+            # Éviter les vérifications trop fréquentes
+            if (self._last_health_check and 
+                (datetime.utcnow() - self._last_health_check).total_seconds() < self._health_check_interval):
+                return {"status": "cached"}
+
+            try:
+                async with self.get_session() as session:
+                    await session.execute("SELECT 1")
+                    pool_status = await self.get_pool_status()
+                    
+                    self._last_health_check = datetime.utcnow()
+                    
+                    return {
+                        "status": "healthy",
+                        "timestamp": self._last_health_check.isoformat(),
+                        "pool": pool_status
+                    }
+            except Exception as e:
+                logger.error(f"Erreur de connexion à la base de données: {e}")
+                metrics.increment_counter("database_health_check_errors")
+                return {
+                    "status": "unhealthy",
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+
+    async def get_pool_status(self) -> Dict[str, int]:
+        """
+        Retourne le statut du pool de connexions.
+        
+        Returns:
+            Dict contenant les métriques du pool
+        """
+        return {
+            "size": self.engine.pool.size(),
+            "checked_out": self.engine.pool.checkedout(),
+            "overflow": self.engine.pool.overflow(),
+            "checkedin": self.engine.pool.checkedin()
+        }
+
+    async def vacuum_analyze(self):
+        """Exécute VACUUM ANALYZE sur la base de données."""
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute("VACUUM ANALYZE")
+            logger.info("VACUUM ANALYZE exécuté avec succès")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'exécution de VACUUM ANALYZE: {e}")
+            raise
+
+    async def cleanup_expired_sessions(self, days: int = 30):
+        """
+        Nettoie les sessions expirées.
+        
+        Args:
+            days: Nombre de jours avant expiration
+        """
         try:
             async with self.get_session() as session:
-                await session.execute("SELECT 1")
-                return True
+                result = await session.execute(
+                    f"""
+                    DELETE FROM chat_sessions 
+                    WHERE updated_at < NOW() - INTERVAL '{days} days'
+                    """
+                )
+                await session.commit()
+                deleted_count = result.rowcount
+                logger.info(f"{deleted_count} sessions expirées nettoyées")
+                metrics.increment_counter("database_cleanups")
         except Exception as e:
-            logger.error(f"Erreur de connexion à la base de données: {e}")
-            return False
-
-    async def get_pool_status(self) -> dict:
-        """Retourne le statut du pool de connexions."""
-        return {
-            "pool_size": self.engine.pool.size(),
-            "checked_out": self.engine.pool.checkedin(),
-            "overflow": self.engine.pool.overflow(),
-            "checkedout": self.engine.pool.checkedout()
-        }
+            logger.error(f"Erreur lors du nettoyage des sessions: {e}")
+            metrics.increment_counter("database_cleanup_errors")
+            raise
 
 # Singleton pour le gestionnaire de session
 _session_manager: Optional[DatabaseSessionManager] = None
@@ -88,19 +171,22 @@ _session_manager: Optional[DatabaseSessionManager] = None
 def get_session_manager(database_url: Optional[str] = None) -> DatabaseSessionManager:
     """
     Retourne l'instance du gestionnaire de session.
-    En crée une nouvelle si elle n'existe pas.
     
     Args:
-        database_url: URL de connexion à la base de données (nécessaire uniquement à la première création)
+        database_url: URL de connexion (nécessaire uniquement à la première création)
     
     Returns:
-        DatabaseSessionManager: Instance du gestionnaire de session
+        DatabaseSessionManager: Instance du gestionnaire
+        
+    Raises:
+        ValueError: Si database_url est manquant à la première création
     """
     global _session_manager
     if _session_manager is None:
         if database_url is None:
             raise ValueError("database_url est requis pour la première initialisation")
         _session_manager = DatabaseSessionManager(database_url)
+        logger.info("Nouveau gestionnaire de session créé")
     return _session_manager
 
 async def cleanup_database():
@@ -109,3 +195,20 @@ async def cleanup_database():
     if _session_manager is not None:
         await _session_manager.close()
         _session_manager = None
+        logger.info("Ressources de la base de données nettoyées")
+
+# Context manager pour les sessions
+class DatabaseSession:
+    """Context manager pour gérer les sessions de base de données."""
+    
+    def __init__(self):
+        self.session_manager = get_session_manager()
+    
+    async def __aenter__(self) -> AsyncSession:
+        self.session = await self.session_manager.get_session()
+        return self.session
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            await self.session.rollback()
+        await self.session.close()
