@@ -6,9 +6,12 @@ import fitz
 import io
 import os
 import base64
-from core.utils.logger import get_logger
+from datetime import datetime
 
-logger = get_logger(__name__)
+from core.utils.logger import get_logger
+from core.config import settings
+
+logger = get_logger("image_processing")
 
 class PDFImageProcessor:
     def __init__(self, temp_dir: Optional[str] = None):
@@ -69,54 +72,6 @@ class PDFImageProcessor:
             if 'doc' in locals():
                 doc.close()
 
-    async def get_page_as_image(
-        self,
-        pdf_path: str,
-        page_number: int,
-        dpi: int = 200,
-        optimize: bool = True
-    ) -> Optional[Dict[str, any]]:
-        """
-        Convertit une page PDF en image.
-        """
-        try:
-            pages = convert_from_path(
-                pdf_path,
-                dpi=dpi,
-                first_page=page_number,
-                last_page=page_number
-            )
-            
-            if pages:
-                page_image = pages[0]
-                
-                # Conversion en bytes
-                img_byte_arr = io.BytesIO()
-                page_image.save(img_byte_arr, format='PNG')
-                img_bytes = img_byte_arr.getvalue()
-                
-                # Optimisation si demandée
-                if optimize:
-                    processed = await self.process_and_optimize_image(
-                        img_bytes,
-                        quality=85
-                    )
-                    if processed:
-                        return processed
-                
-                return {
-                    "data": base64.b64encode(img_bytes).decode(),
-                    "mime_type": "image/png",
-                    "width": page_image.width,
-                    "height": page_image.height
-                }
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Erreur conversion page en image: {e}")
-            return None
-
     async def process_and_optimize_image(
         self,
         image_data: bytes,
@@ -124,7 +79,15 @@ class PDFImageProcessor:
         quality: int = 85
     ) -> Optional[Dict[str, any]]:
         """
-        Traite et optimise une image pour l'affichage web.
+        Traite et optimise une image.
+        
+        Args:
+            image_data: Données de l'image
+            max_size: Taille maximale (largeur, hauteur)
+            quality: Qualité de compression JPEG
+            
+        Returns:
+            Informations sur l'image traitée
         """
         try:
             image = Image.open(io.BytesIO(image_data))
