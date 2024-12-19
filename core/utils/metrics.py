@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 import time
 from collections import defaultdict
 import statistics
+import logging
 import json
 import os
+from pathlib import Path
 import threading
 from contextlib import contextmanager
 import psutil
 import asyncio
-from pathlib import Path
 
 from core.config import settings
 from core.utils.logger import get_logger
@@ -38,6 +39,8 @@ class Timer:
             self.metrics_manager.increment_counter(f"{self.metric_name}_errors")
 
 class MetricsManager:
+    """Gestionnaire de métriques de l'application."""
+
     def __init__(self):
         """Initialise le gestionnaire de métriques."""
         self.metrics_dir = Path(settings.BASE_DIR) / "metrics"
@@ -55,9 +58,13 @@ class MetricsManager:
         self._lock = threading.Lock()
         self._save_interval = timedelta(minutes=5)
         self._cleanup_interval = timedelta(days=7)
-        
-        # Démarrage des tâches périodiques
-        asyncio.create_task(self._periodic_tasks())
+        self._task = None
+
+    async def initialize(self):
+        """Initialise les tâches périodiques."""
+        if self._task is None:
+            self._task = asyncio.create_task(self._periodic_tasks())
+            logger.info("Tâches périodiques des métriques initialisées")
 
     @contextmanager
     def timer(self, operation: str):
@@ -132,7 +139,7 @@ class MetricsManager:
                 "process": self._get_process_stats()
             }
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération des métriques système: {e}")
+            logger.error(f"Erreur récupération métriques système: {e}")
             return {}
 
     def _get_network_stats(self) -> Dict[str, Any]:
@@ -205,7 +212,7 @@ class MetricsManager:
             logger.info(f"Métriques sauvegardées dans {filename}")
             
         except Exception as e:
-            logger.error(f"Erreur lors de la sauvegarde des métriques: {e}")
+            logger.error(f"Erreur sauvegarde métriques: {e}")
 
     async def cleanup_old_metrics(self):
         """Nettoie les anciennes métriques."""
@@ -223,7 +230,7 @@ class MetricsManager:
             # Nettoyage des fichiers
             for file in self.metrics_dir.glob("metrics_*.json"):
                 file_date = datetime.strptime(
-                    file.stem[8:],  # Extrait la date du nom
+                    file.stem[8:],
                     '%Y%m%d_%H%M%S'
                 )
                 if file_date < cutoff:
@@ -232,7 +239,7 @@ class MetricsManager:
             logger.info("Nettoyage des anciennes métriques terminé")
             
         except Exception as e:
-            logger.error(f"Erreur lors du nettoyage des métriques: {e}")
+            logger.error(f"Erreur nettoyage métriques: {e}")
 
     def get_current_metrics(self) -> Dict[str, Any]:
         """Retourne un instantané des métriques actuelles."""
