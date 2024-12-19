@@ -156,6 +156,9 @@ components = ComponentManager()
 async def lifespan(app: FastAPI):
     """Gestion du cycle de vie de l'application."""
     try:
+        # Initialisation du logger en premier
+        await logger_manager.initialize()
+        # Puis le reste des composants
         await components.initialize()
         yield
     finally:
