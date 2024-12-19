@@ -14,6 +14,7 @@ from collections import defaultdict
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from .image_processing import PDFImageProcessor
 
 logger = get_logger("document_extractor")
 
@@ -37,6 +38,7 @@ class DocumentExtractor:
         self.supported_formats = {'.pdf', '.docx', '.txt'}
         self.temp_dir = Path("temp")
         self.temp_dir.mkdir(exist_ok=True)
+        self.image_processor = PDFImageProcessor()
 
     async def extract_document_content(
         self,
