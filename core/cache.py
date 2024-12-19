@@ -57,7 +57,13 @@ class RedisCache:
         self._init_retries = 3
         self._init_retry_delay = 1.0
         self._connection = None
-        self._connect_with_retry()
+        self._initialized = False
+
+    async def initialize(self):
+        """Initialisation asynchrone de la connexion Redis."""
+        if not self._initialized:
+            await self._connect_with_retry()
+            self._initialized = True
 
     def _connect_with_retry(self):
         """Établit la connexion Redis avec retry."""
