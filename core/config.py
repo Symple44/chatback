@@ -107,13 +107,12 @@ class Settings(BaseSettings):
     CLEANUP_THRESHOLD_DAYS: int = 30
     
     # Messages système
-    SYSTEM_MESSAGES = {
+    SYSTEM_MESSAGES: ClassVar[Dict[str, str]] = {
         "welcome": "Bienvenue ! Comment puis-je vous aider ?",
         "error": "Désolé, une erreur est survenue.",
         "rate_limit": "Vous avez atteint la limite de requêtes.",
         "maintenance": "Le système est en maintenance."
     }
-
     class Config:
         env_file = ".env"
         case_sensitive = True
