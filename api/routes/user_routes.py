@@ -14,14 +14,6 @@ from core.database.models import User
 logger = get_logger("user_routes")
 router = APIRouter(prefix="/users", tags=["users"])
 
-class UserResponse(BaseModel):
-    id: str
-    email: str
-    username: str
-    full_name: str
-    created_at: datetime
-    preferences: Dict
-
 @router.post("/new", response_model=UserResponse)
 async def create_user(
     user_data: UserCreate,
