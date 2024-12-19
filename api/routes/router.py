@@ -147,3 +147,18 @@ def setup_docs(app):
     """
     app.version = settings.VERSION
     app.openapi_tags = tags_metadata
+
+# Routes pour le traitement des documents
+@router.post("/documents/process")
+async def process_document(
+    file_path: str,
+    components=Depends(get_components)
+) -> Dict:
+    return await components.pdf_processor.process_pdf(file_path)
+
+@router.post("/documents/index")
+async def index_document(
+    file_path: str,
+    components=Depends(get_components)
+) -> Dict:
+    return await components.pdf_processor.index_pdf(file_path)
