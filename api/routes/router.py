@@ -1,8 +1,9 @@
 # api/routes/router.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
-from typing import Dict
 from datetime import datetime
+import os
+from typing import Dict, List
 
 from .chat_routes import router as chat_router
 from .session_routes import router as session_router
@@ -10,155 +11,161 @@ from .user_routes import router as user_router
 from .health_routes import router as health_router
 from .history_routes import router as history_router
 from core.utils.logger import get_logger
+from core.utils.metrics import metrics
 from core.config import settings
 
 logger = get_logger("router")
-router = APIRouter(prefix="/api")
 
-# Configuration des tags pour la documentation
+# Configuration des tags pour la documentation OpenAPI
 tags_metadata = [
     {
         "name": "chat",
-        "description": "Opérations de conversation et de traitement des messages"
+        "description": "Opérations de conversation et de traitement des messages",
     },
     {
         "name": "sessions",
-        "description": "Gestion des sessions utilisateur"
+        "description": "Gestion des sessions utilisateur et contextes",
     },
     {
         "name": "users",
-        "description": "Gestion des utilisateurs et de leurs données"
+        "description": "Gestion des utilisateurs et préférences",
     },
     {
         "name": "history",
-        "description": "Accès à l'historique des conversations"
+        "description": "Accès à l'historique des conversations",
     },
     {
         "name": "health",
-        "description": "Surveillance et monitoring du système"
+        "description": "Surveillance et monitoring du système",
+    },
+    {
+        "name": "info",
+        "description": "Informations générales sur l'API"
     }
 ]
 
-# Inclusion des routers spécifiques
-router.include_router(chat_router, prefix="/chat", tags=["chat"])
-router.include_router(session_router, prefix="/sessions", tags=["sessions"])
-router.include_router(user_router, prefix="/users", tags=["users"])
-router.include_router(health_router, prefix="/health", tags=["health"])
-router.include_router(history_router, prefix="/history", tags=["history"])
+# Création du router principal avec préfixe
+router = APIRouter(prefix="/api")
+
+# Inclusion des sous-routers avec leurs préfixes
+router.include_router(
+    chat_router,
+    prefix="/chat",
+    tags=["chat"]
+)
+router.include_router(
+    session_router,
+    prefix="/sessions",
+    tags=["sessions"]
+)
+router.include_router(
+    user_router,
+    prefix="/users",
+    tags=["users"]
+)
+router.include_router(
+    health_router,
+    prefix="/health",
+    tags=["health"]
+)
+router.include_router(
+    history_router,
+    prefix="/history",
+    tags=["history"]
+)
 
 @router.get("/", tags=["info"])
 async def api_info() -> Dict:
     """
     Retourne les informations générales sur l'API.
+
+    Returns:
+        Dict: Informations sur l'API incluant version, statut et environnement
     """
-    return {
-        "name": settings.APP_NAME,
-        "version": settings.VERSION,
-        "description": "API de chat avec support vectoriel",
-        "status": "operational",
-        "timestamp": datetime.utcnow().isoformat(),
-        "documentation": "/docs",
-        "environment": os.getenv("ENV", "production")
-    }
+    with metrics.timer("api_info_request"):
+        return {
+            "name": settings.APP_NAME,
+            "version": settings.VERSION,
+            "description": "API de chat avec support vectoriel",
+            "status": "operational",
+            "timestamp": datetime.utcnow().isoformat(),
+            "documentation": "/docs",
+            "environment": os.getenv("ENV", "production"),
+            "build_date": settings.BUILD_DATE,
+            "contact": settings.CONTACT_EMAIL
+        }
 
 @router.get("/routes", tags=["info"])
 async def list_routes() -> Dict:
     """
-    Liste toutes les routes disponibles.
+    Liste toutes les routes disponibles dans l'API.
+
+    Returns:
+        Dict: Liste des routes avec leurs méthodes et tags
     """
-    available_routes = []
-    for r in router.routes:
-        route_info = {
-            "path": r.path,
-            "methods": list(r.methods) if hasattr(r, 'methods') else [],
-            "name": r.name,
-            "tags": r.tags if hasattr(r, 'tags') else []
+    with metrics.timer("list_routes_request"):
+        available_routes = []
+        for r in router.routes:
+            route_info = {
+                "path": r.path,
+                "methods": list(r.methods) if hasattr(r, 'methods') else [],
+                "name": r.name,
+                "tags": r.tags if hasattr(r, 'tags') else [],
+                "description": r.description if hasattr(r, 'description') else None
+            }
+            available_routes.append(route_info)
+        
+        # Tri des routes par chemin
+        available_routes.sort(key=lambda x: x["path"])
+        
+        return {
+            "total_routes": len(available_routes),
+            "routes": available_routes
         }
-        available_routes.append(route_info)
-    
+
+@router.get("/ping", tags=["health"])
+async def ping() -> Dict:
+    """
+    Endpoint simple pour vérifier que l'API répond.
+
+    Returns:
+        Dict: Message de confirmation avec timestamp
+    """
     return {
-        "total_routes": len(available_routes),
-        "routes": available_routes
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat()
     }
 
-# Gestionnaires d'erreurs globaux
-@router.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Gestionnaire d'erreurs global."""
-    logger.error(f"Erreur non gérée: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": "Une erreur interne est survenue",
-            "type": type(exc).__name__,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-@router.exception_handler(ValueError)
-async def value_error_handler(request, exc):
-    """Gestionnaire pour les erreurs de validation."""
-    logger.warning(f"Erreur de validation: {exc}")
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": str(exc),
-            "type": "ValidationError",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-# Middleware pour le logging des requêtes
 @router.middleware("http")
-async def log_requests(request, call_next):
-    """Middleware pour logger les requêtes."""
+async def add_process_time_header(request: Request, call_next) -> Response:
+    """
+    Middleware pour ajouter le temps de traitement dans les headers.
+    
+    Args:
+        request: Requête entrante
+        call_next: Handler suivant dans la chaîne
+        
+    Returns:
+        Response: Réponse avec header de temps de traitement ajouté
+    """
     start_time = datetime.utcnow()
     response = await call_next(request)
-    
-    # Calcul du temps de réponse
     process_time = (datetime.utcnow() - start_time).total_seconds()
     
-    # Log de la requête
-    logger.info(
-        f"Request: {request.method} {request.url.path} "
-        f"Status: {response.status_code} "
-        f"Duration: {process_time:.3f}s"
-    )
-    
-    # Ajout des headers de monitoring
     response.headers["X-Process-Time"] = str(process_time)
     response.headers["X-API-Version"] = settings.VERSION
     
-    return response
-
-# Configuration de la documentation
-def setup_docs(app):
-    """Configure la documentation OpenAPI."""
-    app.title = settings.APP_NAME
-    app.description = """
-    API de chat avec support vectoriel et traitement du langage naturel.
+    # Log de la requête si ce n'est pas un health check
+    if not request.url.path.endswith(("/ping", "/health")):
+        logger.info(
+            f"Request: {request.method} {request.url.path} "
+            f"Status: {response.status_code} "
+            f"Duration: {process_time:.3f}s"
+        )
+        
+        # Métriques
+        metrics.increment_counter("http_requests")
+        if response.status_code >= 400:
+            metrics.increment_counter("http_errors")
     
-    Fonctionnalités principales:
-    * Gestion des conversations avec contexte
-    * Recherche vectorielle de documents
-    * Sessions utilisateur
-    * Historique des conversations
-    * Monitoring et métriques
-    """
-    app.version = settings.VERSION
-    app.openapi_tags = tags_metadata
-
-# Routes pour le traitement des documents
-@router.post("/documents/process")
-async def process_document(
-    file_path: str,
-    components=Depends(get_components)
-) -> Dict:
-    return await components.pdf_processor.process_pdf(file_path)
-
-@router.post("/documents/index")
-async def index_document(
-    file_path: str,
-    components=Depends(get_components)
-) -> Dict:
-    return await components.pdf_processor.index_pdf(file_path)
+    return response
