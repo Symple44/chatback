@@ -1,4 +1,5 @@
 # core/llm/model.py
+# core/llm/model.py
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
 import torch
 from transformers import (
@@ -19,496 +20,324 @@ from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .embeddings import EmbeddingsManager
 
-logger = get_logger(__name__)
+logger = get_logger("model")
 
-class User(Base):
-    """Modèle utilisateur."""
-    __tablename__ = 'users'
+class ModelInference:
+    def __init__(self):
+        """Initialise le modèle d'inférence."""
+        try:
+            self.device = "cpu" if settings.USE_CPU_ONLY else self._get_optimal_device()
+            logger.info(f"Utilisation du device: {self.device}")
+            
+            self.executor = ThreadPoolExecutor(max_workers=2)
+            self.embeddings = EmbeddingsManager()
+            self._setup_model()
+            self._setup_tokenizer()
+            
+            # Configuration de génération par défaut
+            self.generation_config = GenerationConfig(
+                max_new_tokens=settings.MAX_NEW_TOKENS,
+                min_new_tokens=settings.MIN_NEW_TOKENS,
+                do_sample=settings.DO_SAMPLE,
+                temperature=settings.TEMPERATURE,
+                top_p=settings.TOP_P,
+                top_k=settings.TOP_K,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+            
+            logger.info("Modèle initialisé avec succès")
+            
+        except Exception as e:
+            logger.error(f"Erreur initialisation modèle: {e}")
+            raise
 
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    email = Column(String(255), unique=True, nullable=False)
-    username = Column(String(100), unique=True, nullable=False)
-    full_name = Column(String(255), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_login = Column(DateTime(timezone=True))
-    metadata = Column(JSONB, default={})
-    is_active = Column(Boolean, default=True)
+    def _get_optimal_device(self) -> str:
+        """Détermine le meilleur device disponible."""
+        if torch.cuda.is_available():
+            # Vérifier la mémoire GPU disponible
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory
+            if gpu_memory >= 4 * (1024**3):  # 4GB minimum
+                return "cuda"
+        return "cpu"
 
-    # Relations
-    sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
-    chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
-    usage_metrics = relationship("UsageMetric", back_populates="user", cascade="all, delete-orphan")
-    api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
+    def _setup_model(self):
+        """Configure le modèle avec optimisations."""
+        try:
+            logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
+            
+            # Configuration du modèle
+            model_kwargs = {
+                "torch_dtype": torch.float16 if settings.USE_4BIT else torch.float32,
+                "low_cpu_mem_usage": True,
+                "device_map": "auto" if self.device == "cuda" else None
+            }
+            
+            # Chargement avec retry
+            for attempt in range(3):
+                try:
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        settings.MODEL_NAME,
+                        **model_kwargs
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    logger.warning(f"Tentative {attempt + 1} échouée: {e}")
+                    gc.collect()
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                    
+            # Optimisations
+            if settings.USE_4BIT:
+                self.model = self.model.half()
+            
+            self.model.eval()  # Mode évaluation
+            if self.device != "cuda":
+                self.model = self.model.to(self.device)
+            
+            logger.info("Modèle chargé avec succès")
+            
+        except Exception as e:
+            logger.error(f"Erreur chargement modèle: {e}")
+            raise
 
-    # Index
-    __table_args__ = (
-        Index('idx_user_email', email),
-        Index('idx_user_username', username),
-        Index('idx_user_active', is_active),
-        Index('idx_user_metadata', metadata, postgresql_using='gin'),
-        CheckConstraint('length(username) >= 3', name='username_length_check'),
-    )
+    def _setup_tokenizer(self):
+        """Configure le tokenizer."""
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                settings.MODEL_NAME,
+                use_fast=True,
+                model_max_length=settings.MAX_INPUT_LENGTH
+            )
+            
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+            logger.info("Tokenizer configuré")
+            
+        except Exception as e:
+            logger.error(f"Erreur configuration tokenizer: {e}")
+            raise
 
-    @validates('email')
-    def validate_email(self, key, email):
-        """Valide le format de l'email."""
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            raise ValueError("Format d'email invalide")
-        return email.lower()
-
-    @validates('username')
-    def validate_username(self, key, username):
-        """Valide le format du nom d'utilisateur."""
-        if not re.match(r"^[a-zA-Z0-9_-]+$", username):
-            raise ValueError("Le nom d'utilisateur ne peut contenir que des lettres, chiffres, tirets et underscores")
-        return username
-
-    def to_dict(self):
-        """Convertit l'objet en dictionnaire."""
-        return {
-            "id": str(self.id),
-            "email": self.email,
-            "username": self.username,
-            "full_name": self.full_name,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_login": self.last_login.isoformat() if self.last_login else None,
-            "metadata": self.metadata,
-            "is_active": self.is_active
-        }
-
-class ChatSession(Base):
-    """Modèle de session de chat."""
-    __tablename__ = 'chat_sessions'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    session_id = Column(String(255), unique=True, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    session_context = Column(JSONB, default={})
-    metadata = Column(JSONB, default={})
-    is_active = Column(Boolean, default=True)
-
-    # Relations
-    user = relationship("User", back_populates="sessions")
-    chat_history = relationship("ChatHistory", back_populates="session", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index('idx_session_user', user_id),
-        Index('idx_session_active', is_active),
-        Index('idx_session_updated', updated_at.desc()),
-        Index('idx_session_context', session_context, postgresql_using='gin'),
-        Index('idx_session_metadata', metadata, postgresql_using='gin'),
-    )
-
-    @hybrid_property
-    def duration(self):
-        """Calcule la durée de la session."""
-        if not self.created_at:
-            return 0
-        end_time = self.updated_at or datetime.utcnow()
-        return (end_time - self.created_at).total_seconds()
-
-    def to_dict(self):
-        """Convertit l'objet en dictionnaire."""
-        return {
-            "session_id": self.session_id,
-            "user_id": str(self.user_id),
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "session_context": self.session_context,
-            "metadata": self.metadata,
-            "is_active": self.is_active,
-            "duration": self.duration
-        }
-
-class ChatHistory(Base):
-    """Modèle d'historique des chats."""
-    __tablename__ = 'chat_history'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id = Column(String(255), ForeignKey('chat_sessions.session_id', ondelete='CASCADE'), nullable=False)
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    query = Column(Text, nullable=False)
-    response = Column(Text, nullable=False)
-    query_vector = Column(ARRAY(Float))
-    response_vector = Column(ARRAY(Float))
-    confidence_score = Column(Float, nullable=False, default=0.0)
-    tokens_used = Column(Integer, nullable=False, default=0)
-    processing_time = Column(Float, nullable=False, default=0.0)
-    cost = Column(Float, default=0.0)
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relations
-    user = relationship("User", back_populates="chat_history")
-    session = relationship("ChatSession", back_populates="chat_history")
-    referenced_documents = relationship("ReferencedDocument", back_populates="chat_history", cascade="all, delete-orphan")
-    metrics = relationship("MessageMetrics", back_populates="message", uselist=False, cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index('idx_history_session', session_id),
-        Index('idx_history_user', user_id),
-        Index('idx_history_created', created_at.desc()),
-        Index('idx_history_metadata', metadata, postgresql_using='gin'),
-        Index('idx_history_vector', query_vector, postgresql_using='gin'),
-        CheckConstraint('confidence_score >= 0 AND confidence_score <= 1', name='confidence_score_check'),
-        CheckConstraint('tokens_used >= 0', name='tokens_used_check'),
-        CheckConstraint('processing_time >= 0', name='processing_time_check'),
-    )
-
-    def to_dict(self):
-        """Convertit l'objet en dictionnaire."""
-        return {
-            "id": str(self.id),
-            "session_id": self.session_id,
-            "user_id": str(self.user_id),
-            "query": self.query,
-            "response": self.response,
-            "confidence_score": self.confidence_score,
-            "tokens_used": self.tokens_used,
-            "processing_time": self.processing_time,
-            "cost": self.cost,
-            "metadata": self.metadata,
-            "created_at": self.created_at.isoformat()
-        }
-
-class ReferencedDocument(Base):
-    """Modèle pour les documents référencés."""
-    __tablename__ = 'referenced_documents'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    chat_history_id = Column(UUID, ForeignKey('chat_history.id', ondelete='CASCADE'), nullable=False)
-    document_name = Column(String(255), nullable=False)
-    page_number = Column(Integer)
-    relevance_score = Column(Float)
-    content_snippet = Column(Text)
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relations
-    chat_history = relationship("ChatHistory", back_populates="referenced_documents")
-
-    __table_args__ = (
-        Index('idx_ref_doc_chat', chat_history_id),
-        Index('idx_ref_doc_relevance', relevance_score.desc()),
-        Index('idx_ref_doc_metadata', metadata, postgresql_using='gin'),
-        CheckConstraint('relevance_score >= 0 AND relevance_score <= 1', name='relevance_score_check'),
-    )
-
-    def to_dict(self):
-        """Convertit l'objet en dictionnaire."""
-        return {
-            "id": str(self.id),
-            "chat_history_id": str(self.chat_history_id),
-            "document_name": self.document_name,
-            "page_number": self.page_number,
-            "relevance_score": self.relevance_score,
-            "content_snippet": self.content_snippet,
-            "metadata": self.metadata,
-            "created_at": self.created_at.isoformat()
-        }
-
-class MessageMetrics(Base):
-    """Modèle pour les métriques des messages."""
-    __tablename__ = 'message_metrics'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    message_id = Column(UUID, ForeignKey('chat_history.id', ondelete='CASCADE'), unique=True)
-    tokens_prompt = Column(Integer, default=0)
-    tokens_completion = Column(Integer, default=0)
-    total_tokens = Column(Integer, default=0)
-    prompt_cost = Column(Float, default=0.0)
-    completion_cost = Column(Float, default=0.0)
-    total_cost = Column(Float, default=0.0)
-    model_name = Column(String(100))
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relations
-    message = relationship("ChatHistory", back_populates="metrics")
-
-    __table_args__ = (
-        CheckConstraint('tokens_prompt >= 0', name='tokens_prompt_check'),
-        CheckConstraint('tokens_completion >= 0', name='tokens_completion_check'),
-        CheckConstraint('total_tokens >= 0', name='total_tokens_check'),
-        CheckConstraint('prompt_cost >= 0', name='prompt_cost_check'),
-        CheckConstraint('completion_cost >= 0', name='completion_cost_check'),
-        CheckConstraint('total_cost >= 0', name='total_cost_check'),
-    )
-
-class UsageMetric(Base):
-    """Modèle pour les métriques d'utilisation."""
-    __tablename__ = 'usage_metrics'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'))
-    endpoint = Column(String(255), nullable=False)
-    method = Column(String(10), nullable=False)
-    status_code = Column(Integer)
-    response_time = Column(Float)
-    request_size = Column(Integer)
-    response_size = Column(Integer)
-    user_agent = Column(String(255))
-    ip_address = Column(String(45))
-    error_message = Column(Text)
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relations
-    user = relationship("User", back_populates="usage_metrics")
-
-    __table_args__ = (
-        Index('idx_usage_user', user_id),
-        Index('idx_usage_endpoint', endpoint),
-        Index('idx_usage_created', created_at.desc()),
-        Index('idx_usage_metadata', metadata, postgresql_using='gin'),
-        CheckConstraint('response_time >= 0', name='response_time_check'),
-    )
-
-class APIKey(Base):
-    """Modèle pour les clés API."""
-    __tablename__ = 'api_keys'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    key_hash = Column(String(255), nullable=False)
-    name = Column(String(100))
-    scopes = Column(ARRAY(String))
-    expires_at = Column(DateTime(timezone=True))
-    last_used_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    is_active = Column(Boolean, default=True)
-    metadata = Column(JSONB, default={})
-
-    # Relations
-    user = relationship("User", back_populates="api_keys")
-
-    __table_args__ = (
-        Index('idx_api_key_user', user_id),
-        Index('idx_api_key_hash', key_hash),
-        Index('idx_api_key_active', is_active),
-    )
-
-    @property
-    def is_expired(self):
-        """Vérifie si la clé API est expirée."""
-        if not self.expires_at:
-            return False
-        return datetime.utcnow() > self.expires_at
-
-class SystemConfig(Base):
-    """Modèle pour la configuration système."""
-    __tablename__ = 'system_config'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    key = Column(String(255), unique=True, nullable=False)
-    value = Column(JSONB, nullable=False)
-    description = Column(Text)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    metadata = Column(JSONB, default={})
-
-    __table_args__ = (
-        Index('idx_config_key', key),
-        Index('idx_config_active', is_active),
-        Index('idx_config_metadata', metadata, postgresql_using='gin'),
-    )
-
-class DocumentIndex(Base):
-    """Modèle pour l'index des documents."""
-    __tablename__ = 'document_index'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_name = Column(String(255), nullable=False)
-    document_type = Column(String(50), nullable=False)
-    document_hash = Column(String(255), nullable=False)
-    content_vector = Column(ARRAY(Float))
-    metadata = Column(JSONB, default={})
-    indexed_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_accessed = Column(DateTime(timezone=True))
-    status = Column(String(50), default='active')
-
-    __table_args__ = (
-        Index('idx_doc_name', document_name),
-        Index('idx_doc_type', document_type),
-        Index('idx_doc_hash', document_hash),
-        Index('idx_doc_status', status),
-        Index('idx_doc_metadata', metadata, postgresql_using='gin'),
-        UniqueConstraint('document_name', 'document_hash', name='uq_doc_name_hash')
-    )
-
-    def to_dict(self):
-        return {
-            "id": str(self.id),
-            "document_name": self.document_name,
-            "document_type": self.document_type,
-            "document_hash": self.document_hash,
-            "metadata": self.metadata,
-            "indexed_at": self.indexed_at.isoformat(),
-            "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
-            "status": self.status
-        }
-
-class VectorEmbedding(Base):
-    """Modèle pour les embeddings vectoriels."""
-    __tablename__ = 'vector_embeddings'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    source_id = Column(UUID, nullable=False)  # ID du document ou message source
-    source_type = Column(String(50), nullable=False)  # 'document' ou 'message'
-    embedding = Column(ARRAY(Float), nullable=False)
-    model_name = Column(String(100), nullable=False)
-    dimensions = Column(Integer, nullable=False)
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index('idx_vector_source', source_id, source_type),
-        Index('idx_vector_model', model_name),
-        Index('idx_vector_metadata', metadata, postgresql_using='gin'),
-        CheckConstraint('dimensions > 0', name='dimensions_check')
-    )
-
-class UserPreference(Base):
-    """Modèle pour les préférences utilisateur."""
-    __tablename__ = 'user_preferences'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    language = Column(String(5), default='fr')
-    theme = Column(String(20), default='light')
-    notifications_enabled = Column(Boolean, default=True)
-    email_notifications = Column(Boolean, default=True)
-    custom_settings = Column(JSONB, default={})
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    __table_args__ = (
-        Index('idx_pref_user', user_id),
-        CheckConstraint(
-            "language IN ('fr', 'en', 'es', 'de', 'it')", 
-            name='language_check'
-        ),
-        CheckConstraint(
-            "theme IN ('light', 'dark', 'system')", 
-            name='theme_check'
-        )
-    )
-
-class DocumentChunk(Base):
-    """Modèle pour les chunks de documents."""
-    __tablename__ = 'document_chunks'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(UUID, ForeignKey('document_index.id', ondelete='CASCADE'), nullable=False)
-    content = Column(Text, nullable=False)
-    chunk_index = Column(Integer, nullable=False)
-    chunk_size = Column(Integer, nullable=False)
-    embedding = Column(ARRAY(Float))
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index('idx_chunk_doc', document_id),
-        Index('idx_chunk_index', chunk_index),
-        Index('idx_chunk_metadata', metadata, postgresql_using='gin'),
-        CheckConstraint('chunk_size > 0', name='chunk_size_check')
-    )
-
-class ErrorLog(Base):
-    """Modèle pour les logs d'erreurs."""
-    __tablename__ = 'error_logs'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    error_type = Column(String(100), nullable=False)
-    error_message = Column(Text, nullable=False)
-    stack_trace = Column(Text)
-    component = Column(String(100))
-    severity = Column(String(20), default='error')
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='SET NULL'))
-    session_id = Column(String(255))
-    metadata = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index('idx_error_type', error_type),
-        Index('idx_error_severity', severity),
-        Index('idx_error_component', component),
-        Index('idx_error_created', created_at.desc()),
-        CheckConstraint(
-            "severity IN ('debug', 'info', 'warning', 'error', 'critical')", 
-            name='severity_check'
-        )
-    )
-
-class BackgroundJob(Base):
-    """Modèle pour les tâches en arrière-plan."""
-    __tablename__ = 'background_jobs'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    job_type = Column(String(100), nullable=False)
-    status = Column(String(50), default='pending')
-    progress = Column(Float, default=0.0)
-    total_items = Column(Integer)
-    processed_items = Column(Integer, default=0)
-    error_count = Column(Integer, default=0)
-    started_at = Column(DateTime(timezone=True))
-    completed_at = Column(DateTime(timezone=True))
-    metadata = Column(JSONB, default={})
-    error_details = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index('idx_job_type', job_type),
-        Index('idx_job_status', status),
-        Index('idx_job_created', created_at.desc()),
-        CheckConstraint(
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')", 
-            name='status_check'
-        ),
-        CheckConstraint('progress >= 0 AND progress <= 100', name='progress_check')
-    )
-
-    @property
-    def duration(self):
-        """Calcule la durée du job en secondes."""
-        if not self.started_at:
-            return 0
-        end_time = self.completed_at or datetime.utcnow()
-        return (end_time - self.started_at).total_seconds()
-
-    @property
-    def progress_rate(self):
-        """Calcule le taux de progression."""
-        if not self.total_items:
-            return 0
-        return (self.processed_items / self.total_items) * 100
-
-# Fonction utilitaire pour les triggers
-def create_trigger_function():
-    return """
-    CREATE OR REPLACE FUNCTION update_updated_at_column()
-    RETURNS TRIGGER AS $$
-    BEGIN
-        NEW.updated_at = CURRENT_TIMESTAMP;
-        RETURN NEW;
-    END;
-    $$ language 'plpgsql';
-    """
-
-# Création des triggers pour updated_at
-def create_updated_at_triggers():
-    triggers = []
-    for table in [
-        'chat_sessions', 'user_preferences', 'system_config'
-    ]:
-        trigger = f"""
-        DROP TRIGGER IF EXISTS update_{table}_updated_at ON {table};
-        CREATE TRIGGER update_{table}_updated_at
-            BEFORE UPDATE ON {table}
-            FOR EACH ROW
-            EXECUTE FUNCTION update_updated_at_column();
+    async def generate_response(
+        self,
+        query: str,
+        context_docs: List[Dict],
+        conversation_history: Optional[List] = None,
+        language: str = "fr",
+        generation_config: Optional[Dict] = None
+    ) -> Union[str, Dict[str, Any]]:
         """
-        triggers.append(trigger)
+        Génère une réponse complète.
+        """
+        try:
+            # Préparation du prompt
+            prompt = self._prepare_prompt(
+                query=query,
+                context_docs=context_docs,
+                conversation_history=conversation_history,
+                language=language
+            )
+            
+            # Tokenisation
+            inputs = self._tokenize(prompt)
+            
+            # Configuration de génération
+            gen_config = self.generation_config
+            if generation_config:
+                gen_config = GenerationConfig(**{
+                    **gen_config.to_dict(),
+                    **generation_config
+                })
+            
+            # Génération
+            with metrics.timer("model_inference"):
+                with torch.inference_mode():
+                    outputs = self.model.generate(
+                        **inputs,
+                        generation_config=gen_config,
+                        return_dict_in_generate=True,
+                        output_scores=True
+                    )
+            
+            # Décodage et post-traitement
+            response = self.tokenizer.decode(
+                outputs.sequences[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+            
+            response = self._post_process_response(response)
+            
+            # Métriques
+            metrics.increment_counter("model_generations")
+            
+            return {
+                "response": response,
+                "tokens_used": len(outputs.sequences[0]),
+                "generation_time": metrics.get_timer_value("model_inference")
+            }
+            
+        except Exception as e:
+            logger.error(f"Erreur génération réponse: {e}")
+            metrics.increment_counter("model_generation_errors")
+            raise
+
+    async def generate_streaming_response(
+        self,
+        query: str,
+        context_docs: List[Dict],
+        language: str = "fr"
+    ) -> AsyncIterator[str]:
+        """
+        Génère une réponse en streaming.
+        """
+        try:
+            # Préparation du prompt
+            prompt = self._prepare_prompt(
+                query=query,
+                context_docs=context_docs,
+                language=language
+            )
+            
+            # Configuration du streaming
+            streamer = TextIteratorStreamer(
+                self.tokenizer,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+            
+            # Génération dans un thread séparé
+            inputs = self._tokenize(prompt)
+            generation_kwargs = {
+                **inputs,
+                "streamer": streamer,
+                "generation_config": self.generation_config
+            }
+            
+            thread = Thread(target=self._generate_in_thread, kwargs=generation_kwargs)
+            thread.start()
+            
+            # Streaming des tokens
+            buffer = ""
+            async for token in self._async_tokens(streamer):
+                buffer += token
+                if len(buffer) >= settings.STREAM_CHUNK_SIZE:
+                    yield buffer
+                    buffer = ""
+                await asyncio.sleep(settings.STREAM_DELAY)
+            
+            if buffer:
+                yield buffer
+                
+        except Exception as e:
+            logger.error(f"Erreur génération streaming: {e}")
+            yield settings.ERROR_MESSAGE
+
+    def _generate_in_thread(self, **kwargs):
+        """Génère la réponse dans un thread séparé."""
+        try:
+            with torch.inference_mode():
+                _ = self.model.generate(**kwargs)
+        except Exception as e:
+            logger.error(f"Erreur génération thread: {e}")
+
+    async def _async_tokens(self, streamer) -> AsyncIterator[str]:
+        """Convertit le streamer en générateur asynchrone."""
+        loop = asyncio.get_event_loop()
+        for token in streamer:
+            yield await loop.run_in_executor(None, lambda: token)
+
+    def _prepare_prompt(
+        self,
+        query: str,
+        context_docs: List[Dict],
+        conversation_history: Optional[List] = None,
+        language: str = "fr"
+    ) -> str:
+        """Prépare le prompt avec contexte."""
+        # Formatage du contexte
+        context_parts = []
+        if context_docs:
+            for doc in context_docs:
+                context_parts.append(
+                    f"Source: {doc.get('title', 'Unknown')}\n"
+                    f"Contenu: {doc.get('content', '')}\n"
+                )
+        
+        context = "\n\n".join(context_parts) if context_parts else "Aucun contexte disponible."
+        
+        # Formatage de l'historique
+        history = ""
+        if conversation_history:
+            history_parts = []
+            for msg in conversation_history[-5:]:  # Limité aux 5 derniers messages
+                history_parts.append(
+                    f"Human: {msg.get('user')}\n"
+                    f"Assistant: {msg.get('assistant')}"
+                )
+            history = "\n".join(history_parts)
+        
+        # Construction du prompt final
+        return settings.CHAT_TEMPLATE.format(
+            system=settings.SYSTEM_PROMPT,
+            query=query,
+            context=context,
+            history=history,
+            language=language
+        )
+
+    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
+        """Tokenise le texte."""
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=settings.MAX_INPUT_LENGTH,
+            padding=True
+        ).to(self.device)
+        
+        return inputs
+
+    def _post_process_response(self, response: str) -> str:
+        """Post-traite la réponse générée."""
+        # Extraction de la réponse
+        if "<|assistant|>" in response:
+            response = response.split("<|assistant|>")[-1].strip()
+        
+        # Nettoyage
+        response = response.replace("<|endoftext|>", "").strip()
+        
+        return response
+
+    async def create_embedding(self, text: str) -> List[float]:
+        """Crée un embedding pour un texte."""
+        return await self.embeddings.generate_embedding(text)
+
+    async def cleanup(self):
+        """Nettoie les ressources."""
+        try:
+            self.executor.shutdown(wait=True)
+            await self.embeddings.cleanup()
+            
+            self.model.cpu()
+            del self.model
+            del self.tokenizer
+            
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            logger.info("Ressources modèle nettoyées")
+            
+        except Exception as e:
+            logger.error(f"Erreur nettoyage modèle: {e}")
+
+    def __del__(self):
+        """Destructeur de la classe."""
+        try:
+            asyncio.run(self.cleanup())
+        except:
+            pass
     return '\n'.join(triggers)
