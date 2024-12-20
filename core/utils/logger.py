@@ -99,14 +99,21 @@ class LoggerManager:
 
     async def initialize(self):
         """Initialise le gestionnaire de logs."""
+        logger.info("Début de l'initialisation du gestionnaire de logs")
+
         # S'assurer que le répertoire de logs existe
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Répertoire de logs créé ou existant : {self.log_dir}")
 
         # Configuration initiale des handlers
         self._setup_default_handlers()
+        logger.info("Handlers de log configurés")
 
         # Nettoyage initial des anciens logs
         await self._cleanup_old_logs()
+        logger.info("Nettoyage des anciens logs terminé")
+
+        logger.info("Initialisation du gestionnaire de logs terminée avec succès")
 
     def _setup_default_handlers(self):
         """Configure les handlers par défaut."""
@@ -115,6 +122,7 @@ class LoggerManager:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(logging.Formatter(settings.LOG_FORMAT))
             logging.getLogger().addHandler(console_handler)
+            logger.info("Handler de console configuré")
 
     def get_logger(
         self,
