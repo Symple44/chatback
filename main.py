@@ -15,6 +15,7 @@ from pathlib import Path
 import time
 from typing import Optional, List, Dict
 import uuid
+import logging
 
 # Imports internes
 from core.config import settings
