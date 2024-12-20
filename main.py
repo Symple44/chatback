@@ -34,6 +34,7 @@ from api.routes.router import router as api_router
 from api.routes.docs import tags_metadata
 
 logging.basicConfig(level=logging.INFO)
+await logger_manager.initialize()
 logger = get_logger("main")
 logger.info("Démarrage de l'application")
 
