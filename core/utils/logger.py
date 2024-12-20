@@ -1,4 +1,4 @@
-# core/utlis/logger.py
+# core/utils/logger.py
 import logging
 import json
 import sys
@@ -97,6 +97,25 @@ class LoggerManager:
             format=settings.LOG_FORMAT
         )
 
+    async def initialize(self):
+        """Initialise le gestionnaire de logs."""
+        # S'assurer que le répertoire de logs existe
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configuration initiale des handlers
+        self._setup_default_handlers()
+        
+        # Nettoyage initial des anciens logs
+        await self._cleanup_old_logs()
+
+    def _setup_default_handlers(self):
+        """Configure les handlers par défaut."""
+        # Handler pour la console en mode debug
+        if settings.DEBUG:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(logging.Formatter(settings.LOG_FORMAT))
+            logging.getLogger().addHandler(console_handler)
+
     def get_logger(
         self,
         name: str,
@@ -158,7 +177,7 @@ class LoggerManager:
         self.loggers[name] = logger
         return logger
 
-    def cleanup_old_logs(self, days: int = 30):
+    async def cleanup_old_logs(self, days: int = 30):
         """
         Nettoie et archive les anciens logs.
         
@@ -186,8 +205,12 @@ class LoggerManager:
         except Exception as e:
             logger.error(f"Erreur nettoyage des logs: {e}")
 
+    async def _cleanup_old_logs(self):
+        """Nettoie les anciens logs au démarrage."""
+        await self.cleanup_old_logs()
+
 # Création de l'instance unique
-_logger_manager = LoggerManager()
+logger_manager = LoggerManager()
 
 def get_logger(
     name: str,
@@ -205,4 +228,7 @@ def get_logger(
     Returns:
         Logger configuré
     """
-    return _logger_manager.get_logger(name, level, extra_fields)
+    return logger_manager.get_logger(name, level, extra_fields)
+
+# Instance de logger pour ce module
+logger = get_logger("logger")
