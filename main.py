@@ -1,9 +1,5 @@
 # main.py
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
-from starlette.staticfiles import StaticFiles
+# Imports standard
 import asyncio
 import os
 import uvicorn
@@ -13,17 +9,24 @@ from pathlib import Path
 import time
 from typing import Optional, List, Dict
 
-# Imports internes
+# Imports tiers
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from starlette.staticfiles import StaticFiles
+
+# Imports locaux
 from core.config import settings
+from core.utils.logger import get_logger, logger_manager
+from core.utils.metrics import metrics
 from core.database.base import get_session_manager, cleanup_database
-from core.cache import RedisCache
+from core.storage.sync_manager import DocumentSyncManager
 from core.vectorstore.search import ElasticsearchClient
 from core.llm.model import ModelInference
 from core.document_processing.extractor import DocumentExtractor
 from core.document_processing.pdf_processor import PDFProcessor
-from core.storage.sync_manager import DocumentSyncManager
-from core.utils.logger import get_logger, logger_manager
-from core.utils.metrics import metrics
+from core.cache import RedisCache
 from core.utils.memory_manager import MemoryManager
 from core.utils.system_optimizer import SystemOptimizer
 from api.routes.router import router as api_router
