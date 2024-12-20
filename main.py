@@ -15,7 +15,6 @@ from pathlib import Path
 import time
 from typing import Optional, List, Dict
 import uuid
-import logging
 
 # Imports internes
 from core.config import settings
@@ -33,8 +32,6 @@ from core.utils.system_optimizer import SystemOptimizer
 from api.routes.router import router as api_router
 from api.routes.docs import tags_metadata
 
-logging.basicConfig(level=logging.INFO)
-await logger_manager.initialize()
 logger = get_logger("main")
 logger.info("Démarrage de l'application")
 
