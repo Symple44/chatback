@@ -181,76 +181,76 @@ class DocumentSyncManager:
     Returns:
         Set des fichiers synchronisés
     """
-    try:
-        with metrics.timer("document_sync"):
-            previous_status = self._load_sync_status()
-            current_status = {}
-            synced_files = set()
+        try:
+            with metrics.timer("document_sync"):
+                previous_status = self._load_sync_status()
+                current_status = {}
+                synced_files = set()
             
-            # Parcours des fichiers locaux
-            for subdir, _, files in os.walk(self.docs_dir):
-                for filename in files:
-                    if not filename.lower().endswith(('.pdf', '.docx', '.txt')):
-                        continue
+                # Parcours des fichiers locaux
+                for subdir, _, files in os.walk(self.docs_dir):
+                    for filename in files:
+                        if not filename.lower().endswith(('.pdf', '.docx', '.txt')):
+                            continue
                         
-                    file_path = os.path.join(subdir, filename)
-                    try:
-                        # Calcul du hash pour vérifier les changements
-                        file_hash = self._calculate_file_hash(file_path)
-                        current_status[file_path] = file_hash
+                        file_path = os.path.join(subdir, filename)
+                        try:
+                            # Calcul du hash pour vérifier les changements
+                            file_hash = self._calculate_file_hash(file_path)
+                            current_status[file_path] = file_hash
                         
-                        # Vérifier si le fichier a été modifié
-                        if previous_status.get(file_path) != file_hash:
-                            # Traitement selon le type de fichier
-                            if filename.lower().endswith('.pdf'):
-                                success = await self.pdf_processor.index_pdf(
-                                    file_path,
-                                    metadata={
+                            # Vérifier si le fichier a été modifié
+                            if previous_status.get(file_path) != file_hash:
+                                # Traitement selon le type de fichier
+                                if filename.lower().endswith('.pdf'):
+                                    success = await self.pdf_processor.index_pdf(
+                                        file_path,
+                                        metadata={
+                                            "application": os.path.basename(subdir),
+                                            "last_synced": datetime.utcnow().isoformat(),
+                                            "directory": subdir
+                                        }
+                                    )
+                                    if success:
+                                        synced_files.add(file_path)
+                                        logger.info(f"PDF synchronisé: {filename}")
+                                else:
+                                    # Traitement pour les autres types de fichiers
+                                    metadata = {
+                                        "source": file_path,
+                                        "filename": filename,
+                                        "directory": subdir,
                                         "application": os.path.basename(subdir),
-                                        "last_synced": datetime.utcnow().isoformat(),
-                                        "directory": subdir
+                                        "last_synced": datetime.utcnow().isoformat()
                                     }
-                                )
-                                if success:
+                                
+                                    with open(file_path, 'r', encoding='utf-8') as f:
+                                        content = f.read()
+                                
+                                    # Indexation dans Elasticsearch
+                                    await self.es_client.index_document(
+                                        title=filename,
+                                        content=content,
+                                        metadata=metadata
+                                    )
                                     synced_files.add(file_path)
-                                    logger.info(f"PDF synchronisé: {filename}")
-                            else:
-                                # Traitement pour les autres types de fichiers
-                                metadata = {
-                                    "source": file_path,
-                                    "filename": filename,
-                                    "directory": subdir,
-                                    "application": os.path.basename(subdir),
-                                    "last_synced": datetime.utcnow().isoformat()
-                                }
+                                    logger.info(f"Document synchronisé: {filename}")
                                 
-                                with open(file_path, 'r', encoding='utf-8') as f:
-                                    content = f.read()
-                                
-                                # Indexation dans Elasticsearch
-                                await self.es_client.index_document(
-                                    title=filename,
-                                    content=content,
-                                    metadata=metadata
-                                )
-                                synced_files.add(file_path)
-                                logger.info(f"Document synchronisé: {filename}")
-                                
-                    except Exception as e:
-                        logger.error(f"Erreur lors du traitement de {filename}: {e}")
+                        except Exception as e:
+                            logger.error(f"Erreur lors du traitement de {filename}: {e}")
                 
-                # Sauvegarde du statut de synchronisation
-                self._save_sync_status(current_status)
+                    # Sauvegarde du statut de synchronisation
+                    self._save_sync_status(current_status)
                 
-            metrics.increment_counter("sync_operations")
-            logger.info(f"Synchronisation terminée: {len(synced_files)} fichiers traités")
+                metrics.increment_counter("sync_operations")
+                logger.info(f"Synchronisation terminée: {len(synced_files)} fichiers traités")
             
-            return synced_files
+                return synced_files
             
-    except Exception as e:
-        logger.error(f"Erreur lors de la synchronisation: {e}", exc_info=True)
-        metrics.increment_counter("sync_errors")
-        return set()
+        except Exception as e:
+            logger.error(f"Erreur lors de la synchronisation: {e}", exc_info=True)
+            metrics.increment_counter("sync_errors")
+            return set()
 
     def _calculate_file_hash(self, file_path: str) -> str:
         """
