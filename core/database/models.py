@@ -28,7 +28,7 @@ class User(Base):
     full_name = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True))
-    metadata = Column(JSONB, default={})
+    user_metadata = Column(JSONB, default={})
     is_active = Column(Boolean, default=True)
 
     # Relations
@@ -42,7 +42,7 @@ class User(Base):
         Index('idx_user_email', email),
         Index('idx_user_username', username),
         Index('idx_user_active', is_active),
-        Index('idx_user_metadata', metadata, postgresql_using='gin'),
+        Index('idx_user_metadata', user_metadata, postgresql_using='gin'),
         CheckConstraint('length(username) >= 3', name='username_length_check'),
     )
 
@@ -69,7 +69,7 @@ class User(Base):
             "full_name": self.full_name,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_login": self.last_login.isoformat() if self.last_login else None,
-            "metadata": self.metadata,
+            "metadata": self.user_metadata,
             "is_active": self.is_active
         }
 
@@ -83,7 +83,7 @@ class ChatSession(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     session_context = Column(JSONB, default={})
-    metadata = Column(JSONB, default={})
+    session_metadata  = Column(JSONB, default={})
     is_active = Column(Boolean, default=True)
 
     # Relations
@@ -95,7 +95,7 @@ class ChatSession(Base):
         Index('idx_session_active', is_active),
         Index('idx_session_updated', updated_at.desc()),
         Index('idx_session_context', session_context, postgresql_using='gin'),
-        Index('idx_session_metadata', metadata, postgresql_using='gin'),
+        Index('idx_session_metadata', session_metadata, postgresql_using='gin'),
     )
 
     @hybrid_property
@@ -114,7 +114,7 @@ class ChatSession(Base):
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "session_context": self.session_context,
-            "metadata": self.metadata,
+            "metadata": self.session_metadata,
             "is_active": self.is_active,
             "duration": self.duration
         }
@@ -134,7 +134,7 @@ class ChatHistory(Base):
     tokens_used = Column(Integer, nullable=False, default=0)
     processing_time = Column(Float, nullable=False, default=0.0)
     cost = Column(Float, default=0.0)
-    metadata = Column(JSONB, default={})
+    chat_metadata  = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
@@ -147,7 +147,7 @@ class ChatHistory(Base):
         Index('idx_history_session', session_id),
         Index('idx_history_user', user_id),
         Index('idx_history_created', created_at.desc()),
-        Index('idx_history_metadata', metadata, postgresql_using='gin'),
+        Index('idx_history_metadata', chat_metadata, postgresql_using='gin'),
         Index('idx_history_vector', query_vector, postgresql_using='gin'),
         CheckConstraint('confidence_score >= 0 AND confidence_score <= 1', name='confidence_score_check'),
         CheckConstraint('tokens_used >= 0', name='tokens_used_check'),
@@ -166,7 +166,7 @@ class ChatHistory(Base):
             "tokens_used": self.tokens_used,
             "processing_time": self.processing_time,
             "cost": self.cost,
-            "metadata": self.metadata,
+            "metadata": self.chat_metadata,
             "created_at": self.created_at.isoformat()
         }
 
@@ -180,7 +180,7 @@ class ReferencedDocument(Base):
     page_number = Column(Integer)
     relevance_score = Column(Float)
     content_snippet = Column(Text)
-    metadata = Column(JSONB, default={})
+    doc_metadata = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
@@ -189,7 +189,7 @@ class ReferencedDocument(Base):
     __table_args__ = (
         Index('idx_ref_doc_chat', chat_history_id),
         Index('idx_ref_doc_relevance', relevance_score.desc()),
-        Index('idx_ref_doc_metadata', metadata, postgresql_using='gin'),
+        Index('idx_ref_doc_metadata', doc_metadata, postgresql_using='gin'),
         CheckConstraint('relevance_score >= 0 AND relevance_score <= 1', name='relevance_score_check'),
     )
 
@@ -202,7 +202,7 @@ class ReferencedDocument(Base):
             "page_number": self.page_number,
             "relevance_score": self.relevance_score,
             "content_snippet": self.content_snippet,
-            "metadata": self.metadata,
+            "metadata": self.doc_metadata,
             "created_at": self.created_at.isoformat()
         }
 
