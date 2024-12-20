@@ -32,6 +32,7 @@ langchain
 langchain-core
 langchain-community
 langchain-huggingface
+langchain-text-splitters
 sentence-transformers
 
 # Traitement du langage et IA
