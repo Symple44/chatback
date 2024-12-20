@@ -1,20 +1,23 @@
 # core/llm/model.py
-from sqlalchemy import (
-    Column, String, DateTime, Float, Integer, Boolean, 
-    ForeignKey, Text, Index, func, UUID, JSON, ARRAY,
-    UniqueConstraint, CheckConstraint
+from typing import List, Dict, Optional, Any, AsyncIterator, Union
+import torch
+from transformers import (
+    AutoTokenizer, 
+    AutoModelForCausalLM,
+    TextIteratorStreamer,
+    GenerationConfig
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
-from sqlalchemy.orm import relationship, validates, declarative_base
-from sqlalchemy.schema import CheckConstraint
-from sqlalchemy.ext.hybrid import hybrid_property
+import asyncio
 from datetime import datetime
-import uuid
-import re
+import gc
+import psutil
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 
-from .base import Base
 from core.config import settings
 from core.utils.logger import get_logger
+from core.utils.metrics import metrics
+from .embeddings import EmbeddingsManager
 
 logger = get_logger(__name__)
 
