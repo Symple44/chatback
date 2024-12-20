@@ -16,7 +16,7 @@ from core.config import settings
 
 class CustomJsonFormatter(logging.Formatter):
     """Formateur personnalisé pour les logs en JSON."""
-    
+
     def __init__(self, **kwargs):
         self.extra_fields = kwargs.pop("extra_fields", {})
         super().__init__()
@@ -70,7 +70,7 @@ class CustomJsonFormatter(logging.Formatter):
 
 class AsyncRotatingFileHandler(RotatingFileHandler):
     """Handler de fichier rotatif avec support asynchrone."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.lock = threading.Lock()
@@ -82,15 +82,15 @@ class AsyncRotatingFileHandler(RotatingFileHandler):
 
 class LoggerManager:
     """Gestionnaire centralisé des loggers."""
-    
+
     def __init__(self):
         """Initialise le gestionnaire de logs."""
         self.log_dir = Path(settings.LOG_DIR)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.loggers: Dict[str, logging.Logger] = {}
         self.default_level = getattr(logging, settings.LOG_LEVEL.upper())
-        
+
         # Configuration du logging de base
         logging.basicConfig(
             level=self.default_level,
@@ -101,10 +101,10 @@ class LoggerManager:
         """Initialise le gestionnaire de logs."""
         # S'assurer que le répertoire de logs existe
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Configuration initiale des handlers
         self._setup_default_handlers()
-        
+
         # Nettoyage initial des anciens logs
         await self._cleanup_old_logs()
 
@@ -124,12 +124,12 @@ class LoggerManager:
     ) -> logging.Logger:
         """
         Récupère ou crée un logger.
-        
+
         Args:
             name: Nom du logger
             level: Niveau de log optionnel
             extra_fields: Champs supplémentaires
-            
+
         Returns:
             Logger configuré
         """
@@ -180,7 +180,7 @@ class LoggerManager:
     async def cleanup_old_logs(self, days: int = 30):
         """
         Nettoie et archive les anciens logs.
-        
+
         Args:
             days: Nombre de jours à conserver
         """
@@ -196,12 +196,12 @@ class LoggerManager:
                     with open(log_file, 'rb') as f_in:
                         with gzip.open(archive_path, 'wb') as f_out:
                             f_out.write(f_in.read())
-                    
+
                     # Suppression du fichier original
                     log_file.unlink()
 
             logger.info(f"Nettoyage des logs terminé")
-            
+
         except Exception as e:
             logger.error(f"Erreur nettoyage des logs: {e}")
 
@@ -219,12 +219,12 @@ def get_logger(
 ) -> logging.Logger:
     """
     Fonction utilitaire pour obtenir un logger.
-    
+
     Args:
         name: Nom du logger
         level: Niveau de log optionnel
         extra_fields: Champs supplémentaires
-        
+
     Returns:
         Logger configuré
     """
@@ -232,3 +232,4 @@ def get_logger(
 
 # Instance de logger pour ce module
 logger = get_logger("logger")
+
