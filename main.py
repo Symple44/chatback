@@ -290,6 +290,40 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Erreur WebSocket: {e}")
         await manager.disconnect(websocket)
 
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next) -> Response:
+    """
+    Middleware pour ajouter le temps de traitement dans les headers.
+    
+    Args:
+        request: Requête entrante
+        call_next: Handler suivant dans la chaîne
+        
+    Returns:
+        Response: Réponse avec header de temps de traitement ajouté
+    """
+    start_time = datetime.utcnow()
+    response = await call_next(request)
+    process_time = (datetime.utcnow() - start_time).total_seconds()
+    
+    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-API-Version"] = settings.VERSION
+    
+    # Log de la requête si ce n'est pas un health check
+    if not request.url.path.endswith(("/ping", "/health")):
+        logger.info(
+            f"Request: {request.method} {request.url.path} "
+            f"Status: {response.status_code} "
+            f"Duration: {process_time:.3f}s"
+        )
+        
+        # Métriques
+        metrics.increment_counter("http_requests")
+        if response.status_code >= 400:
+            metrics.increment_counter("http_errors")
+    
+    return response
+
 # Documentation personnalisée
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
