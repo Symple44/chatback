@@ -340,14 +340,17 @@ async def custom_swagger_ui_html():
     )
 
 if __name__ == "__main__":
-    logger.info("Démarrage du serveur Uvicorn")
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=settings.DEBUG,
-        workers=settings.WORKERS,
-        log_level=settings.LOG_LEVEL.lower(),
-        loop="uvloop",
-        timeout_keep_alive=settings.KEEPALIVE
-    )
+    try:
+        logger.info("Démarrage du serveur Uvicorn")
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=settings.DEBUG,
+            workers=settings.WORKERS,
+            log_level=settings.LOG_LEVEL.lower(),
+            loop="uvloop",
+            timeout_keep_alive=settings.KEEPALIVE
+        )
+    except KeyboardInterrupt:
+        logger.warning("Interruption manuelle détectée")
