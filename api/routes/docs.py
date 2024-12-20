@@ -1,4 +1,4 @@
-# apo/routes/api_docs.py
+# apo/routes/docs.py
 """
 Documentation des endpoints API avec des exemples.
 À importer dans main.py pour enrichir la documentation FastAPI.
