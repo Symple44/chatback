@@ -219,20 +219,39 @@ class MessageMetrics(Base):
     completion_cost = Column(Float, default=0.0)
     total_cost = Column(Float, default=0.0)
     model_name = Column(String(100))
-    metadata = Column(JSONB, default={})
+    metrics_metadata = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
     message = relationship("ChatHistory", back_populates="metrics")
 
     __table_args__ = (
+        Index('idx_metrics_message', message_id),
+        Index('idx_metrics_model', model_name),
+        Index('idx_metrics_metadata', metrics_metadata, postgresql_using='gin'),
         CheckConstraint('tokens_prompt >= 0', name='tokens_prompt_check'),
         CheckConstraint('tokens_completion >= 0', name='tokens_completion_check'),
         CheckConstraint('total_tokens >= 0', name='total_tokens_check'),
         CheckConstraint('prompt_cost >= 0', name='prompt_cost_check'),
         CheckConstraint('completion_cost >= 0', name='completion_cost_check'),
-        CheckConstraint('total_cost >= 0', name='total_cost_check'),
+        CheckConstraint('total_cost >= 0', name='total_cost_check')
     )
+
+    def to_dict(self):
+        """Convertit l'objet en dictionnaire."""
+        return {
+            "id": str(self.id),
+            "message_id": str(self.message_id),
+            "tokens_prompt": self.tokens_prompt,
+            "tokens_completion": self.tokens_completion,
+            "total_tokens": self.total_tokens,
+            "prompt_cost": self.prompt_cost,
+            "completion_cost": self.completion_cost,
+            "total_cost": self.total_cost,
+            "model_name": self.model_name,
+            "metadata": self.metrics_metadata,
+            "created_at": self.created_at.isoformat()
+        }
 
 class UsageMetric(Base):
     """Modèle pour les métriques d'utilisation."""
