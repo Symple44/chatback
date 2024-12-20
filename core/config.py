@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     PDF_IMAGE_QUALITY: int = 85
     PDF_MAX_IMAGE_SIZE: Tuple[int, int] = (800, 800)
     SUPPORTED_FORMATS: List[str] = ['.pdf', '.docx', '.txt']
+
+    # Paramètres de traitement des documents
+    CHUNK_SIZE: int = 1000  # Taille des chunks de texte
+    CHUNK_OVERLAP: int = 200  # Chevauchement entre les chunks
+    MAX_RELEVANT_DOCS: int = 5  # Nombre maximum de documents pertinents à retourner
+    MAX_CHUNKS_PER_DOC: int = 50  # Nombre maximum de chunks par document
+    CONTEXT_CONFIDENCE_THRESHOLD: float = 0.7  # Seuil de confiance pour le contexte
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
