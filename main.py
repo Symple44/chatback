@@ -34,11 +34,12 @@ from api.routes.router import router as api_router
 from api.routes.docs import tags_metadata
 
 logger = get_logger("main")
+logger.info("Début du script principal")
 logger.info("Démarrage de l'application")
 
 class ComponentManager:
     """Gestionnaire des composants de l'application."""
-    
+
     def __init__(self):
         """Initialise le gestionnaire de composants."""
         self.start_time = datetime.utcnow()
@@ -103,7 +104,7 @@ class ComponentManager:
     async def cleanup(self):
         """Nettoie les ressources des composants."""
         logger.info("Démarrage du nettoyage des composants")
-        
+
         for name, component in self._components.items():
             try:
                 if hasattr(component, 'cleanup'):
@@ -141,7 +142,7 @@ class ComponentManager:
 
             # Ajout des métriques système
             health_status["metrics"] = metrics.get_current_metrics()
-            
+
             return health_status
 
         except Exception as e:
@@ -233,7 +234,7 @@ async def value_error_handler(request, exc):
 # WebSocket Manager
 class ConnectionManager:
     """Gestionnaire des connexions WebSocket."""
-    
+
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self._lock = asyncio.Lock()
@@ -298,21 +299,21 @@ async def websocket_endpoint(websocket: WebSocket):
 async def add_process_time_header(request: Request, call_next) -> Response:
     """
     Middleware pour ajouter le temps de traitement dans les headers.
-    
+
     Args:
         request: Requête entrante
         call_next: Handler suivant dans la chaîne
-        
+
     Returns:
         Response: Réponse avec header de temps de traitement ajouté
     """
     start_time = datetime.utcnow()
     response = await call_next(request)
     process_time = (datetime.utcnow() - start_time).total_seconds()
-    
+
     response.headers["X-Process-Time"] = str(process_time)
     response.headers["X-API-Version"] = settings.VERSION
-    
+
     # Log de la requête si ce n'est pas un health check
     if not request.url.path.endswith(("/ping", "/health")):
         logger.info(
@@ -320,12 +321,12 @@ async def add_process_time_header(request: Request, call_next) -> Response:
             f"Status: {response.status_code} "
             f"Duration: {process_time:.3f}s"
         )
-        
+
         # Métriques
         metrics.increment_counter("http_requests")
         if response.status_code >= 400:
             metrics.increment_counter("http_errors")
-    
+
     return response
 
 # Documentation personnalisée
@@ -340,6 +341,7 @@ async def custom_swagger_ui_html():
     )
 
 if __name__ == "__main__":
+    logger.info("Démarrage du serveur Uvicorn")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
@@ -350,3 +352,4 @@ if __name__ == "__main__":
         loop="uvloop",
         timeout_keep_alive=settings.KEEPALIVE
     )
+
