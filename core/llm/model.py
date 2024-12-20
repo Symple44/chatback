@@ -1,5 +1,4 @@
 # core/llm/model.py
-# core/llm/model.py
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
 import torch
 from transformers import (
@@ -340,4 +339,3 @@ class ModelInference:
             asyncio.run(self.cleanup())
         except:
             pass
-    return '\n'.join(triggers)
