@@ -268,7 +268,7 @@ class UsageMetric(Base):
     user_agent = Column(String(255))
     ip_address = Column(String(45))
     error_message = Column(Text)
-    metadata = Column(JSONB, default={})
+    usage_metadata = Column(JSONB, default={})  # Renommé
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
@@ -278,7 +278,7 @@ class UsageMetric(Base):
         Index('idx_usage_user', user_id),
         Index('idx_usage_endpoint', endpoint),
         Index('idx_usage_created', created_at.desc()),
-        Index('idx_usage_metadata', metadata, postgresql_using='gin'),
+        Index('idx_usage_metadata', usage_metadata, postgresql_using='gin'),
         CheckConstraint('response_time >= 0', name='response_time_check'),
     )
 
@@ -295,7 +295,7 @@ class APIKey(Base):
     last_used_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
-    metadata = Column(JSONB, default={})
+    key_metadata = Column(JSONB, default={})  # Renommé
 
     # Relations
     user = relationship("User", back_populates="api_keys")
@@ -324,12 +324,12 @@ class SystemConfig(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    metadata = Column(JSONB, default={})
+    config_metadata = Column(JSONB, default={})  # Renommé
 
     __table_args__ = (
         Index('idx_config_key', key),
         Index('idx_config_active', is_active),
-        Index('idx_config_metadata', metadata, postgresql_using='gin'),
+        Index('idx_config_metadata', config_metadata, postgresql_using='gin'),
     )
 
 class DocumentIndex(Base):
@@ -341,7 +341,7 @@ class DocumentIndex(Base):
     document_type = Column(String(50), nullable=False)
     document_hash = Column(String(255), nullable=False)
     content_vector = Column(ARRAY(Float))
-    metadata = Column(JSONB, default={})
+    index_metadata = Column(JSONB, default={})  # Renommé
     indexed_at = Column(DateTime(timezone=True), server_default=func.now())
     last_accessed = Column(DateTime(timezone=True))
     status = Column(String(50), default='active')
@@ -351,7 +351,7 @@ class DocumentIndex(Base):
         Index('idx_doc_type', document_type),
         Index('idx_doc_hash', document_hash),
         Index('idx_doc_status', status),
-        Index('idx_doc_metadata', metadata, postgresql_using='gin'),
+        Index('idx_doc_metadata', index_metadata, postgresql_using='gin'),
         UniqueConstraint('document_name', 'document_hash', name='uq_doc_name_hash')
     )
 
@@ -361,7 +361,7 @@ class DocumentIndex(Base):
             "document_name": self.document_name,
             "document_type": self.document_type,
             "document_hash": self.document_hash,
-            "metadata": self.metadata,
+            "metadata": self.index_metadata,
             "indexed_at": self.indexed_at.isoformat(),
             "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
             "status": self.status
@@ -377,39 +377,14 @@ class VectorEmbedding(Base):
     embedding = Column(ARRAY(Float), nullable=False)
     model_name = Column(String(100), nullable=False)
     dimensions = Column(Integer, nullable=False)
-    metadata = Column(JSONB, default={})
+    embedding_metadata = Column(JSONB, default={})  # Renommé
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index('idx_vector_source', source_id, source_type),
         Index('idx_vector_model', model_name),
-        Index('idx_vector_metadata', metadata, postgresql_using='gin'),
+        Index('idx_vector_metadata', embedding_metadata, postgresql_using='gin'),
         CheckConstraint('dimensions > 0', name='dimensions_check')
-    )
-
-class UserPreference(Base):
-    """Modèle pour les préférences utilisateur."""
-    __tablename__ = 'user_preferences'
-
-    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    language = Column(String(5), default='fr')
-    theme = Column(String(20), default='light')
-    notifications_enabled = Column(Boolean, default=True)
-    email_notifications = Column(Boolean, default=True)
-    custom_settings = Column(JSONB, default={})
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    __table_args__ = (
-        Index('idx_pref_user', user_id),
-        CheckConstraint(
-            "language IN ('fr', 'en', 'es', 'de', 'it')", 
-            name='language_check'
-        ),
-        CheckConstraint(
-            "theme IN ('light', 'dark', 'system')", 
-            name='theme_check'
-        )
     )
 
 class DocumentChunk(Base):
@@ -422,13 +397,13 @@ class DocumentChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     chunk_size = Column(Integer, nullable=False)
     embedding = Column(ARRAY(Float))
-    metadata = Column(JSONB, default={})
+    chunk_metadata = Column(JSONB, default={})  # Renommé
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index('idx_chunk_doc', document_id),
         Index('idx_chunk_index', chunk_index),
-        Index('idx_chunk_metadata', metadata, postgresql_using='gin'),
+        Index('idx_chunk_metadata', chunk_metadata, postgresql_using='gin'),
         CheckConstraint('chunk_size > 0', name='chunk_size_check')
     )
 
@@ -444,7 +419,7 @@ class ErrorLog(Base):
     severity = Column(String(20), default='error')
     user_id = Column(UUID, ForeignKey('users.id', ondelete='SET NULL'))
     session_id = Column(String(255))
-    metadata = Column(JSONB, default={})
+    error_metadata = Column(JSONB, default={})  # Renommé
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -471,7 +446,7 @@ class BackgroundJob(Base):
     error_count = Column(Integer, default=0)
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
-    metadata = Column(JSONB, default={})
+    job_metadata = Column(JSONB, default={})  # Renommé
     error_details = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -485,6 +460,21 @@ class BackgroundJob(Base):
         ),
         CheckConstraint('progress >= 0 AND progress <= 100', name='progress_check')
     )
+
+    @property
+    def duration(self):
+        """Calcule la durée du job en secondes."""
+        if not self.started_at:
+            return 0
+        end_time = self.completed_at or datetime.utcnow()
+        return (end_time - self.started_at).total_seconds()
+
+    @property
+    def progress_rate(self):
+        """Calcule le taux de progression."""
+        if not self.total_items:
+            return 0
+        return (self.processed_items / self.total_items) * 100
 
     @property
     def duration(self):
