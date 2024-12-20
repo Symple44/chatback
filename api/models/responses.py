@@ -65,27 +65,6 @@ class SessionResponse(BaseModel):
     stats: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
-        json_schema_extra = {
-            "example": {
-                "session_id": "123e4567-e89b-12d3-a456-426614174000",
-                "user_id": "987fcdeb-51d3-12d3-a456-426614174000",
-                "created_at": "2024-01-15T10:30:00Z",
-                "updated_at": "2024-01-15T10:30:00Z",
-                "context": {
-                    "history": [],
-                    "preferences": {}
-                },
-                "is_active": True,
-                "metadata": {
-                    "source": "web_interface",
-                    "user_agent": "Mozilla/5.0..."
-                },
-                "stats": {
-                    "total_messages": 0,
-                    "avg_response_time": 0
-                }
-            }
-        }
         from_attributes = True
 
 class ChatResponse(BaseModel):
@@ -122,23 +101,6 @@ class ChatResponse(BaseModel):
         return v
 
     class Config:
-        json_schema_extra = {
-            "example": {
-                "response": "Pour créer une commande, suivez ces étapes...",
-                "session_id": "123e4567-e89b-12d3-a456-426614174000",
-                "conversation_id": "987fcdeb-51d3-12d3-a456-426614174000",
-                "documents": [{
-                    "title": "Guide des commandes",
-                    "page": 1,
-                    "score": 0.95,
-                    "content": "Extrait pertinent..."
-                }],
-                "confidence_score": 0.95,
-                "processing_time": 1.23,
-                "tokens_used": 150,
-                "application": "cmmanager"
-            }
-        }
         from_attributes = True
 
 class UserResponse(BaseModel):
@@ -164,21 +126,6 @@ class ErrorResponse(BaseModel):
     path: Optional[str] = None
     request_id: Optional[UUID4] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "detail": "Erreur de traitement de la requête",
-                "error_code": "PROCESSING_ERROR",
-                "timestamp": "2024-01-15T10:30:00Z",
-                "path": "/api/chat",
-                "request_id": "123e4567-e89b-12d3-a456-426614174000",
-                "metadata": {
-                    "component": "model_inference",
-                    "error_type": "timeout"
-                }
-            }
-        }
 
 class VectorStats(BaseModel):
     """Statistiques des vecteurs."""
@@ -190,7 +137,7 @@ class VectorStats(BaseModel):
 
 class HealthCheckResponse(BaseModel):
     """Réponse du health check."""
-    status: str = Field(..., regex="^(healthy|unhealthy|degraded)$")
+    status: str = Field(..., pattern="^(healthy|unhealthy|degraded)$")
     components: Dict[str, bool]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     metrics: Dict[str, Any] = Field(default_factory=dict)
