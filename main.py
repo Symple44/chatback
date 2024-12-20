@@ -1,5 +1,10 @@
 # main.py
-# Imports standard
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 import asyncio
 import os
 import uvicorn
@@ -8,25 +13,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import time
 from typing import Optional, List, Dict
+import uuid
 
-# Imports tiers
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
-from starlette.staticfiles import StaticFiles
-
-# Imports locaux
+# Imports internes
 from core.config import settings
-from core.utils.logger import get_logger, logger_manager
-from core.utils.metrics import metrics
 from core.database.base import get_session_manager, cleanup_database
-from core.storage.sync_manager import DocumentSyncManager
+from core.cache import RedisCache
 from core.vectorstore.search import ElasticsearchClient
 from core.llm.model import ModelInference
 from core.document_processing.extractor import DocumentExtractor
 from core.document_processing.pdf_processor import PDFProcessor
-from core.cache import RedisCache
+from core.storage.sync_manager import DocumentSyncManager
+from core.utils.logger import get_logger, logger_manager
+from core.utils.metrics import metrics
 from core.utils.memory_manager import MemoryManager
 from core.utils.system_optimizer import SystemOptimizer
 from api.routes.router import router as api_router
@@ -57,7 +56,7 @@ class ComponentManager:
             await self.system_optimizer.optimize()
 
             # Création des répertoires nécessaires
-            for dir_name in ["documents", "model_cache", "logs", "data"]:
+            for dir_name in ["documents", "model_cache", "logs", "data", "temp"]:
                 os.makedirs(dir_name, exist_ok=True)
 
             # Initialisation des composants principaux
@@ -197,20 +196,37 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Fichiers statiques
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Documentation personnalisée
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui_html():
-    return get_swagger_ui_html(
-        openapi_url="/openapi.json",
-        title=f"{settings.APP_NAME} - Documentation API",
-        swagger_js_url="/static/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger-ui.css",
-    )
-
 # Routes API
 app.include_router(api_router)
 
-# WebSocket pour le streaming
+# Exception Handlers
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Gestionnaire d'erreurs global."""
+    logger.error(f"Erreur non gérée: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Une erreur interne est survenue",
+            "type": type(exc).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request, exc):
+    """Gestionnaire pour les erreurs de validation."""
+    logger.warning(f"Erreur de validation: {exc}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": str(exc),
+            "type": "ValidationError",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+# WebSocket Manager
 class ConnectionManager:
     """Gestionnaire des connexions WebSocket."""
     
@@ -219,12 +235,14 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
+        """Accepte une nouvelle connexion WebSocket."""
         await websocket.accept()
         async with self._lock:
             self.active_connections.append(websocket)
         logger.info(f"Nouvelle connexion WebSocket: {len(self.active_connections)} active(s)")
 
     async def disconnect(self, websocket: WebSocket):
+        """Déconnecte un client WebSocket."""
         async with self._lock:
             self.active_connections.remove(websocket)
         logger.info(f"Connexion WebSocket fermée: {len(self.active_connections)} active(s)")
@@ -271,6 +289,17 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Erreur WebSocket: {e}")
         await manager.disconnect(websocket)
+
+# Documentation personnalisée
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Page de documentation personnalisée."""
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=f"{settings.APP_NAME} - Documentation API",
+        swagger_js_url="/static/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger-ui.css",
+    )
 
 if __name__ == "__main__":
     uvicorn.run(
