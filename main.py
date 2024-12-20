@@ -33,7 +33,9 @@ from core.utils.system_optimizer import SystemOptimizer
 from api.routes.router import router as api_router
 from api.routes.docs import tags_metadata
 
+logging.basicConfig(level=logging.INFO)
 logger = get_logger("main")
+logger.info("Démarrage de l'application")
 
 class ComponentManager:
     """Gestionnaire des composants de l'application."""
