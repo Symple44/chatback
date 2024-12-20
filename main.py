@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -352,4 +351,3 @@ if __name__ == "__main__":
         loop="uvloop",
         timeout_keep_alive=settings.KEEPALIVE
     )
-
