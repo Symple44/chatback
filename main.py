@@ -10,35 +10,46 @@ import os
 import uvicorn
 from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any
-import logging
 from pathlib import Path
+from typing import Optional, Dict, Any, List
+import uuid
+import json
 
 # Imports internes
 from core.config import settings
-from core.cache import RedisCache
-from core.vectorstore.search import ElasticsearchClient
-from core.llm.model import ModelInference
-from core.document_processing.extractor import DocumentExtractor
-from core.document_processing.pdf_processor import PDFProcessor
-from core.storage.sync_manager import DocumentSyncManager
 from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
-from core.utils.memory_manager import MemoryManager
 from core.utils.system_optimizer import SystemOptimizer
-from api.routes.router import router as api_router
-from api.routes.docs import tags_metadata
 
-# Configuration du logger
 logger = get_logger("main")
 
-class ComponentInitError(Exception):
-    """Exception personnalisée pour les erreurs d'initialisation des composants."""
-    pass
+# Création du répertoire static s'il n'existe pas
+static_dir = Path("static")
+static_dir.mkdir(exist_ok=True)
+swagger_dir = static_dir / "swagger"
+swagger_dir.mkdir(exist_ok=True)
+
+class DatabaseComponent:
+    """Composant Base de données avec initialisation retardée"""
+    def __init__(self, database_url: str):
+        self.database_url = database_url
+        self._session_manager = None
+
+    async def initialize(self):
+        # Import retardé pour éviter la dépendance circulaire
+        from core.database.base import DatabaseSessionManager
+        self._session_manager = DatabaseSessionManager(self.database_url)
+        await self._session_manager.initialize()
+
+    def get_session_manager(self):
+        return self._session_manager
+
+    async def cleanup(self):
+        if self._session_manager:
+            await self._session_manager.close()
 
 class ComponentManager:
-    """Gestionnaire des composants de l'application."""
-
+    """Gestionnaire des composants avec initialisation séquentielle."""
     def __init__(self):
         self.start_time = datetime.utcnow()
         self.initialized = False
@@ -47,60 +58,83 @@ class ComponentManager:
         self._init_lock = asyncio.Lock()
         self.system_optimizer = SystemOptimizer()
 
-    async def _initialize_component(self, name: str, component: Any, timeout: int = 30) -> None:
-        """Initialise un composant avec timeout."""
+    def _create_initial_components(self) -> Dict:
+        """Crée les instances de composants sans les initialiser."""
+        from core.cache import RedisCache
+        from core.vectorstore.search import ElasticsearchClient
+        from core.llm.model import ModelInference
+        from core.document_processing.extractor import DocumentExtractor
+        from core.document_processing.pdf_processor import PDFProcessor
+        from core.storage.sync_manager import DocumentSyncManager
+        from core.utils.memory_manager import MemoryManager
+
+        return {
+            "db": DatabaseComponent(settings.DATABASE_URL),
+            "cache": RedisCache(),
+            "es_client": ElasticsearchClient(),
+            "model": ModelInference(),
+            "doc_extractor": DocumentExtractor(),
+            "memory_manager": MemoryManager()
+        }
+
+    async def _initialize_component(self, name: str, component: Any, 
+                                 dependencies: Optional[List[str]] = None) -> None:
+        """Initialise un composant avec ses dépendances."""
+        if dependencies:
+            for dep in dependencies:
+                if dep not in self._components or not getattr(self._components[dep], 'initialized', True):
+                    raise RuntimeError(f"Dépendance {dep} non initialisée pour {name}")
+
         try:
-            if hasattr(component, 'initialize'):
-                async with asyncio.timeout(timeout):
+            async with asyncio.timeout(30):  # Timeout de 30 secondes
+                if hasattr(component, 'initialize'):
                     await component.initialize()
-            self._components[name] = component
-            logger.info(f"Composant {name} initialisé avec succès")
-        except asyncio.TimeoutError:
-            raise ComponentInitError(f"Timeout lors de l'initialisation de {name}")
+                self._components[name] = component
+                logger.info(f"Composant {name} initialisé")
         except Exception as e:
-            raise ComponentInitError(f"Erreur lors de l'initialisation de {name}: {e}")
+            logger.error(f"Erreur initialisation {name}: {e}")
+            raise
 
     async def initialize(self) -> None:
-        """Initialise tous les composants de l'application."""
+        """Initialise les composants dans le bon ordre."""
         async with self._init_lock:
             if self.initialized or self._initializing:
                 return
 
             self._initializing = True
             try:
-                logger.info("Début de l'initialisation des composants")
-
-                # Création des répertoires nécessaires
+                # Créer les répertoires nécessaires
                 for dir_name in ["documents", "model_cache", "logs", "data", "temp"]:
                     os.makedirs(dir_name, exist_ok=True)
 
-                # Initialisation dans un ordre spécifique
+                # Créer les instances de composants
+                components = self._create_initial_components()
+
+                # Ordre d'initialisation avec dépendances
                 init_sequence = [
-                    ("cache", RedisCache()),
-                    ("es_client", ElasticsearchClient()),
-                    ("model", ModelInference()),
-                    ("doc_extractor", DocumentExtractor()),
+                    ("db", components["db"], []),
+                    ("cache", components["cache"], []),
+                    ("es_client", components["es_client"], []),
+                    ("model", components["model"], ["cache"]),
+                    ("doc_extractor", components["doc_extractor"], ["es_client"]),
+                    ("memory_manager", components["memory_manager"], [])
                 ]
 
-                # Première phase d'initialisation
-                for name, component in init_sequence:
-                    await self._initialize_component(name, component)
+                for name, component, deps in init_sequence:
+                    await self._initialize_component(name, component, deps)
 
-                # Initialisation des composants dépendants
-                dependent_components = [
-                    ("pdf_processor", PDFProcessor(self._components["es_client"])),
-                    ("sync_manager", DocumentSyncManager(self._components["es_client"])),
-                    ("memory_manager", MemoryManager())
-                ]
+                # Composants dépendants
+                pdf_processor = PDFProcessor(self._components["es_client"])
+                sync_manager = DocumentSyncManager(self._components["es_client"])
 
-                for name, component in dependent_components:
-                    await self._initialize_component(name, component)
+                await self._initialize_component("pdf_processor", pdf_processor, ["es_client"])
+                await self._initialize_component("sync_manager", sync_manager, ["es_client"])
 
                 # Démarrage du monitoring
                 await self._components["memory_manager"].start_monitoring()
 
                 self.initialized = True
-                logger.info("Initialisation des composants terminée avec succès")
+                logger.info("Initialisation des composants terminée")
 
             except Exception as e:
                 logger.critical(f"Erreur critique lors de l'initialisation: {e}")
@@ -111,76 +145,42 @@ class ComponentManager:
 
     async def cleanup(self) -> None:
         """Nettoie les ressources des composants."""
-        cleanup_errors = []
         for name, component in self._components.items():
             try:
                 if hasattr(component, 'cleanup'):
                     await component.cleanup()
                 logger.info(f"Composant {name} nettoyé")
             except Exception as e:
-                cleanup_errors.append(f"{name}: {str(e)}")
                 logger.error(f"Erreur nettoyage {name}: {e}")
 
         self._components.clear()
         self.initialized = False
 
-        if cleanup_errors:
-            raise ComponentInitError(f"Erreurs lors du nettoyage: {', '.join(cleanup_errors)}")
-
-    async def check_health(self) -> Dict[str, Any]:
-        """Vérifie l'état de santé des composants."""
-        health_status = {
-            "status": "healthy",
-            "components": {},
-            "uptime": (datetime.utcnow() - self.start_time).total_seconds(),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-        try:
-            for name, component in self._components.items():
-                try:
-                    if hasattr(component, 'health_check'):
-                        status = await component.health_check()
-                    else:
-                        status = bool(component)
-                    health_status["components"][name] = status
-                except Exception as e:
-                    logger.error(f"Erreur health check {name}: {e}")
-                    health_status["components"][name] = False
-                    health_status["status"] = "degraded"
-
-            health_status["metrics"] = metrics.get_current_metrics()
-            return health_status
-
-        except Exception as e:
-            logger.error(f"Erreur health check global: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-
     def __getattr__(self, name: str) -> Any:
-        """Permet d'accéder aux composants comme des attributs."""
+        """Accès aux composants comme attributs."""
         if name in self._components:
             return self._components[name]
         raise AttributeError(f"Composant {name} non trouvé")
 
-# Instance globale des composants
+# Instance globale du gestionnaire de composants
 components = ComponentManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestion du cycle de vie de l'application."""
     try:
-        logger.info("Initialisation des services de base")
+        logger.info("Initialisation des services")
         await logger_manager.initialize()
         await metrics.initialize()
-        logger.info("Initialisation des composants")
         await components.initialize()
+        
+        # Import retardé des routes pour éviter les dépendances circulaires
+        from api.routes.router import router as api_router
+        app.include_router(api_router)
+        
         yield
     finally:
-        logger.info("Nettoyage des composants")
+        logger.info("Nettoyage des ressources")
         await components.cleanup()
 
 # Configuration de l'application FastAPI
@@ -189,7 +189,6 @@ app = FastAPI(
     description="API de chat avec support vectoriel et traitement documentaire",
     version=settings.VERSION,
     lifespan=lifespan,
-    openapi_tags=tags_metadata,
     docs_url=None,
     redoc_url=None
 )
@@ -206,20 +205,8 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Fichiers statiques
-# Création du répertoire static s'il n'existe pas
-static_dir = Path("static")
-static_dir.mkdir(exist_ok=True)
-swagger_dir = static_dir / "swagger"
-swagger_dir.mkdir(exist_ok=True)
-
-# Mount static files only if directory exists
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-else:
-    logger.warning("Répertoire 'static' non trouvé - les fichiers statiques ne seront pas servis")
-
-# Routes API
-app.include_router(api_router)
 
 # Exception Handlers
 @app.exception_handler(Exception)
@@ -237,21 +224,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         }
     )
 
-@app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
-    """Gestionnaire pour les erreurs de validation."""
-    error_id = str(uuid.uuid4())
-    logger.warning(f"Erreur de validation [{error_id}]: {exc}")
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error_id": error_id,
-            "detail": str(exc),
-            "type": "ValidationError",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
 # Documentation personnalisée
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
@@ -262,80 +234,6 @@ async def custom_swagger_ui_html():
         swagger_js_url="/static/swagger/js/swagger-ui-bundle.js",
         swagger_css_url="/static/swagger/css/swagger-ui.css",
     )
-
-# WebSocket Manager
-class WebSocketManager:
-    def __init__(self):
-        self.active_connections = []
-        self._lock = asyncio.Lock()
-
-    async def connect(self, websocket: WebSocket) -> None:
-        await websocket.accept()
-        async with self._lock:
-            self.active_connections.append(websocket)
-
-    async def disconnect(self, websocket: WebSocket) -> None:
-        async with self._lock:
-            if websocket in self.active_connections:
-                self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: str) -> None:
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except Exception:
-                disconnected.append(connection)
-
-        for conn in disconnected:
-            await self.disconnect(conn)
-
-# Instance du gestionnaire WebSocket
-ws_manager = WebSocketManager()
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    """Endpoint WebSocket pour le streaming des réponses."""
-    await ws_manager.connect(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                response = await components.model.generate_streaming_response(data)
-                async for token in response:
-                    await websocket.send_text(token)
-            except Exception as e:
-                logger.error(f"Erreur traitement WebSocket: {e}")
-                await websocket.send_json({
-                    "error": "Erreur de traitement",
-                    "details": str(e)
-                })
-    except Exception as e:
-        logger.error(f"Erreur WebSocket: {e}")
-    finally:
-        await ws_manager.disconnect(websocket)
-
-@app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    """Middleware pour ajouter le temps de traitement dans les headers."""
-    start_time = datetime.utcnow()
-    response = await call_next(request)
-    process_time = (datetime.utcnow() - start_time).total_seconds()
-
-    response.headers["X-Process-Time"] = str(process_time)
-    response.headers["X-API-Version"] = settings.VERSION
-
-    if not request.url.path.endswith(("/ping", "/health")):
-        logger.info(
-            f"Request: {request.method} {request.url.path} "
-            f"Status: {response.status_code} "
-            f"Duration: {process_time:.3f}s"
-        )
-        metrics.increment_counter("http_requests")
-        if response.status_code >= 400:
-            metrics.increment_counter("http_errors")
-
-    return response
 
 if __name__ == "__main__":
     try:
