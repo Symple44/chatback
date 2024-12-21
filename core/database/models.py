@@ -188,7 +188,7 @@ class MessageEmbedding(Base):
     vector = Column(ARRAY(Float))
     model_version = Column(String(100))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    metadata = Column(JSONB, default={})
+    MessageEmbedding = Column(JSONB, default={})
 
     # Relations
     message = relationship("ChatHistory", back_populates="embeddings")
