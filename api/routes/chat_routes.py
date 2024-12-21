@@ -18,6 +18,7 @@ from core.database.base import get_session_manager
 from core.utils.metrics import metrics
 from core.database.models import User, ChatSession, ChatHistory
 from core.database.base import DatabaseSession
+from core.database.manager import DatabaseManager
 from core.config import settings
 
 logger = get_logger("chat_routes")
@@ -62,10 +63,9 @@ async def process_chat_message(
             context = await prepare_chat_context(components, request, chat_session)
 
             # 4. Recherche de questions similaires
-            similar_questions = await find_similar_questions(
-                components,
-                query_vector,
-                request.metadata
+            similar_questions = await components.db_manager.find_similar_questions(  
+                vector=query_vector,
+                metadata=request.metadata
             )
 
             # 5. Génération de la réponse
