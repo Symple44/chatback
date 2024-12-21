@@ -13,6 +13,7 @@ try:
     from contextlib import asynccontextmanager
     import logging
     import uuid
+    import json
 
     from fastapi import FastAPI, WebSocket, HTTPException, Request, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
