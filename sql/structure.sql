@@ -15,7 +15,7 @@ CREATE TABLE users (
     full_name VARCHAR(255) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     last_login TIMESTAMP WITH TIME ZONE,
-    preferences JSONB DEFAULT '{}',
+    user_metadata JSONB DEFAULT '{}',
     is_active BOOLEAN DEFAULT true
 );
 
@@ -43,7 +43,7 @@ CREATE TABLE chat_history (
     confidence_score FLOAT,
     tokens_used INTEGER,
     processing_time FLOAT,
-    additional_data JSONB DEFAULT '{}',
+    chat_metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
