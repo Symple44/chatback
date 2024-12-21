@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     
     # Configuration du modèle
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
     MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt2")
     MODEL_REVISION: str = os.getenv("MODEL_REVISION", "main")
     USE_AUTH_TOKEN: bool = os.getenv("USE_AUTH_TOKEN", "false").lower() == "true"
