@@ -23,30 +23,42 @@ class RedisCache:
             await self._connect_with_retry()
             self._initialized = True
 
-    async def _connect_with_retry(self):
+    def _connect_with_retry(self):
         """Établit la connexion Redis avec retry."""
         for attempt in range(self._init_retries):
             try:
                 self._connection = redis.Redis(
-                    host='localhost',  # Utilisez les paramètres de settings ici
-                    port=6379,
-                    password='',  # Ajoutez un mot de passe si nécessaire
-                    db=0,
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    password=settings.REDIS_PASSWORD,
+                    db=settings.REDIS_DB,
+                    ssl=settings.REDIS_SSL,
                     decode_responses=False,
                     socket_timeout=5.0,
-                    socket_keepalive=True
+                    socket_keepalive=True,
+                    socket_connect_timeout=2.0,
+                    retry_on_timeout=True,
+                    health_check_interval=30,
+                    max_connections=50,
+                    encoding='utf-8'
                 )
                 
-                # Vérification de la connexion
+                # Configuration du client
+                self._connection.config_set('maxmemory', '512mb')
+                self._connection.config_set('maxmemory-policy', 'allkeys-lru')
+                
                 if self._connection.ping():
                     logger.info("Connexion Redis établie avec succès")
+                    metrics.increment_counter("redis_init_success")
                     return
                     
             except redis.RedisError as e:
-                logger.warning(f"Tentative {attempt + 1} échouée: {e}")
                 if attempt == self._init_retries - 1:
+                    logger.error(f"Échec de connexion à Redis après {self._init_retries} tentatives: {e}")
+                    metrics.increment_counter("redis_init_error")
                     raise
-                await asyncio.sleep(self._init_retry_delay)
+                logger.warning(f"Tentative {attempt + 1} échouée, nouvelle tentative dans {self._init_retry_delay}s")
+                asyncio.sleep(self._init_retry_delay)
 
     async def get(self, key: str, default: Any = None) -> Optional[Any]:
         """Récupère une valeur du cache."""
