@@ -17,6 +17,7 @@ from core.utils.logger import get_logger
 from core.database.base import get_session_manager
 from core.utils.metrics import metrics
 from core.database.models import User, ChatSession, ChatHistory
+from core.database.base import DatabaseSession
 from core.config import settings
 
 logger = get_logger("chat_routes")
@@ -37,7 +38,7 @@ async def process_chat_message(
     try:
         with metrics.timer("chat_processing"):
             # 1. Vérification et récupération de l'utilisateur
-            async with session_manager.get_session() as session:
+            async with DatabaseSession() as session:
                 user = await session.execute(
                     select(User).where(User.id == request.user_id)
                 )
