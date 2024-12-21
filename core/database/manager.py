@@ -175,45 +175,34 @@ class DatabaseManager:
         async with self.session_factory() as session:
             try:
                 # Construction de la requête
-                query = (
-                    select(ChatHistory)
-                    .join(MessageEmbedding)
-                    .where(MessageEmbedding.embedding_type == "query")
-                )
+                query = """
+                SELECT 
+                    ch.id,
+                    ch.query,
+                    ch.response,
+                    1 - (ch.query_vector <-> :vector::vector) as similarity
+                FROM chat_history ch
+                WHERE 1 - (ch.query_vector <-> :vector::vector) > :threshold
+                """
 
                 # Ajout des filtres de métadonnées
                 if metadata:
-                    for key, value in metadata.items():
-                        query = query.where(
-                            ChatHistory.metadata[key].astext == str(value)
-                        )
+                for key, value in metadata.items():
+                    query += f" AND ch.chat_metadata->'{key}' = :value_{key}"
 
-                # Ajout de la condition de similarité
-                similarity = func.cosine_similarity(
-                    MessageEmbedding.vector,
-                    vector
-                )
-                query = (
-                    query.where(similarity >= threshold)
-                    .order_by(desc(similarity))
-                    .limit(limit)
-                )
+            query += " ORDER BY similarity DESC LIMIT :limit"
 
-                result = await session.execute(query)
-                similar_questions = []
-                
-                for row in result.scalars():
-                    similar_questions.append({
-                        "query": row.query,
-                        "response": row.response,
-                        "similarity": float(similarity),
-                        "confidence": float(row.confidence_score),
-                        "created_at": row.created_at.isoformat(),
-                        "metadata": row.metadata
-                    })
+            params = {
+                "vector": vector,
+                "threshold": threshold,
+                "limit": limit
+            }
+            if metadata:
+                for key, value in metadata.items():
+                    params[f"value_{key}"] = value
 
-                metrics.increment_counter("database_similarity_searches")
-                return similar_questions
+            result = await session.execute(query, params)
+            return [dict(row) for row in result]
 
             except Exception as e:
                 logger.error(f"Erreur recherche similarité: {e}")
