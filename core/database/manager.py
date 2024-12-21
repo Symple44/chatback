@@ -396,3 +396,23 @@ class DatabaseManager:
                 await session.rollback()
                 logger.error(f"Erreur définition configuration: {e}")
                 return False
+                
+    async def log_error(
+        self,
+        error_type: str,
+        error_message: str,
+        endpoint: str,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict] = None
+    ) -> None:
+        """Log une erreur dans la base de données."""
+        async with self.session_factory() as session:
+            error_log = ErrorLog(
+                error_type=error_type,
+                error_message=error_message,
+                component=endpoint,
+                user_id=user_id,
+                error_metadata=metadata or {}
+            )
+            session.add(error_log)
+            await session.commit()
