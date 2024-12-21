@@ -1,11 +1,22 @@
 # api/models/responses.py
-from pydantic import BaseModel, Field, UUID4, EmailStr, validator, constr
+from pydantic import BaseModel, Field, UUID4, EmailStr, validator, constr, ConfigDict
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import numpy as np
 
 class DocumentReference(BaseModel):
     """Référence à un document source."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Guide utilisateur",
+                "page": 1,
+                "score": 0.95,
+                "content": "Extrait du document..."
+            }
+        }
+    )
+    
     title: str = Field(..., min_length=1, max_length=255)
     page: Optional[int] = Field(None, ge=1)
     score: float = Field(..., ge=0.0, le=1.0)
@@ -20,6 +31,17 @@ class DocumentReference(BaseModel):
 
 class ImageInfo(BaseModel):
     """Information sur une image."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "data": "base64_encoded_image_data",
+                "mime_type": "image/jpeg",
+                "width": 800,
+                "height": 600
+            }
+        }
+    )
+    
     data: str  # Base64 encoded image
     mime_type: str
     width: Optional[int] = Field(None, gt=0)
@@ -29,6 +51,17 @@ class ImageInfo(BaseModel):
 
 class DocumentFragment(BaseModel):
     """Fragment de document avec contexte."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "text": "Extrait du document...",
+                "page_num": 1,
+                "confidence": 0.95,
+                "source": "document.pdf"
+            }
+        }
+    )
+    
     text: str = Field(..., min_length=1)
     page_num: int = Field(..., gt=0)
     images: List[ImageInfo] = Field(default_factory=list)
@@ -41,6 +74,16 @@ class DocumentFragment(BaseModel):
 
 class SimilarQuestion(BaseModel):
     """Question similaire trouvée."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Comment configurer...",
+                "response": "Pour configurer...",
+                "similarity": 0.92
+            }
+        }
+    )
+    
     query: str
     response: str
     similarity: float = Field(..., ge=0.0, le=1.0)
@@ -55,6 +98,16 @@ class SimilarQuestion(BaseModel):
 
 class SessionResponse(BaseModel):
     """Réponse de session."""
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "session_id": "123e4567-e89b-12d3-a456-426614174000",
+                "created_at": "2024-12-21T10:00:00Z"
+            }
+        }
+    )
+    
     session_id: UUID4 = Field(..., description="Identifiant unique de la session")
     user_id: UUID4
     created_at: datetime
@@ -64,11 +117,19 @@ class SessionResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     stats: Dict[str, Any] = Field(default_factory=dict)
 
-    class Config:
-        from_attributes = True
-
 class ChatResponse(BaseModel):
     """Réponse complète du chat."""
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "response": "Voici la réponse...",
+                "confidence_score": 0.95,
+                "processing_time": 0.234
+            }
+        }
+    )
+    
     response: str = Field(..., min_length=1)
     session_id: UUID4
     conversation_id: UUID4
@@ -100,44 +161,19 @@ class ChatResponse(BaseModel):
             return [round(x, 6) for x in v]
         return v
 
-    class Config:
-        from_attributes = True
-
 class UserResponse(BaseModel):
     """Réponse utilisateur."""
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "email": "user@example.com",
+                "username": "john_doe"
+            }
+        }
+    )
+    
     id: UUID4
     email: EmailStr
-    username: constr(min_length=3, max_length=50)
-    full_name: constr(min_length=3, max_length=100)
-    created_at: datetime
-    last_login: Optional[datetime]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    is_active: bool = Field(default=True)
-    stats: Dict[str, Any] = Field(default_factory=dict)
-
-    class Config:
-        from_attributes = True
-
-class ErrorResponse(BaseModel):
-    """Réponse d'erreur."""
-    detail: str
-    error_code: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    path: Optional[str] = None
-    request_id: Optional[UUID4] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-class VectorStats(BaseModel):
-    """Statistiques des vecteurs."""
-    total_vectors: int = Field(..., ge=0)
-    dimension: int = Field(..., eq=384)
-    avg_processing_time: float
-    cache_hit_rate: float = Field(..., ge=0.0, le=1.0)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-class HealthCheckResponse(BaseModel):
-    """Réponse du health check."""
-    status: str = Field(..., pattern="^(healthy|unhealthy|degraded)$")
-    components: Dict[str, bool]
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
+    username: constr(min_length=3, max_length
