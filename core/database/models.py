@@ -149,6 +149,7 @@ class ChatHistory(Base):
     session = relationship("ChatSession", back_populates="chat_history")
     referenced_documents = relationship("ReferencedDocument", back_populates="chat_history", cascade="all, delete-orphan")
     metrics = relationship("MessageMetrics", back_populates="message", uselist=False, cascade="all, delete-orphan")
+    embeddings = relationship("MessageEmbedding", back_populates="message", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('idx_history_session', session_id),
