@@ -206,7 +206,17 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Fichiers statiques
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Création du répertoire static s'il n'existe pas
+static_dir = Path("static")
+static_dir.mkdir(exist_ok=True)
+swagger_dir = static_dir / "swagger"
+swagger_dir.mkdir(exist_ok=True)
+
+# Mount static files only if directory exists
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+else:
+    logger.warning("Répertoire 'static' non trouvé - les fichiers statiques ne seront pas servis")
 
 # Routes API
 app.include_router(api_router)
@@ -249,8 +259,8 @@ async def custom_swagger_ui_html():
     return get_swagger_ui_html(
         openapi_url="/openapi.json",
         title=f"{settings.APP_NAME} - Documentation API",
-        swagger_js_url="/static/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger-ui.css",
+        swagger_js_url="/static/swagger/js/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger/css/swagger-ui.css",
     )
 
 # WebSocket Manager
