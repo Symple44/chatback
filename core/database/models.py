@@ -208,7 +208,7 @@ class MessageEmbedding(Base):
             "vector": self.vector,
             "model_version": self.model_version,
             "created_at": self.created_at.isoformat(),
-            "metadata": self.metadata
+            "metadata": self.embedding_metadata
         }
 
 class ReferencedDocument(Base):
