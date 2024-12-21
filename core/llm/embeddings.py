@@ -170,7 +170,7 @@ class EmbeddingsManager:
             # Exécuter dans un thread séparé car c'est une opération lourde
             loop = asyncio.get_event_loop()
             embedding = await loop.run_in_executor(
-            self.executor,
+                self.executor,
                 lambda: self.model.encode(
                     text, 
                     show_progress_bar=False,
