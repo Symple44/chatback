@@ -196,7 +196,7 @@ class MessageEmbedding(Base):
     __table_args__ = (
         Index('idx_message_embedding_type', embedding_type),
         Index('idx_message_vector', vector, postgresql_using='gin'),
-        Index('idx_message_metadata', metadata, postgresql_using='gin')
+        Index('idx_message_metadata', embedding_metadata, postgresql_using='gin')
     )
 
     def to_dict(self):
