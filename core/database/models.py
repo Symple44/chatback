@@ -176,6 +176,39 @@ class ChatHistory(Base):
             "metadata": self.chat_metadata,
             "created_at": self.created_at.isoformat()
         }
+        
+class MessageEmbedding(Base):
+    """Modèle pour stocker les embeddings des messages."""
+    __tablename__ = 'message_embeddings'
+
+    id = Column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
+    message_id = Column(UUID, ForeignKey('chat_history.id', ondelete='CASCADE'))
+    embedding_type = Column(String(50), nullable=False)  # 'query' ou 'response'
+    vector = Column(ARRAY(Float))
+    model_version = Column(String(100))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    metadata = Column(JSONB, default={})
+
+    # Relations
+    message = relationship("ChatHistory", back_populates="embeddings")
+
+    __table_args__ = (
+        Index('idx_message_embedding_type', embedding_type),
+        Index('idx_message_vector', vector, postgresql_using='gin'),
+        Index('idx_message_metadata', metadata, postgresql_using='gin')
+    )
+
+    def to_dict(self):
+        """Convertit l'objet en dictionnaire."""
+        return {
+            "id": str(self.id),
+            "message_id": str(self.message_id),
+            "embedding_type": self.embedding_type,
+            "vector": self.vector,
+            "model_version": self.model_version,
+            "created_at": self.created_at.isoformat(),
+            "metadata": self.metadata
+        }
 
 class ReferencedDocument(Base):
     """Modèle pour les documents référencés."""
