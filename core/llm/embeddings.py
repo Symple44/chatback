@@ -167,16 +167,19 @@ class EmbeddingsManager:
         """
         try:
             text = self._preprocess_text(text)
-            
-            with torch.no_grad():
-                embedding = self.model.encode(
-                    text,
+            # Exécuter dans un thread séparé car c'est une opération lourde
+            loop = asyncio.get_event_loop()
+            embedding = await loop.run_in_executor(
+            self.executor,
+                lambda: self.model.encode(
+                    text, 
                     show_progress_bar=False,
                     normalize_embeddings=True,
                     convert_to_numpy=True
                 )
+            )
                 
-                return embedding.tolist()
+             return embedding.tolist()
                 
         except Exception as e:
             logger.error(f"Erreur génération embedding: {e}")
