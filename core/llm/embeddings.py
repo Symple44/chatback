@@ -179,7 +179,7 @@ class EmbeddingsManager:
                 )
             )
                 
-             return embedding.tolist()
+            return embedding.tolist()
                 
         except Exception as e:
             logger.error(f"Erreur génération embedding: {e}")
