@@ -156,20 +156,21 @@ try:
             logger.info("Arrêt de l'application")
             await components.cleanup()
             
+    class CustomJSONEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
+
     class CustomJSONResponse(JSONResponse):
         def render(self, content) -> bytes:
-            def default(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                return str(obj)
-            
             return json.dumps(
                 content,
-                default=default,
                 ensure_ascii=False,
                 allow_nan=False,
                 indent=None,
-                separators=(",", ":")
+                separators=(",", ":"),
+                cls=CustomJSONEncoder
             ).encode("utf-8")
     
     # Configuration de l'application FastAPI
