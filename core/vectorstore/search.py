@@ -91,7 +91,8 @@ class ElasticsearchClient:
         self,
         query: str,
         vector: Optional[List[float]] = None,
-        size: int = 5
+        size: int = 5,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict]:
         """Recherche des documents."""
         try:
