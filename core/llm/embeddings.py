@@ -256,6 +256,7 @@ class EmbeddingsManager:
     def __del__(self):
         """Destructeur de la classe."""
         try:
-            self.cleanup()
+            loop = asyncio.get_event_loop()
+            loop.create_task(self.cleanup())
         except:
             pass
