@@ -1,6 +1,7 @@
 # core/utils/metrics.py
 from typing import Dict, Any
 from datetime import datetime
+from contextlib import contextmanager
 import time
 
 class Metrics:
@@ -33,6 +34,13 @@ class Metrics:
             'gauges': self.gauges,
             'timestamp': datetime.utcnow().isoformat()
         }
+    @contextmanager
+    def timer(self, name: str):
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timers[name] = time.perf_counter() - start
 
 # Instance unique des métriques
 metrics = Metrics()
