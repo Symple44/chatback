@@ -11,7 +11,6 @@ from datetime import datetime
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.database.manager import DatabaseManager
 
 logger = get_logger("database")
 
@@ -22,17 +21,14 @@ class DatabaseSessionManager:
     def __init__(self, database_url: str):
         """
         Initialise le gestionnaire de session de base de données.
-        
-        Args:
-            database_url: URL de connexion à la base de données
         """
         self.engine = create_async_engine(
             database_url,
             echo=settings.DEBUG,
             pool_size=settings.DB_POOL_SIZE,
             max_overflow=settings.DB_MAX_OVERFLOW,
-            pool_timeout=30,  # secondes
-            pool_recycle=1800,  # 30 minutes
+            pool_timeout=30,
+            pool_recycle=1800,
             pool_pre_ping=True,
             poolclass=AsyncAdaptedQueuePool
         )
@@ -44,11 +40,6 @@ class DatabaseSessionManager:
             autocommit=False,
             autoflush=False
         )
-
-        self.health_check_lock = asyncio.Lock()
-        self._last_health_check: Optional[datetime] = None
-        self._health_check_interval = 60  # secondes
-        self.db_manager = DatabaseManager(self)
 
     async def create_all(self):
         """Crée toutes les tables définies dans les modèles."""
@@ -171,18 +162,6 @@ class DatabaseSessionManager:
 _session_manager: Optional[DatabaseSessionManager] = None
 
 def get_session_manager(database_url: Optional[str] = None) -> DatabaseSessionManager:
-    """
-    Retourne l'instance du gestionnaire de session.
-    
-    Args:
-        database_url: URL de connexion (nécessaire uniquement à la première création)
-    
-    Returns:
-        DatabaseSessionManager: Instance du gestionnaire
-        
-    Raises:
-        ValueError: Si database_url est manquant à la première création
-    """
     global _session_manager
     if _session_manager is None:
         if database_url is None:
