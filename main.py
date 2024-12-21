@@ -36,6 +36,23 @@ try:
     for dir_name in REQUIRED_DIRS:
         Path(dir_name).mkdir(parents=True, exist_ok=True)
 
+    class CustomJSONEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
+    
+    class CustomJSONResponse(JSONResponse):
+        def render(self, content) -> bytes:
+            return json.dumps(
+                content,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=None,
+                separators=(",", ":"),
+                cls=CustomJSONEncoder
+            ).encode("utf-8")
+    
     class ComponentManager:
         """Gestionnaire des composants de l'application."""
         
@@ -161,22 +178,6 @@ try:
             logger.info("Arrêt de l'application")
             await components.cleanup()
             
-    class CustomJSONResponse(JSONResponse):
-        def render(self, content) -> bytes:
-            return json.dumps(
-                content,
-                default=self._json_serializer,
-                ensure_ascii=False,
-                allow_nan=False,
-                indent=None,
-                separators=(",", ":")
-            ).encode("utf-8")
-    
-        def _json_serializer(self, obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            return str(obj)
-    
     # Configuration de l'application FastAPI
     app = FastAPI(
         title=settings.APP_NAME,
@@ -208,13 +209,13 @@ try:
         """Gestionnaire d'erreurs global."""
         error_id = str(uuid.uuid4())
         logger.error(f"Erreur non gérée [{error_id}]: {exc}", exc_info=True)
-        return JSONResponse(
+        return CustomJSONResponse(  # Utilisez CustomJSONResponse ici aussi
             status_code=500,
             content={
                 "error_id": error_id,
                 "detail": "Une erreur interne est survenue",
                 "type": type(exc).__name__,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow()
             }
         )
 
