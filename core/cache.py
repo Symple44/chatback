@@ -6,7 +6,6 @@ import logging
 import asyncio
 import zlib
 import pickle
-
 from core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -40,9 +39,7 @@ class RedisCache:
                     socket_keepalive=True,
                     socket_connect_timeout=2.0,
                     retry_on_timeout=True,
-                    health_check_interval=30,
-                    max_connections=50,
-                    encoding='utf-8'
+                    health_check_interval=30
                 )
                 
                 # Vérification de la connexion
@@ -69,7 +66,9 @@ class RedisCache:
                     return pickle.loads(decompressed)
                 except (zlib.error, pickle.PickleError) as e:
                     logger.error(f"Erreur décompression/désérialisation: {e}")
+                    await self.delete(key)  # Supprime la valeur corrompue
                     return default
+            
             return default
             
         except Exception as e:
@@ -93,7 +92,7 @@ class RedisCache:
             return bool(self._connection.set(
                 key,
                 compressed,
-                ex=ttl
+                ex=ttl or settings.CACHE_TTL  # Utilise le TTL par défaut des settings
             ))
             
         except Exception as e:
@@ -116,6 +115,24 @@ class RedisCache:
             return bool(self._connection and self._connection.ping())
         except:
             return False
+
+    def get_cache_stats(self) -> Dict[str, any]:
+        """Récupère les statistiques du cache Redis."""
+        try:
+            if not self._connection:
+                return {}
+                
+            info = self._connection.info()
+            return {
+                "used_memory_human": info.get("used_memory_human"),
+                "connected_clients": info.get("connected_clients"),
+                "uptime_in_seconds": info.get("uptime_in_seconds"),
+                "total_connections_received": info.get("total_connections_received"),
+                "total_commands_processed": info.get("total_commands_processed")
+            }
+        except Exception as e:
+            logger.error(f"Erreur récupération stats cache: {e}")
+            return {}
 
     async def cleanup(self):
         """Nettoie les ressources."""
