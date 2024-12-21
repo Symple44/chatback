@@ -11,6 +11,7 @@ from datetime import datetime
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from core.database.manager import DatabaseManager
 
 logger = get_logger("database")
 
@@ -47,6 +48,7 @@ class DatabaseSessionManager:
         self.health_check_lock = asyncio.Lock()
         self._last_health_check: Optional[datetime] = None
         self._health_check_interval = 60  # secondes
+        self.db_manager = DatabaseManager(self)
 
     async def create_all(self):
         """Crée toutes les tables définies dans les modèles."""
