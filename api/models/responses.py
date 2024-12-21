@@ -4,6 +4,29 @@ from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import numpy as np
 
+class UserResponse(BaseModel):
+    """Réponse utilisateur."""
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "email": "user@example.com",
+                "username": "john_doe"
+            }
+        }
+    )
+    
+    id: UUID4
+    email: EmailStr
+    username: constr(min_length=3, max_length=50)
+    full_name: constr(min_length=3, max_length=100)
+    created_at: datetime
+    last_login: Optional[datetime]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = Field(default=True)
+    stats: Dict[str, Any] = Field(default_factory=dict)
+
 class DocumentReference(BaseModel):
     """Référence à un document source."""
     model_config = ConfigDict(
@@ -24,10 +47,6 @@ class DocumentReference(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     vector_id: Optional[str] = None
     last_updated: Optional[datetime] = None
-
-    @validator('score')
-    def round_score(cls, v: float) -> float:
-        return round(v, 4)
 
 class ImageInfo(BaseModel):
     """Information sur une image."""
@@ -153,27 +172,55 @@ class ChatResponse(BaseModel):
     def round_floats(cls, v: float) -> float:
         return round(v, 4)
 
-    @validator('query_vector', 'response_vector')
-    def validate_vector(cls, v: Optional[List[float]]) -> Optional[List[float]]:
-        if v is not None:
-            if len(v) != 384:  # Dimension du vecteur
-                raise ValueError("Dimension du vecteur incorrecte")
-            return [round(x, 6) for x in v]
-        return v
-
-class UserResponse(BaseModel):
-    """Réponse utilisateur."""
+class ErrorResponse(BaseModel):
+    """Réponse d'erreur."""
     model_config = ConfigDict(
-        from_attributes=True,
         json_schema_extra={
             "example": {
-                "id": "123e4567-e89b-12d3-a456-426614174000",
-                "email": "user@example.com",
-                "username": "john_doe"
+                "detail": "Une erreur est survenue",
+                "error_code": "INTERNAL_ERROR",
+                "timestamp": "2024-12-21T10:00:00Z"
             }
         }
     )
     
-    id: UUID4
-    email: EmailStr
-    username: constr(min_length=3, max_length
+    detail: str
+    error_code: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    path: Optional[str] = None
+    request_id: Optional[UUID4] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class VectorStats(BaseModel):
+    """Statistiques des vecteurs."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total_vectors": 1000,
+                "dimension": 384,
+                "avg_processing_time": 0.05
+            }
+        }
+    )
+    
+    total_vectors: int = Field(..., ge=0)
+    dimension: int = Field(..., eq=384)
+    avg_processing_time: float
+    cache_hit_rate: float = Field(..., ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class HealthCheckResponse(BaseModel):
+    """Réponse du health check."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "components": {"database": True, "cache": True}
+            }
+        }
+    )
+    
+    status: str = Field(..., pattern="^(healthy|unhealthy|degraded)$")
+    components: Dict[str, bool]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
