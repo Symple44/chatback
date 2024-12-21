@@ -1,72 +1,62 @@
 # core/utils/system_optimizer.py
 import os
-import subprocess
 import logging
 from pathlib import Path
-from core.utils.logger import get_logger
+from typing import Dict, Any
 
-logger = get_logger("system_optimizer")
+logger = logging.getLogger(__name__)
 
 class SystemOptimizer:
     def __init__(self):
-        self.script_path = Path(__file__).parent.parent.parent / "scripts" / "optimize_system.sh"
-        self.is_root = os.geteuid() == 0 if hasattr(os, 'geteuid') else False
+        """Initialise l'optimiseur système."""
+        self.is_initialized = False
+        self.initialized_components: Dict[str, bool] = {}
 
     async def optimize(self) -> bool:
-        """Exécute le script d'optimisation système."""
+        """
+        Optimise les paramètres système de base.
+        Returns:
+            bool: True si l'optimisation a réussi
+        """
         try:
-            if not self.script_path.exists():
-                logger.error(f"Script d'optimisation non trouvé: {self.script_path}")
-                return False
-
+            logger.info("Début de l'optimisation système")
+            
             # Configuration des variables d'environnement
-            env = os.environ.copy()
-            env.update({
+            os.environ.update({
                 'NUMEXPR_MAX_THREADS': '8',
+                'OMP_NUM_THREADS': '8',
                 'MKL_NUM_THREADS': '8',
-                'OPENBLAS_NUM_THREADS': '8',
-                'OMP_NUM_THREADS': '8'
+                'OPENBLAS_NUM_THREADS': '8'
             })
+            
+            # Création des répertoires nécessaires
+            base_dir = Path(__file__).parent.parent.parent
+            for dir_name in ['logs', 'data', 'temp', 'cache']:
+                (base_dir / dir_name).mkdir(parents=True, exist_ok=True)
 
-            # Exécution du script
-            result = subprocess.run(
-                ['/bin/bash', str(self.script_path)],
-                env=env,
-                capture_output=True,
-                text=True
-            )
-
-            if result.returncode == 0:
-                logger.info("Optimisation système réussie")
-                if result.stdout:
-                    logger.debug(f"Sortie script: {result.stdout}")
-                return True
-            else:
-                logger.warning(f"Script d'optimisation terminé avec code {result.returncode}")
-                if result.stderr:
-                    logger.error(f"Erreurs: {result.stderr}")
-                return False
+            self.is_initialized = True
+            logger.info("Optimisation système terminée avec succès")
+            return True
 
         except Exception as e:
             logger.error(f"Erreur lors de l'optimisation système: {e}")
             return False
 
-    def setup_environment(self):
-        """Configure l'environnement d'exécution."""
-        try:
-            # Limite mémoire virtuelle si possible
-            import resource
-            resource.setrlimit(
-                resource.RLIMIT_AS,
-                (22 * 1024 * 1024 * 1024, -1)  # 22GB
-            )
-            logger.info("Limite mémoire virtuelle configurée")
-        except Exception as e:
-            logger.warning(f"Impossible de configurer la limite mémoire: {e}")
-
-        # Configuration des threads
-        os.environ['NUMEXPR_MAX_THREADS'] = '8'
-        os.environ['MKL_NUM_THREADS'] = '8'
-        os.environ['OPENBLAS_NUM_THREADS'] = '8'
-        os.environ['OMP_NUM_THREADS'] = '8'
-        logger.info("Variables d'environnement des threads configurées")
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Retourne le statut de l'optimisation.
+        Returns:
+            Dict[str, Any]: État actuel du système
+        """
+        return {
+            "initialized": self.is_initialized,
+            "components": self.initialized_components,
+            "environment": {
+                "threads": {
+                    "numexpr": os.getenv('NUMEXPR_MAX_THREADS'),
+                    "openmp": os.getenv('OMP_NUM_THREADS'),
+                    "mkl": os.getenv('MKL_NUM_THREADS'),
+                    "openblas": os.getenv('OPENBLAS_NUM_THREADS')
+                }
+            }
+        }
