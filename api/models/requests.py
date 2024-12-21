@@ -1,11 +1,21 @@
 # api/models/requests.py
-from pydantic import BaseModel, Field, EmailStr, validator, UUID4, constr
+from pydantic import BaseModel, Field, EmailStr, validator, UUID4, constr, ConfigDict
 from typing import Optional, Dict, List, Union, Any
 from datetime import datetime
 import re
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "content": "Bonjour!",
+                "timestamp": "2024-12-21T10:00:00Z",
+                "metadata": {"source": "chat"}
+            }
+        }
+    )
+    
     content: str = Field(..., min_length=1, max_length=4096)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -19,6 +29,18 @@ class MessageData(BaseModel):
 
 class ChatContext(BaseModel):
     """Modèle pour le contexte de chat."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "history": [
+                    {"role": "user", "content": "Bonjour"},
+                    {"role": "assistant", "content": "Bonjour! Comment puis-je vous aider?"}
+                ],
+                "metadata": {"source": "web"}
+            }
+        }
+    )
+    
     history: List[Dict[str, str]] = Field(
         default_factory=list,
         max_length=50,
@@ -31,6 +53,16 @@ class ChatContext(BaseModel):
 
 class ChatRequest(BaseModel):
     """Modèle pour les requêtes de chat."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "user_id": "123e4567-e89b-12d3-a456-426614174000",
+                "query": "Comment puis-je vous aider?",
+                "language": "fr"
+            }
+        }
+    )
+    
     user_id: UUID4 = Field(..., description="Identifiant unique de l'utilisateur")
     query: str = Field(
         ...,
@@ -101,6 +133,15 @@ class ChatRequest(BaseModel):
 
 class SessionCreate(BaseModel):
     """Modèle pour la création de session."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "user_id": "123e4567-e89b-12d3-a456-426614174000",
+                "metadata": {"source": "web"}
+            }
+        }
+    )
+    
     user_id: UUID4 = Field(..., description="Identifiant de l'utilisateur")
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
@@ -124,6 +165,19 @@ class SessionCreate(BaseModel):
 
 class UserCreate(BaseModel):
     """Modèle pour la création d'utilisateur."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "email": "user@example.com",
+                "username": "john_doe",
+                "full_name": "John Doe",
+                "metadata": {
+                    "preferences": {"theme": "dark"}
+                }
+            }
+        }
+    )
+    
     email: EmailStr = Field(..., description="Email de l'utilisateur")
     username: constr(min_length=3, max_length=50, strip_whitespace=True) = Field(
         ...,
@@ -148,21 +202,3 @@ class UserCreate(BaseModel):
         if not re.match(r'^[a-zA-ZÀ-ÿ\s-]+$', v):
             raise ValueError("Le nom complet ne peut contenir que des lettres et tirets")
         return v
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "user@example.com",
-                "username": "john_doe",
-                "full_name": "John Doe",
-                "metadata": {
-                    "preferences": {
-                        "theme": "dark",
-                        "notifications": True
-                    },
-                    "settings": {
-                        "language": "fr"
-                    }
-                }
-            }
-        }
