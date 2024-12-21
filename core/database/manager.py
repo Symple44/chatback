@@ -184,24 +184,22 @@ class DatabaseManager:
                 FROM chat_history ch
                 WHERE 1 - (ch.query_vector <-> :vector::vector) > :threshold
                 """
-
-                # Ajout des filtres de métadonnées
-                if metadata:
-                for key, value in metadata.items():
-                    query += f" AND ch.chat_metadata->'{key}' = :value_{key}"
-
-                query += " ORDER BY similarity DESC LIMIT :limit"
-    
+                
+                # Ajout des conditions de métadonnées si présentes
                 params = {
                     "vector": vector,
                     "threshold": threshold,
                     "limit": limit
                 }
+                
                 if metadata:
                     for key, value in metadata.items():
+                        query += f" AND ch.chat_metadata->'{key}' = :value_{key}"
                         params[f"value_{key}"] = value
     
-                result = await session.execute(query, params)
+                query += " ORDER BY similarity DESC LIMIT :limit"
+    
+                result = await session.execute(text(query), params)
                 return [dict(row) for row in result]
 
             except Exception as e:
