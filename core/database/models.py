@@ -46,6 +46,12 @@ class User(Base):
         CheckConstraint('length(username) >= 3', name='username_length_check'),
     )
 
+    @classmethod
+    def create(cls, **kwargs):
+        metadata = kwargs.pop('metadata', {})
+        kwargs['user_metadata'] = metadata  # Utiliser user_metadata au lieu de metadata
+        return cls(**kwargs)
+
     @validates('email')
     def validate_email(self, key, email):
         """Valide le format de l'email."""
