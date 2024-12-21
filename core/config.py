@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "8"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
+
+    # Limites du modèle
+    MAX_INPUT_LENGTH: int = int(os.getenv("MAX_INPUT_LENGTH", "2048"))  # Taille maximale de l'entrée
+    MAX_OUTPUT_LENGTH: int = int(os.getenv("MAX_OUTPUT_LENGTH", "2048"))  # Taille maximale de la sortie
+    MAX_PROMPT_LENGTH: int = int(os.getenv("MAX_PROMPT_LENGTH", "1024"))  # Taille maximale du prompt
+    MAX_CONTEXT_LENGTH: int = int(os.getenv("MAX_CONTEXT_LENGTH", "4096"))  # Taille maximale du contexte
     
     # Paramètres de génération
     MAX_NEW_TOKENS: int = 150
