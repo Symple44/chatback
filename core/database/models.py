@@ -15,6 +15,7 @@ import re
 from .base import Base
 from core.config import settings
 from core.utils.logger import get_logger
+from .models_base import Base
 
 logger = get_logger(__name__)
 
