@@ -1,17 +1,10 @@
 # core/vectorstore/search.py
-from elasticsearch import AsyncElasticsearch, helpers
-from elasticsearch.exceptions import NotFoundError, RequestError
-from typing import List, Dict, Optional, Any, Union
-import numpy as np
+from elasticsearch import AsyncElasticsearch
+from typing import List, Dict, Optional, Any
+import logging
 from datetime import datetime
-import asyncio
-from functools import lru_cache
 
-from core.config import settings
-from core.utils.logger import get_logger
-from core.utils.metrics import metrics
-
-logger = get_logger("elasticsearch")
+logger = logging.getLogger(__name__)
 
 class ElasticsearchClient:
     def __init__(self):
@@ -19,17 +12,12 @@ class ElasticsearchClient:
         try:
             self.es = AsyncElasticsearch(
                 hosts=[settings.ELASTICSEARCH_HOST],
-                basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
-                verify_certs=settings.ELASTICSEARCH_VERIFY_CERTS,
-                ca_certs=settings.ELASTICSEARCH_CA_CERTS,
-                retry_on_timeout=True,
-                max_retries=3,
-                timeout=30
+                verify_certs=False,
+                basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD) if settings.ELASTICSEARCH_USER else None
             )
             
-            self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_vectors"
-            self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
-            
+            self.index_name = "chat_vectors"
+            self.embedding_dim = 384  # Dimension des embeddings
             logger.info("Client Elasticsearch initialisé")
             
         except Exception as e:
@@ -51,27 +39,13 @@ class ElasticsearchClient:
         mapping = {
             "settings": {
                 "number_of_shards": 2,
-                "number_of_replicas": 1,
-                "index": {
-                    "similarity": {
-                        "default": {
-                            "type": "scripted_similarity",
-                            "script": {
-                                "source": "1.0 / (1.0 + l2norm(params.queryVector, doc['vector']))"
-                            }
-                        }
-                    }
-                }
+                "number_of_replicas": 1
             },
             "mappings": {
                 "properties": {
                     "content": {
                         "type": "text",
-                        "analyzer": "standard",
-                        "fields": {
-                            "keyword": {"type": "keyword"},
-                            "suggest": {"type": "completion"}
-                        }
+                        "analyzer": "standard"
                     },
                     "metadata": {
                         "type": "object",
@@ -92,179 +66,73 @@ class ElasticsearchClient:
         }
 
         await self.es.indices.create(index=self.index_name, body=mapping)
+        logger.info(f"Index {self.index_name} créé avec succès")
 
-    async def index_vectors(
-        self,
-        vectors: List[List[float]],
-        contents: List[str],
-        metadata: Optional[List[Dict]] = None
-    ) -> List[str]:
-        """
-        Indexe des vecteurs avec leur contenu et métadonnées.
-        
-        Args:
-            vectors: Liste des vecteurs
-            contents: Liste des contenus associés
-            metadata: Liste optionnelle des métadonnées
-            
-        Returns:
-            Liste des IDs des documents indexés
-        """
+    async def index_document(self, title: str, content: str, metadata: Optional[Dict] = None) -> bool:
+        """Indexe un document."""
         try:
-            if len(vectors) != len(contents):
-                raise ValueError("Nombre de vecteurs et contenus différent")
-
-            metadata = metadata or [{}] * len(vectors)
-            actions = []
-            doc_ids = []
-
-            for vector, content, meta in zip(vectors, contents, metadata):
-                doc_id = meta.get("id") or str(uuid.uuid4())
-                doc_ids.append(doc_id)
-                
-                action = {
-                    "_index": self.index_name,
-                    "_id": doc_id,
-                    "_source": {
-                        "vector": vector,
-                        "content": content,
-                        "metadata": meta,
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "status": "active"
-                    }
-                }
-                actions.append(action)
-
-            with metrics.timer("es_bulk_index"):
-                success, failed = await helpers.async_bulk(
-                    self.es,
-                    actions,
-                    chunk_size=settings.ES_BULK_SIZE,
-                    raise_on_error=False
-                )
-                
-                logger.info(f"Indexation: {success} succès, {failed} échecs")
-                metrics.increment_counter("vectors_indexed", success)
-                if failed:
-                    metrics.increment_counter("vectors_index_failed", failed)
-
-            return doc_ids
-
+            doc = {
+                "title": title,
+                "content": content,
+                "metadata": metadata or {},
+                "timestamp": datetime.utcnow(),
+                "status": "active"
+            }
+            
+            await self.es.index(index=self.index_name, document=doc)
+            return True
+            
         except Exception as e:
-            logger.error(f"Erreur indexation vecteurs: {e}")
-            metrics.increment_counter("vector_indexing_errors")
-            raise
+            logger.error(f"Erreur indexation document: {e}")
+            return False
 
-    async def search_similar(
+    async def search_documents(
         self,
-        query_vector: List[float],
-        k: int = 5,
-        min_score: float = 0.7,
-        filters: Optional[Dict] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Recherche les vecteurs similaires.
-        
-        Args:
-            query_vector: Vecteur de requête
-            k: Nombre de résultats
-            min_score: Score minimum de similarité
-            filters: Filtres additionnels
-            
-        Returns:
-            Liste des documents similaires trouvés
-        """
+        query: str,
+        vector: Optional[List[float]] = None,
+        size: int = 5
+    ) -> List[Dict]:
+        """Recherche des documents."""
         try:
-            with metrics.timer("es_vector_search"):
-                query = {
+            # Construction de la requête
+            search_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"match": {"content": query}},
+                            {"term": {"status": "active"}}
+                        ]
+                    }
+                },
+                "size": size
+            }
+
+            # Ajout de la recherche vectorielle si un vecteur est fourni
+            if vector:
+                search_query["query"]["bool"]["should"] = [{
                     "script_score": {
-                        "query": {"bool": {"must": [{"term": {"status": "active"}}]}},
+                        "query": {"match_all": {}},
                         "script": {
                             "source": "cosineSimilarity(params.query_vector, 'vector') + 1.0",
-                            "params": {"query_vector": query_vector}
+                            "params": {"query_vector": vector}
                         }
                     }
-                }
+                }]
 
-                # Ajout des filtres
-                if filters:
-                    for field, value in filters.items():
-                        query["script_score"]["query"]["bool"]["must"].append(
-                            {"term": {field: value}}
-                        )
+            # Exécution de la recherche
+            response = await self.es.search(
+                index=self.index_name,
+                body=search_query
+            )
 
-                response = await self.es.search(
-                    index=self.index_name,
-                    body={
-                        "query": query,
-                        "min_score": min_score,
-                        "_source": {"excludes": ["vector"]},
-                        "size": k
-                    }
-                )
-
-                results = []
-                for hit in response["hits"]["hits"]:
-                    result = {
-                        "id": hit["_id"],
-                        "content": hit["_source"]["content"],
-                        "score": hit["_score"] - 1.0,  # Normalisation du score
-                        "metadata": hit["_source"]["metadata"]
-                    }
-                    results.append(result)
-
-                metrics.increment_counter("vector_searches")
-                return results
+            return [hit["_source"] for hit in response["hits"]["hits"]]
 
         except Exception as e:
-            logger.error(f"Erreur recherche similaires: {e}")
-            metrics.increment_counter("vector_search_errors")
+            logger.error(f"Erreur recherche documents: {e}")
             return []
-
-    @lru_cache(maxsize=1000)
-    async def get_document_vector(self, doc_id: str) -> Optional[List[float]]:
-        """Récupère le vecteur d'un document."""
-        try:
-            doc = await self.es.get(
-                index=self.index_name,
-                id=doc_id,
-                _source=["vector"]
-            )
-            return doc["_source"]["vector"]
-        except NotFoundError:
-            return None
-        except Exception as e:
-            logger.error(f"Erreur récupération vecteur: {e}")
-            return None
-
-    async def delete_vectors(self, ids: List[str]) -> Dict[str, int]:
-        """Supprime des vecteurs par leurs IDs."""
-        try:
-            results = await self.es.delete_by_query(
-                index=self.index_name,
-                body={"query": {"terms": {"_id": ids}}}
-            )
-            
-            return {
-                "deleted": results["deleted"],
-                "failed": results["failed"]
-            }
-        except Exception as e:
-            logger.error(f"Erreur suppression vecteurs: {e}")
-            return {"deleted": 0, "failed": len(ids)}
 
     async def cleanup(self):
         """Nettoie les ressources."""
-        try:
+        if hasattr(self, 'es'):
             await self.es.close()
             logger.info("Client Elasticsearch fermé")
-        except:
-            pass
-
-    async def health_check(self) -> bool:
-        """Vérifie l'état de santé."""
-        try:
-            return await self.es.ping()
-        except Exception as e:
-            logger.error(f"Erreur health check: {e}")
-            return False
