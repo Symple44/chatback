@@ -158,19 +158,19 @@ try:
             
     class CustomJSONResponse(JSONResponse):
         def render(self, content) -> bytes:
-            def default(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                return str(obj)
-    
             return json.dumps(
                 content,
+                default=self._json_serializer,
                 ensure_ascii=False,
                 allow_nan=False,
                 indent=None,
-                separators=(",", ":"),
-                default=default
+                separators=(",", ":")
             ).encode("utf-8")
+    
+        def _json_serializer(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return str(obj)
     
     # Configuration de l'application FastAPI
     app = FastAPI(
