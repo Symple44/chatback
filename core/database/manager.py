@@ -190,19 +190,19 @@ class DatabaseManager:
                 for key, value in metadata.items():
                     query += f" AND ch.chat_metadata->'{key}' = :value_{key}"
 
-            query += " ORDER BY similarity DESC LIMIT :limit"
-
-            params = {
-                "vector": vector,
-                "threshold": threshold,
-                "limit": limit
-            }
-            if metadata:
-                for key, value in metadata.items():
-                    params[f"value_{key}"] = value
-
-            result = await session.execute(query, params)
-            return [dict(row) for row in result]
+                query += " ORDER BY similarity DESC LIMIT :limit"
+    
+                params = {
+                    "vector": vector,
+                    "threshold": threshold,
+                    "limit": limit
+                }
+                if metadata:
+                    for key, value in metadata.items():
+                        params[f"value_{key}"] = value
+    
+                result = await session.execute(query, params)
+                return [dict(row) for row in result]
 
             except Exception as e:
                 logger.error(f"Erreur recherche similarité: {e}")
