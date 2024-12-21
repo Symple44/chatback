@@ -59,11 +59,15 @@ class Settings(BaseSettings):
     MODEL_DIR: Path = BASE_DIR / "models"
     
     # Configuration du modèle
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt2")
     MODEL_REVISION: str = os.getenv("MODEL_REVISION", "main")
     USE_AUTH_TOKEN: bool = os.getenv("USE_AUTH_TOKEN", "false").lower() == "true"
     DEVICE: str = os.getenv("DEVICE", "cpu")
     FP16: bool = os.getenv("FP16", "false").lower() == "true"
+    USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "true").lower() == "true"
+    MAX_THREADS: int = int(os.getenv("MAX_THREADS", "8"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
     
     # Paramètres de génération
     MAX_NEW_TOKENS: int = 150
