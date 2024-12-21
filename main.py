@@ -154,6 +154,12 @@ try:
         finally:
             logger.info("Arrêt de l'application")
             await components.cleanup()
+            
+    class CustomJSONEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
 
     # Configuration de l'application FastAPI
     app = FastAPI(
@@ -161,6 +167,7 @@ try:
         description="API de chat avec support vectoriel et traitement documentaire",
         version=settings.VERSION,
         lifespan=lifespan,
+        json_encoder=CustomJSONEncoder
         #docs_url=None,
         #redoc_url=None
     )
