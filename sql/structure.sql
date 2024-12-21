@@ -87,6 +87,20 @@ CREATE TABLE vector_usage_stats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE message_embeddings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    message_id UUID REFERENCES chat_history(id) ON DELETE CASCADE,
+    embedding_type VARCHAR(50) NOT NULL,
+    vector float[],
+    model_version VARCHAR(100),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}'
+);
+
+CREATE INDEX idx_message_embedding_type ON message_embeddings(embedding_type);
+CREATE INDEX idx_message_vector ON message_embeddings USING gin(vector);
+CREATE INDEX idx_message_metadata ON message_embeddings USING gin(metadata);
+
 -- Index pour la recherche vectorielle
 CREATE INDEX idx_chat_history_query_vector ON chat_history USING ivfflat (query_vector vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX idx_chat_history_response_vector ON chat_history USING ivfflat (response_vector vector_cosine_ops) WITH (lists = 100);
