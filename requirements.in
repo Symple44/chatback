@@ -1,5 +1,6 @@
 # requirements.in
 # pip-compile --output-file=requirements.txt requirements.in
+# pip install -r requirements.txt
 # Base FastAPI
 fastapi
 uvicorn[standard]
