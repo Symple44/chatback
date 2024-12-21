@@ -3,6 +3,7 @@ from elasticsearch import AsyncElasticsearch
 from typing import List, Dict, Optional, Any
 import logging
 from datetime import datetime
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
