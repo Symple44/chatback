@@ -3,7 +3,32 @@ import os
 from pathlib import Path
 
 # Ajout du répertoire parent au PYTHONPATH
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+current_dir = Path(__file__).resolve().parent
+sys.path.append(str(current_dir))
+
+print("Démarrage du debug...")
+
+try:
+    import uvicorn
+    from datetime import datetime
+    from fastapi import FastAPI
+    from core.config import settings
+    print("Imports de base OK")
+
+    # Test des imports des composants
+    try:
+        from core.utils.logger import get_logger
+        print("Logger importé avec succès")
+    except Exception as e:
+        print(f"Erreur import logger: {str(e)}")
+        traceback.print_exc()
+
+    try:
+        from core.utils.metrics import metrics
+        print("Metrics importé avec succès")
+    except Exception as e:
+        print(f"Erreur import metrics: {str(e)}")
+        traceback.print_exc()
 
 import asyncio
 import uvicorn
