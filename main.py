@@ -161,8 +161,8 @@ try:
         description="API de chat avec support vectoriel et traitement documentaire",
         version=settings.VERSION,
         lifespan=lifespan,
-        docs_url=None,
-        redoc_url=None
+        #docs_url=None,
+        #redoc_url=None
     )
 
     # Middlewares
