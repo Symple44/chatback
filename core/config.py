@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     DEVICE: str = os.getenv("DEVICE", "cpu")
     FP16: bool = os.getenv("FP16", "false").lower() == "true"
     USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "true").lower() == "true"
+    USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "8"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
     
