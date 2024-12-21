@@ -155,7 +155,7 @@ class EmbeddingsManager:
         return text.strip()[:512]  # Limitation de la longueur
 
     @lru_cache(maxsize=1000)
-    def generate_embedding(self, text: str) -> List[float]:
+    async def generate_embedding(self, text: str) -> List[float]:
         """
         Génère l'embedding pour un texte unique.
         
