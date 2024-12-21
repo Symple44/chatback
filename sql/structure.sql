@@ -94,12 +94,12 @@ CREATE TABLE message_embeddings (
     vector float[],
     model_version VARCHAR(100),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    metadata JSONB DEFAULT '{}'
+    embedding_metadata  JSONB DEFAULT '{}'
 );
 
 CREATE INDEX idx_message_embedding_type ON message_embeddings(embedding_type);
 CREATE INDEX idx_message_vector ON message_embeddings USING gin(vector);
-CREATE INDEX idx_message_metadata ON message_embeddings USING gin(metadata);
+CREATE INDEX idx_message_metadata ON message_embeddings USING gin(embedding_metadata);
 
 -- Index pour la recherche vectorielle
 CREATE INDEX idx_chat_history_query_vector ON chat_history USING ivfflat (query_vector vector_cosine_ops) WITH (lists = 100);
