@@ -122,6 +122,12 @@ try:
                     self._components["doc_extractor"] = doc_extractor
                     self._components["pdf_processor"] = pdf_processor
                     logger.info("Processeurs de documents initialisés")
+                    
+                    from core.storage.google_drive import GoogleDriveManager
+                    self._components["drive_manager"] = GoogleDriveManager(
+                        credentials_path=settings.GOOGLE_DRIVE_CREDENTIALS_PATH
+                    )
+                    logger.info("Google Drive manager initialisé")
 
                     self.initialized = True
                     logger.info("Initialisation des composants terminée avec succès")
@@ -132,6 +138,23 @@ try:
                     raise
                 finally:
                     self._initializing = False
+                    
+        async def sync_drive_documents(self):
+            """Synchronise les documents depuis Google Drive."""
+            try:
+                downloaded_files = await self._components["drive_manager"].sync_drive_folder(
+                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    save_path="documents"
+                )
+                
+                # Indexer les nouveaux documents
+                for file_path in downloaded_files:
+                    await self._components["pdf_processor"].index_pdf(file_path)
+                    
+                logger.info(f"{len(downloaded_files)} documents synchronisés depuis Drive")
+                
+            except Exception as e:
+                logger.error(f"Erreur synchronisation Drive: {e}")
 
         async def cleanup(self):
             """Nettoie les ressources."""
@@ -159,7 +182,18 @@ try:
 
     # Instance globale des composants
     components = ComponentManager()
+    
+    async def start_background_tasks(app: FastAPI):
+        async def sync_documents():
+            while True:
+                try:
+                    await components.sync_drive_documents()
+                except Exception as e:
+                    logger.error(f"Erreur synchro documents: {e}")
+                await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
 
+        asyncio.create_task(sync_documents())
+    
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Gestion du cycle de vie de l'application."""
@@ -177,6 +211,9 @@ try:
             # Import et ajout des routes
             from api.routes.router import router as api_router
             app.include_router(api_router)
+            
+            # Tâches de fond
+            await start_background_tasks(app)
 
             logger.info("Application prête")
             yield

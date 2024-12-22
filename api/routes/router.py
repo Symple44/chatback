@@ -41,6 +41,10 @@ tags_metadata = [
     {
         "name": "info",
         "description": "Informations générales sur l'API"
+    },
+    {
+        "name": "documents",
+        "description": "Synchronisation des documents"
     }
 ]
 
@@ -73,6 +77,12 @@ router.include_router(
     #prefix="/history",
     tags=["history"]
 )
+router.include_router(
+    #documents_router,
+    #prefix="/history",
+    tags=["documents"]
+)
+
 
 @router.get("/", tags=["info"])
 async def api_info() -> Dict:
@@ -135,3 +145,17 @@ async def ping() -> Dict:
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+@router.post("/sync", tags=["documents"])
+async def sync_documents(
+    background_tasks: BackgroundTasks,
+    components=Depends(get_components)
+) -> Dict:
+    """Lance une synchronisation manuelle avec Google Drive."""
+    try:
+        background_tasks.add_task(components.sync_drive_documents)
+        return {
+            "message": "Synchronisation lancée",
+            "status": "pending",
+            "timestamp": datetime.utcnow().isoformat()
+        }
