@@ -332,19 +332,20 @@ async def log_error(components, error: Exception, request: ChatRequest):
     except Exception as e:
         logger.error(f"Erreur lors du log d'erreur: {e}")
 
-def format_chat_response(response_data: Dict, session: ChatSession, start_time: datetime) -> ChatResponse:
+def format_chat_response(response_data: Dict, chat_session, start_time: datetime) -> ChatResponse:
     """Formate la réponse finale."""
     processing_time = (datetime.utcnow() - start_time).total_seconds()
     
     return ChatResponse(
-        response=response_data["response"],
-        session_id=session.session_id,
+        response=response_data["response"], t
+        session_id=chat_session.session_id,
         conversation_id=uuid.uuid4(),
-        documents=response_data.get("documents", []),
-        confidence_score=response_data["confidence"],
+        documents=[],  
+        confidence_score=response_data.get("confidence", 0.0),
         processing_time=processing_time,
+        tokens_used=response_data.get("tokens_used", 0), 
         metadata={
-            "source": response_data["source"],
-            "session_context": session.session_context
+            "source": response_data.get("source", "unknown"),
+            "session_context": chat_session.session_context
         }
     )
