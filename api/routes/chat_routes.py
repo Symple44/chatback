@@ -281,13 +281,15 @@ async def prepare_chat_context(components, request: ChatRequest, session: ChatSe
 async def find_similar_questions(components, query_vector: List[float], metadata: Dict) -> List[Dict]:
     """Recherche des questions similaires."""
     try:
-        similar_questions = await components.db_manager.find_similar_questions(
-            vector=query_vector,
-            threshold=settings.CONTEXT_CONFIDENCE_THRESHOLD,
-            limit=3,
-            metadata=metadata
-        )
-        return similar_questions
+        if hasattr(components.db_manager, "find_similar_questions"):
+            return await components.db_manager.find_similar_questions(
+                vector=query_vector,
+                threshold=settings.CONTEXT_CONFIDENCE_THRESHOLD,
+                limit=3,
+                metadata=metadata
+            )
+        logger.warning("Méthode find_similar_questions non disponible")
+        return []
     except Exception as e:
         logger.error(f"Erreur recherche similarité: {e}")
         return []
@@ -412,7 +414,7 @@ async def save_chat_interaction(
                 confidence_score=float(response_data.get("confidence", 0.0)),
                 tokens_used=int(response_data.get("tokens_used", 0)),
                 processing_time=float(processing_time),
-                metadata={
+                chat_metadata={
                     "source": response_data.get("source", "unknown"),
                     "application": request.application,
                     "language": request.language,
