@@ -126,7 +126,7 @@ class ModelInference:
         conversation_history: Optional[List] = None,
         language: str = "fr",
         generation_config: Optional[Dict] = None
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Génère une réponse complète.
         """
@@ -173,8 +173,10 @@ class ModelInference:
             metrics.increment_counter("model_generations")
             
             return {
-                "response": response,
-                "tokens_used": len(outputs.sequences[0]),
+                "response": response, 
+                "tokens_used": len(outputs.sequences[0]), 
+                "source": "model",  
+                "confidence": 1.0,  
                 "generation_time": metrics.timers.get("model_inference", 0.0)
             }
             
