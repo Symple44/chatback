@@ -142,6 +142,7 @@ class Settings(BaseSettings):
 
     # Template chat
     CHAT_TEMPLATE: str = "System: {system}\nQuestion: {query}\nContexte: {context}\n\nRéponse:"
+    SYSTEM_PROMPT: str = "Je suis un assistant IA français, conçu pour aider et répondre aux questions de manière claire et précise."
     class Config:
         env_file = ".env"
         case_sensitive = True
