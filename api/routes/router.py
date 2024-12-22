@@ -41,10 +41,6 @@ tags_metadata = [
     {
         "name": "info",
         "description": "Informations générales sur l'API"
-    },
-    {
-        "name": "documents",
-        "description": "Synchronisation des documents"
     }
 ]
 
@@ -76,11 +72,6 @@ router.include_router(
     history_router,
     #prefix="/history",
     tags=["history"]
-)
-router.include_router(
-    documents_router,
-    #prefix="/history",
-    tags=["documents"]
 )
 
 
