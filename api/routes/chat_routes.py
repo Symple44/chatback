@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..models.requests import ChatRequest
-from ..models.responses import ChatResponse, ErrorResponse, VectorStats
+from ..models.responses import ChatResponse, ErrorResponse, VectorStats, DocumentReference
 from ..dependencies import get_components
 from core.utils.logger import get_logger
 from core.database.base import get_session_manager
@@ -63,9 +63,10 @@ async def process_chat_message(
             context = await prepare_chat_context(components, request, chat_session)
 
             # 4. Recherche de questions similaires
-            similar_questions = await components.db_manager.find_similar_questions(  
-                vector=query_vector,
-                metadata=request.metadata
+            similar_questions = await find_similar_questions(
+                components,
+                query_vector,
+                request.metadata
             )
 
             # 5. Génération de la réponse
@@ -121,7 +122,10 @@ async def stream_chat_response(
             # Notification de début
             yield {
                 "event": "start",
-                "data": {"status": "started", "timestamp": datetime.utcnow().isoformat()}
+                "data": json.dumps({
+                    "status": "started",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
             }
 
             # Préparation du contexte
@@ -140,26 +144,32 @@ async def stream_chat_response(
             ):
                 yield {
                     "event": "token",
-                    "data": {"content": token, "type": "token"}
+                    "data": json.dumps({
+                        "content": token,
+                        "type": "token"
+                    })
                 }
 
             # Métadonnées finales
             yield {
                 "event": "complete",
-                "data": {
+                "data": json.dumps({
                     "status": "completed",
                     "metadata": {
                         "docs_used": len(relevant_docs),
                         "processing_time": metrics.get_timer_value("chat_processing")
                     }
-                }
+                })
             }
 
         except Exception as e:
             logger.error(f"Erreur streaming: {e}")
             yield {
                 "event": "error",
-                "data": {"error": str(e), "timestamp": datetime.utcnow().isoformat()}
+                "data": json.dumps({
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat()
+                })
             }
 
     return EventSourceResponse(event_generator())
@@ -197,11 +207,15 @@ async def get_chat_history(
     Récupère l'historique des conversations pour une session.
     """
     try:
-        history = await components.db.get_session_history(
-            session_id=session_id,
-            limit=limit
-        )
-        return history
+        async with DatabaseSession() as session:
+            history = await session.execute(
+                select(ChatHistory)
+                .where(ChatHistory.session_id == session_id)
+                .options(selectinload(ChatHistory.referenced_documents))
+                .order_by(ChatHistory.created_at.desc())
+                .limit(limit)
+            )
+            return [item.to_dict() for item in history.scalars().all()]
     except Exception as e:
         logger.error(f"Erreur récupération historique: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -212,7 +226,7 @@ async def get_vector_statistics(components=Depends(get_components)) -> Dict:
     Récupère les statistiques d'utilisation des vecteurs.
     """
     try:
-        stats = await components.db.get_vector_statistics()
+        stats = await components.es_client.get_vector_statistics()
         return VectorStats(**stats)
     except Exception as e:
         logger.error(f"Erreur récupération statistiques vecteurs: {e}")
@@ -230,13 +244,19 @@ async def get_or_create_session(session, user_id: str, session_id: Optional[str]
         )
         existing_session = result.scalar_one_or_none()
         if existing_session:
+            # Mise à jour du timestamp
+            existing_session.updated_at = datetime.utcnow()
             return existing_session
 
     # Création d'une nouvelle session
     new_session = ChatSession(
         user_id=user_id,
         session_id=str(uuid.uuid4()),
-        session_context={"created_at": datetime.utcnow().isoformat()},
+        session_context={
+            "created_at": datetime.utcnow().isoformat(),
+            "source": metadata.get("source", "api"),
+            "history": []
+        },
         metadata=metadata
     )
     session.add(new_session)
@@ -245,107 +265,256 @@ async def get_or_create_session(session, user_id: str, session_id: Optional[str]
 
 async def prepare_chat_context(components, request: ChatRequest, session: ChatSession) -> Dict:
     """Prépare le contexte pour la génération de réponse."""
-    return {
+    context = {
         "history": session.session_context.get("history", []),
         "metadata": request.metadata,
         "preferences": request.context.preferences if request.context else {},
         "session_id": session.session_id
     }
+    
+    # Ajout du contexte initial si présent
+    if request.context and request.context.source_documents:
+        context["source_documents"] = request.context.source_documents
+        
+    return context
 
 async def find_similar_questions(components, query_vector: List[float], metadata: Dict) -> List[Dict]:
     """Recherche des questions similaires."""
-    return await components.db.find_similar_questions(
-        vector=query_vector,
-        threshold=settings.CONTEXT_CONFIDENCE_THRESHOLD,
-        limit=3,
-        metadata=metadata
-    )
+    try:
+        similar_questions = await components.db_manager.find_similar_questions(
+            vector=query_vector,
+            threshold=settings.CONTEXT_CONFIDENCE_THRESHOLD,
+            limit=3,
+            metadata=metadata
+        )
+        return similar_questions
+    except Exception as e:
+        logger.error(f"Erreur recherche similarité: {e}")
+        return []
 
 async def generate_response(components, request: ChatRequest, context: Dict, similar_questions: List[Dict]) -> Dict:
     """Génère une réponse basée sur le contexte et les questions similaires."""
-    # Si une question très similaire existe
-    if similar_questions and similar_questions[0]["similarity"] > 0.98:
+    try:
+        # Si une question très similaire existe
+        if similar_questions and similar_questions[0]["similarity"] > 0.98:
+            return {
+                "response_text": similar_questions[0]["response"],
+                "source": "cache",
+                "confidence": similar_questions[0]["similarity"]
+            }
+
+        # Sinon, génération d'une nouvelle réponse
+        relevant_docs = await components.es_client.search_documents(
+            query=request.query,
+            metadata={"application": request.application} if request.application else None
+        )
+
+        model_response = await components.model.generate_response(
+            query=request.query,
+            context_docs=relevant_docs,
+            conversation_history=context["history"],
+            language=request.language
+        )
+
+        # S'assurer que model_response est un string
+        if isinstance(model_response, dict):
+            response_text = model_response.get('response', '')
+        else:
+            response_text = str(model_response)
+
         return {
-            "response": similar_questions[0]["response"],
-            "source": "cache",
-            "confidence": similar_questions[0]["similarity"]
+            "response_text": response_text,
+            "source": "generation",
+            "confidence": max((doc.get("score", 0) for doc in relevant_docs), default=0.0),
+            "documents": relevant_docs,
+            "tokens_used": model_response.get("tokens_used", 0) if isinstance(model_response, dict) else 0
+        }
+    except Exception as e:
+        logger.error(f"Erreur génération réponse: {e}")
+        return {
+            "response_text": "Désolé, une erreur est survenue lors de la génération de la réponse.",
+            "source": "error",
+            "confidence": 0.0,
+            "documents": []
         }
 
-    # Sinon, génération d'une nouvelle réponse
-    relevant_docs = await components.es_client.search_documents(
-        query=request.query,
-        metadata={"application": request.application} if request.application else None
-    )
-
-    response = await components.model.generate_response(
-        query=request.query,
-        context_docs=relevant_docs,
-        conversation_history=context["history"],
-        language=request.language
-    )
-
-    return {
-        "response": response,
-        "source": "generation",
-        "confidence": max((doc.get("score", 0) for doc in relevant_docs), default=0.0),
-        "documents": relevant_docs
-    }
-
-async def save_chat_interaction(components, request: ChatRequest, response_data: Dict, query_vector: List[float], start_time: datetime):
-    """Sauvegarde l'interaction dans la base de données."""
+def format_chat_response(response_data: Dict, chat_session: ChatSession, start_time: datetime) -> ChatResponse:
+    """Formate la réponse finale."""
     try:
-        response_vector = await components.model.create_embedding(response_data["response"])
         processing_time = (datetime.utcnow() - start_time).total_seconds()
 
-        await components.db.save_chat_interaction(
-            session_id=request.session_id,
-            user_id=request.user_id,
-            query=request.query,
-            response=response_data["response"],
-            query_vector=query_vector,
-            response_vector=response_vector,
-            confidence_score=response_data["confidence"],
-            processing_time=processing_time,
+        # Prépare les références aux documents
+        documents = []
+        if "documents" in response_data:
+            for doc in response_data["documents"]:
+                documents.append(
+                    DocumentReference(
+                        title=doc.get("title", "Unknown"),
+                        page=doc.get("page", 1),
+                        score=float(doc.get("score", 0.0)),
+                        content=doc.get("content", None),
+                        metadata=doc.get("metadata", {})
+                    )
+                )
+
+        return ChatResponse(
+            response=response_data.get("response_text", ""),
+            session_id=str(chat_session.session_id),
+            conversation_id=str(uuid.uuid4()),
+            documents=documents,
+            confidence_score=float(response_data.get("confidence", 0.0)),
+            processing_time=float(processing_time),
+            tokens_used=int(response_data.get("tokens_used", 0)),
             metadata={
-                "source": response_data["source"],
-                "application": request.application,
-                "language": request.language
+                "source": response_data.get("source", "unknown"),
+                "timestamp": datetime.utcnow().isoformat(),
+                "session_context": chat_session.session_context
             }
         )
     except Exception as e:
+        logger.error(f"Erreur formatage réponse: {e}")
+        # Réponse de fallback en cas d'erreur
+        return ChatResponse(
+            response="Une erreur est survenue lors du formatage de la réponse.",
+            session_id=str(chat_session.session_id),
+            conversation_id=str(uuid.uuid4()),
+            documents=[],
+            confidence_score=0.0,
+            processing_time=0.0,
+            tokens_used=0,
+            metadata={"error": str(e)}
+        )
+
+async def save_chat_interaction(
+    components,
+    request: ChatRequest,
+    response_data: Dict,
+    query_vector: List[float],
+    start_time: datetime
+):
+    """Sauvegarde l'interaction dans la base de données."""
+    try:
+        # Génération du vecteur pour la réponse
+        response_text = response_data.get("response_text", "")
+        response_vector = await components.model.create_embedding(response_text)
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+
+        async with DatabaseSession() as session:
+            # Création de l'entrée d'historique
+            history_entry = ChatHistory(
+                id=uuid.uuid4(),
+                session_id=request.session_id,
+                user_id=request.user_id,
+                query=request.query,
+                response=response_text,
+                query_vector=query_vector,
+                response_vector=response_vector,
+                confidence_score=float(response_data.get("confidence", 0.0)),
+                tokens_used=int(response_data.get("tokens_used", 0)),
+                processing_time=float(processing_time),
+                metadata={
+                    "source": response_data.get("source", "unknown"),
+                    "application": request.application,
+                    "language": request.language,
+                    **request.metadata
+                }
+            )
+
+            session.add(history_entry)
+
+            # Ajout des documents référencés si présents
+            if "documents" in response_data:
+                for doc in response_data["documents"]:
+                    referenced_doc = ReferencedDocument(
+                        chat_history_id=history_entry.id,
+                        document_name=doc.get("title", "Unknown"),
+                        page_number=doc.get("page"),
+                        relevance_score=float(doc.get("score", 0.0)),
+                        content_snippet=doc.get("content"),
+                        metadata=doc.get("metadata", {})
+                    )
+                    session.add(referenced_doc)
+
+            try:
+                await session.commit()
+                metrics.increment_counter("chat_interactions_saved")
+            except Exception as commit_error:
+                logger.error(f"Erreur commit sauvegarde interaction: {commit_error}")
+                await session.rollback()
+                raise
+
+    except Exception as e:
         logger.error(f"Erreur sauvegarde interaction: {e}")
-        metrics.increment_counter("save_errors")
+        metrics.increment_counter("chat_save_errors")
 
 async def log_error(components, error: Exception, request: ChatRequest):
     """Log une erreur dans la base de données."""
     try:
-        await components.db.log_error(
-            error_type=type(error).__name__,
-            error_message=str(error),
-            endpoint="/api/chat",
-            user_id=request.user_id,
-            metadata={
-                "query": request.query,
-                "application": request.application
-            }
-        )
+        if hasattr(components, 'db_manager') and hasattr(components.db_manager, 'log_error'):
+            await components.db_manager.log_error(
+                error_type=type(error).__name__,
+                error_message=str(error),
+                endpoint="/api/chat",
+                user_id=str(request.user_id),
+                metadata={
+                    "query": request.query,
+                    "application": request.application,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        else:
+            # Fallback vers le logger si la méthode log_error n'est pas disponible
+            logger.error(
+                f"Error in chat processing - "
+                f"Type: {type(error).__name__}, "
+                f"Message: {str(error)}, "
+                f"User: {request.user_id}, "
+                f"Query: {request.query}"
+            )
     except Exception as e:
         logger.error(f"Erreur lors du log d'erreur: {e}")
 
-def format_chat_response(response_data: Dict, chat_session, start_time: datetime) -> ChatResponse:
-    """Formate la réponse finale."""
-    processing_time = (datetime.utcnow() - start_time).total_seconds()
-    
-    return ChatResponse(
-        response=response_data["response"],
-        session_id=chat_session.session_id,
-        conversation_id=uuid.uuid4(),
-        documents=[],  
-        confidence_score=response_data.get("confidence", 0.0),
-        processing_time=processing_time,
-        tokens_used=response_data.get("tokens_used", 0), 
-        metadata={
-            "source": response_data.get("source", "unknown"),
-            "session_context": chat_session.session_context
-        }
-    )
+# Helpers pour la gestion des types et validations
+
+def validate_session_id(session_id: Optional[str]) -> bool:
+    """Valide le format d'un ID de session."""
+    if not session_id:
+        return False
+    try:
+        uuid.UUID(session_id)
+        return True
+    except ValueError:
+        return False
+
+def safe_get_dict_value(data: dict, key: str, default: Any = None) -> Any:
+    """Récupère une valeur d'un dictionnaire de manière sécurisée."""
+    try:
+        return data.get(key, default)
+    except Exception:
+        return default
+
+def ensure_string(value: Any) -> str:
+    """Convertit une valeur en string de manière sécurisée."""
+    if value is None:
+        return ""
+    return str(value)
+
+def ensure_float(value: Any, default: float = 0.0) -> float:
+    """Convertit une valeur en float de manière sécurisée."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+def ensure_int(value: Any, default: int = 0) -> int:
+    """Convertit une valeur en int de manière sécurisée."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+def format_timestamp(dt: Optional[datetime] = None) -> str:
+    """Formate un timestamp en string ISO."""
+    if dt is None:
+        dt = datetime.utcnow()
+    return dt.isoformat()
