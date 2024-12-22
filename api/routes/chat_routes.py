@@ -176,7 +176,7 @@ async def get_similar_questions(
     """
     try:
         query_vector = await components.model.create_embedding(query)
-        similar = await components.db.find_similar_questions(
+        similar = await components.db_manager.find_similar_questions(
             vector=query_vector,
             threshold=threshold,
             limit=limit
