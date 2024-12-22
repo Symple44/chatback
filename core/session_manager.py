@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta
 import json
 import uuid
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from core.utils.logger import get_logger
 from core.database.models import ChatSession, ChatHistory
 
