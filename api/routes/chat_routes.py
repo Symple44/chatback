@@ -24,6 +24,8 @@ from core.config import settings
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+# api/routes/chat_routes.py
+
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
@@ -49,21 +51,16 @@ async def process_chat_message(
                         detail="Utilisateur non trouvé"
                     )
 
-                # 2. Gestion de la session
-                chat_session = await get_or_create_session(
-                    session,
-                    request.user_id,
-                    request.session_id,
-                    request.metadata
-                )
-                
-                # Important: commit pour avoir la session
-                await session.commit()
+            # 2. Gestion de la session
+            chat_session = await components.db_manager.get_or_create_session(
+                request.session_id,
+                request.user_id,
+                request.metadata
+            )
 
             # 3. Préparation du contexte
             query_vector = await components.model.create_embedding(request.query)
-            context = await prepare_chat_context(components, request, chat_session)
-
+            
             # 4. Recherche de documents pertinents
             relevant_docs = await components.es_client.search_documents(
                 query=request.query,
@@ -76,18 +73,30 @@ async def process_chat_message(
             model_response = await components.model.generate_response(
                 query=request.query,
                 context_docs=relevant_docs,
-                conversation_history=context.get("history", []),
+                conversation_history=chat_session.session_context.get("history", []),
                 language=request.language
             )
 
-            # 6. Préparation de la réponse
             response_text = model_response.get("response", "") if isinstance(model_response, dict) else str(model_response)
-            
+
+            # 6. Mise à jour du contexte
+            await components.db_manager.update_session_context(
+                chat_session.session_id,
+                request.query,
+                response_text,
+                {
+                    "application": request.application,
+                    "language": request.language,
+                    "confidence": model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
+                    "processing_time": (datetime.utcnow() - start_time).total_seconds()
+                }
+            )
+
             # 7. Sauvegarde en arrière-plan
             background_tasks.add_task(
                 save_chat_interaction,
                 components,
-                chat_session.session_id,  # Important: utiliser l'ID de session
+                chat_session.session_id,
                 request,
                 response_text,
                 query_vector,
@@ -95,19 +104,19 @@ async def process_chat_message(
                 relevant_docs
             )
 
-            # 8. Retour de la réponse formatée
+            # 8. Préparation de la réponse
             return ChatResponse(
                 response=response_text,
                 session_id=chat_session.session_id,
                 conversation_id=uuid.uuid4(),
                 documents=[DocumentReference(**doc) for doc in relevant_docs],
-                confidence_score=model_response.get("confidence", 0.0),
+                confidence_score=model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
                 processing_time=(datetime.utcnow() - start_time).total_seconds(),
-                tokens_used=model_response.get("tokens_used", 0),
+                tokens_used=model_response.get("tokens_used", 0) if isinstance(model_response, dict) else 0,
                 metadata={
                     "source": "model",
                     "timestamp": datetime.utcnow().isoformat(),
-                    "session_context": context
+                    "session_context": chat_session.session_context
                 }
             )
 
@@ -250,35 +259,6 @@ async def get_vector_statistics(components=Depends(get_components)) -> Dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 # Fonctions utilitaires
-
-async def get_or_create_session(session, user_id: str, session_id: Optional[str], metadata: Dict) -> ChatSession:
-    """Récupère ou crée une session de chat."""
-    if session_id:
-        result = await session.execute(
-            select(ChatSession)
-            .where(ChatSession.session_id == session_id)
-            .options(selectinload(ChatSession.chat_history))
-        )
-        existing_session = result.scalar_one_or_none()
-        if existing_session:
-            # Mise à jour du timestamp
-            existing_session.updated_at = datetime.utcnow()
-            return existing_session
-
-    # Création d'une nouvelle session
-    new_session = ChatSession(
-        user_id=user_id,
-        session_id=str(uuid.uuid4()),
-        session_context={
-            "created_at": datetime.utcnow().isoformat(),
-            "source": metadata.get("source", "api"),
-            "history": []
-        },
-        metadata=metadata
-    )
-    session.add(new_session)
-    await session.flush()
-    return new_session
 
 async def prepare_chat_context(components, request: ChatRequest, session: ChatSession) -> Dict:
     """Prépare le contexte pour la génération de réponse."""

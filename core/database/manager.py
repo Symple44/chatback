@@ -1,10 +1,10 @@
 # core/database/manager.py
 from typing import List, Dict, Optional, Any, Union, Tuple
-from sqlalchemy import select, and_, or_, func, desc, text
-from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 import uuid
-
+from sqlalchemy import select, and_, or_, func, desc, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from .models import (
     User, ChatSession, ChatHistory, ReferencedDocument, 
     MessageEmbedding, UsageMetric, SystemConfig
@@ -436,3 +436,5 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Erreur lors du log d'erreur: {e}")
             
+    # core/database/manager.py
+    # core/database/manager.py

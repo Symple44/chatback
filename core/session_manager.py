@@ -74,7 +74,7 @@ class SessionManager:
         """Met à jour le contexte d'une session."""
         async with self.async_session() as session:
             try:
-                # Récupérer le contexte actuel
+                # Récupérer la session et son contexte actuel
                 result = await session.execute(
                     text("SELECT session_context FROM chat_sessions WHERE session_id = :session_id"),
                     {"session_id": session_id}
@@ -83,14 +83,35 @@ class SessionManager:
                 
                 if row:
                     # Charger le contexte existant
-                    current_context = (
-                        row[0] if isinstance(row[0], dict) else json.loads(row[0])
-                    )
-                  
-                    # Fusionner l'ancien et le nouveau contexte
-                    merged_context = {**current_context, **new_context}
+                    current_context = row[0] if isinstance(row[0], dict) else json.loads(row[0])
                     
-                    # Mise à jour avec le contexte fusionné
+                    # Construction du nouveau contexte
+                    history = current_context.get("history", [])
+                    if "query" in new_context and "response" in new_context:
+                        history.append({
+                            "query": new_context["query"],
+                            "response": new_context["response"],
+                            "timestamp": datetime.utcnow().isoformat()
+                        })
+                        # Garder les 5 dernières interactions
+                        history = history[-5:]
+                    
+                    # Mise à jour du contexte
+                    merged_context = {
+                        **current_context,
+                        "history": history,
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "metadata": {
+                            **current_context.get("metadata", {}),
+                            **new_context.get("metadata", {})
+                        },
+                        "stats": {
+                            "total_interactions": len(history),
+                            "last_interaction": datetime.utcnow().isoformat()
+                        }
+                    }
+                    
+                    # Mise à jour en base
                     await session.execute(
                         text("""
                         UPDATE chat_sessions 
@@ -117,19 +138,42 @@ class SessionManager:
                 return False
 
     async def get_session(self, session_id: str) -> Optional[Dict]:
-        """Récupère une session existante."""
+        """Récupère une session existante avec son contexte enrichi."""
         async with self.async_session() as session:
             try:
                 result = await session.execute(
-                    text("SELECT * FROM chat_sessions WHERE session_id = :session_id"),
+                    text("""
+                    SELECT s.*, 
+                           (SELECT json_agg(
+                               json_build_object(
+                                   'query', h.query,
+                                   'response', h.response,
+                                   'timestamp', h.created_at
+                               )
+                           ) 
+                            FROM (
+                                SELECT *
+                                FROM chat_history
+                                WHERE session_id = s.session_id
+                                ORDER BY created_at DESC
+                                LIMIT 5
+                            ) h
+                           ) as recent_history
+                    FROM chat_sessions s
+                    WHERE s.session_id = :session_id
+                    """),
                     {"session_id": session_id}
                 )
                 row = result.fetchone()
                 
                 if row:
+                    context = row.session_context or {}
+                    if row.recent_history:
+                        context["history"] = list(reversed(row.recent_history))
+                    
                     return {
                         "session_id": row.session_id,
-                        "context": row.session_context or {}
+                        "context": context
                     }
                 return None
                 
@@ -189,6 +233,92 @@ class SessionManager:
                 await session.rollback()
                 logger.error(f"Erreur lors de la création de la session: {e}")
                 raise
+    async def get_or_create_session(
+        self,
+        session_id: Optional[str],
+        user_id: str,
+        metadata: Dict
+    ) -> ChatSession:
+        """
+        Récupère ou crée une session de chat avec contexte enrichi.
+        """
+        async with self.session_factory() as session:
+            if session_id:
+                result = await session.execute(
+                    select(ChatSession)
+                    .where(ChatSession.session_id == session_id)
+                    .options(selectinload(ChatSession.chat_history))
+                )
+                existing_session = result.scalar_one_or_none()
+                if existing_session:
+                    # Mise à jour du contexte avec les nouvelles interactions
+                    history = await self.get_session_history(session_id)
+                    current_context = existing_session.session_context or {}
+                    
+                    # Mise à jour du contexte
+                    updated_context = {
+                        **current_context,
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "history": [
+                            {
+                                "query": h.query,
+                                "response": h.response,
+                                "timestamp": h.created_at.isoformat()
+                            } for h in history
+                        ][-5:],  # Garder les 5 dernières interactions
+                        "metadata": {
+                            **current_context.get("metadata", {}),
+                            **metadata
+                        }
+                    }
+                    
+                    existing_session.session_context = updated_context
+                    existing_session.updated_at = datetime.utcnow()
+                    
+                    await session.commit()
+                    return existing_session
+
+            # Création d'une nouvelle session
+            new_session = ChatSession(
+                user_id=user_id,
+                session_id=str(uuid.uuid4()),
+                session_context={
+                    "created_at": datetime.utcnow().isoformat(),
+                    "source": metadata.get("source", "api"),
+                    "history": [],
+                    "preferences": metadata.get("preferences", {
+                        "language": "fr",
+                        "model": settings.MODEL_NAME,
+                        "max_history": 5
+                    }),
+                    "metadata": {
+                        **metadata,
+                        "user_id": user_id,
+                        "created_from": "chat_api"
+                    }
+                },
+                metadata=metadata,
+                is_active=True
+            )
+            
+            session.add(new_session)
+            await session.commit()
+            await session.refresh(new_session)
+            return new_session
+                
+    async def get_session_history(self, session_id: str, limit: int = 5) -> List[ChatHistory]:
+        """Récupère l'historique récent d'une session."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                text("""
+                SELECT * FROM chat_history 
+                WHERE session_id = :session_id
+                ORDER BY created_at DESC 
+                LIMIT :limit
+                """),
+                {"session_id": session_id, "limit": limit}
+            )
+            return list(reversed(result.fetchall()))
 
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """Nettoie les anciennes sessions."""

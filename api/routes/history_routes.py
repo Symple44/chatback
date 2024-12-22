@@ -13,7 +13,9 @@ async def get_session_history(
     components=Depends(get_components)
 ) -> List[Dict]:
     try:
-        return await components.db.get_session_history(session_id)
+        # Utiliser le SessionManager au lieu d'un appel direct à la DB
+        history = await components.session_manager.get_session_history(session_id)
+        return [h._asdict() for h in history] if history else []
     except Exception as e:
         logger.error(f"Erreur récupération historique: {e}")
         raise HTTPException(status_code=500, detail=str(e))
