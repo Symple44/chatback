@@ -34,7 +34,6 @@ async def process_chat_message(
     Traite une requête de chat et retourne une réponse complète.
     """
     start_time = datetime.utcnow()
-    session_manager = get_session_manager()
 
     try:
         with metrics.timer("chat_processing"):
@@ -57,38 +56,60 @@ async def process_chat_message(
                     request.session_id,
                     request.metadata
                 )
+                
+                # Important: commit pour avoir la session
+                await session.commit()
 
             # 3. Préparation du contexte
             query_vector = await components.model.create_embedding(request.query)
             context = await prepare_chat_context(components, request, chat_session)
 
-            # 4. Recherche de questions similaires
-            similar_questions = await find_similar_questions(
-                components,
-                query_vector,
-                request.metadata
+            # 4. Recherche de documents pertinents
+            relevant_docs = await components.es_client.search_documents(
+                query=request.query,
+                vector=query_vector,
+                size=settings.MAX_RELEVANT_DOCS,
+                metadata={"application": request.application} if request.application else None
             )
 
             # 5. Génération de la réponse
-            response_data = await generate_response(
-                components,
-                request,
-                context,
-                similar_questions
+            model_response = await components.model.generate_response(
+                query=request.query,
+                context_docs=relevant_docs,
+                conversation_history=context.get("history", []),
+                language=request.language
             )
 
-            # 6. Sauvegarde en arrière-plan
+            # 6. Préparation de la réponse
+            response_text = model_response.get("response", "") if isinstance(model_response, dict) else str(model_response)
+            
+            # 7. Sauvegarde en arrière-plan
             background_tasks.add_task(
                 save_chat_interaction,
                 components,
+                chat_session.session_id,  # Important: utiliser l'ID de session
                 request,
-                response_data,
+                response_text,
                 query_vector,
-                start_time
+                start_time,
+                relevant_docs
             )
 
-            # 7. Retour de la réponse
-            return format_chat_response(response_data, chat_session, start_time)
+            # 8. Retour de la réponse formatée
+            return ChatResponse(
+                response=response_text,
+                session_id=chat_session.session_id,
+                conversation_id=uuid.uuid4(),
+                documents=[DocumentReference(**doc) for doc in relevant_docs],
+                confidence_score=model_response.get("confidence", 0.0),
+                processing_time=(datetime.utcnow() - start_time).total_seconds(),
+                tokens_used=model_response.get("tokens_used", 0),
+                metadata={
+                    "source": "model",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "session_context": context
+                }
+            )
 
     except HTTPException as he:
         raise he
@@ -98,13 +119,9 @@ async def process_chat_message(
         await log_error(components, e, request)
         raise HTTPException(
             status_code=500,
-            detail=ErrorResponse(
-                detail="Une erreur est survenue lors du traitement",
-                error_code="PROCESSING_ERROR",
-                path="/api/chat",
-                metadata={"error": str(e)}
-            ).model_dump()
+            detail=str(e)
         )
+
 
 @router.get("/stream")
 async def stream_chat_response(
@@ -389,15 +406,16 @@ def format_chat_response(response_data: Dict, chat_session: ChatSession, start_t
 
 async def save_chat_interaction(
     components,
+    session_id: str,
     request: ChatRequest,
-    response_data: Dict,
+    response_text: str,
     query_vector: List[float],
-    start_time: datetime
+    start_time: datetime,
+    referenced_docs: List[Dict]
 ):
     """Sauvegarde l'interaction dans la base de données."""
     try:
         # Génération du vecteur pour la réponse
-        response_text = response_data.get("response_text", "")
         response_vector = await components.model.create_embedding(response_text)
         processing_time = (datetime.utcnow() - start_time).total_seconds()
 
@@ -405,17 +423,17 @@ async def save_chat_interaction(
             # Création de l'entrée d'historique
             history_entry = ChatHistory(
                 id=uuid.uuid4(),
-                session_id=request.session_id,
+                session_id=session_id,  # Important: utiliser le session_id
                 user_id=request.user_id,
                 query=request.query,
                 response=response_text,
                 query_vector=query_vector,
                 response_vector=response_vector,
-                confidence_score=float(response_data.get("confidence", 0.0)),
-                tokens_used=int(response_data.get("tokens_used", 0)),
-                processing_time=float(processing_time),
+                confidence_score=0.0,  # À calculer si nécessaire
+                tokens_used=0,  # À récupérer du modèle
+                processing_time=processing_time,
                 chat_metadata={
-                    "source": response_data.get("source", "unknown"),
+                    "source": "model",
                     "application": request.application,
                     "language": request.language,
                     **request.metadata
@@ -424,26 +442,21 @@ async def save_chat_interaction(
 
             session.add(history_entry)
 
-            # Ajout des documents référencés si présents
-            if "documents" in response_data:
-                for doc in response_data["documents"]:
-                    referenced_doc = ReferencedDocument(
-                        chat_history_id=history_entry.id,
-                        document_name=doc.get("title", "Unknown"),
-                        page_number=doc.get("page"),
-                        relevance_score=float(doc.get("score", 0.0)),
-                        content_snippet=doc.get("content"),
-                        metadata=doc.get("metadata", {})
-                    )
-                    session.add(referenced_doc)
+            # Ajout des documents référencés
+            for doc in referenced_docs:
+                referenced_doc = ReferencedDocument(
+                    id=uuid.uuid4(),
+                    chat_history_id=history_entry.id,
+                    document_name=doc.get("title", "Unknown"),
+                    page_number=doc.get("page"),
+                    relevance_score=float(doc.get("score", 0.0)),
+                    content_snippet=doc.get("content"),
+                    metadata=doc.get("metadata", {})
+                )
+                session.add(referenced_doc)
 
-            try:
-                await session.commit()
-                metrics.increment_counter("chat_interactions_saved")
-            except Exception as commit_error:
-                logger.error(f"Erreur commit sauvegarde interaction: {commit_error}")
-                await session.rollback()
-                raise
+            await session.commit()
+            metrics.increment_counter("chat_interactions_saved")
 
     except Exception as e:
         logger.error(f"Erreur sauvegarde interaction: {e}")
