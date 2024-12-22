@@ -25,24 +25,47 @@ class MemoryCache(Cache):
         MemoryCache._CACHE[url] = content
 
 class GoogleDriveManager:
-    def __init__(self, credentials_path: str, max_retries: int = 3, retry_delay: float = 1.0):
-        """
-        Initialise le gestionnaire Google Drive avec les credentials fournis.
-        """
+     def __init__(self, credentials_path: str):
+        """Initialize Google Drive manager with credentials."""
         try:
             if not os.path.exists(credentials_path):
-                raise FileNotFoundError(f"Fichier de credentials non trouvé: {credentials_path}")
+                raise FileNotFoundError(f"Credentials file not found: {credentials_path}")
 
-            self.credentials = ServiceAccountCredentials.from_service_account_file(credentials_path)
-            self.service = build('drive', 'v3', credentials=self.credentials, cache=MemoryCache())
-            self.executor = ThreadPoolExecutor(max_workers=4)
-            self.semaphore = asyncio.Semaphore(1)
-            self.last_successful_sync = None
-            self.max_retries = max_retries
-            self.retry_delay = retry_delay
-            logger.info("Gestionnaire Google Drive initialisé avec succès")
+            # Vérifier que le fichier est lisible
+            with open(credentials_path, 'r') as f:
+                creds_content = json.load(f)
+                required_fields = ['client_email', 'private_key', 'project_id']
+                if not all(field in creds_content for field in required_fields):
+                    raise ValueError("Invalid credentials file format")
+
+            # Création des credentials avec vérification explicite
+            self.credentials = ServiceAccountCredentials.from_service_account_file(
+                credentials_path,
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
+
+            # Test de validité des credentials
+            if not self.credentials.valid:
+                self.credentials.refresh(Request())
+
+            # Création du service
+            self.service = build(
+                'drive', 
+                'v3', 
+                credentials=self.credentials,
+                cache=MemoryCache()
+            )
+
+            logger.info("Google Drive manager initialized successfully")
+            
+        except FileNotFoundError as e:
+            logger.error(f"Credentials file error: {e}")
+            raise
+        except ValueError as e:
+            logger.error(f"Invalid credentials format: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Erreur d'initialisation Google Drive: {e}", exc_info=True)
+            logger.error(f"Drive initialization error: {e}")
             raise
 
     async def _get_file_metadata(self, file_id: str) -> Optional[Dict]:
