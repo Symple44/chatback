@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     MAX_CHUNKS_PER_DOC: int = 50  # Nombre maximum de chunks par document
     CONTEXT_CONFIDENCE_THRESHOLD: float = 0.7  # Seuil de confiance pour le contexte
     
+    GOOGLE_DRIVE_CREDENTIALS_PATH=str = os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH", "Dir")
+    GOOGLE_DRIVE_FOLDER_ID=str = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "Folder_id")
+    GOOGLE_DRIVE_SYNC_INTERVAL=str = os.getenv("ELASTICSEARCH_HOST", "3600")
+    
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
