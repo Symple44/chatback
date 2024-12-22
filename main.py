@@ -92,7 +92,6 @@ try:
                     # 4. Initialisation du SessionManager
                     from core.session_manager import SessionManager
                     self._components["session_manager"] = SessionManager(settings.DATABASE_URL)
-                    await self._components["session_manager"].initialize()
                     logger.info("Session manager initialisé")
 
                     # 5. Cache Redis
