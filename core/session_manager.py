@@ -242,7 +242,7 @@ class SessionManager:
         """
         Récupère ou crée une session de chat avec contexte enrichi.
         """
-        async with self.session_factory() as session:
+        async with self.async_session() as session:
             if session_id:
                 result = await session.execute(
                     select(ChatSession)
@@ -254,7 +254,7 @@ class SessionManager:
                     # Mise à jour du contexte avec les nouvelles interactions
                     history = await self.get_session_history(session_id)
                     current_context = existing_session.session_context or {}
-                    
+
                     # Mise à jour du contexte
                     updated_context = {
                         **current_context,
@@ -271,10 +271,10 @@ class SessionManager:
                             **metadata
                         }
                     }
-                    
+
                     existing_session.session_context = updated_context
                     existing_session.updated_at = datetime.utcnow()
-                    
+
                     await session.commit()
                     return existing_session
 
@@ -300,7 +300,7 @@ class SessionManager:
                 metadata=metadata,
                 is_active=True
             )
-            
+
             session.add(new_session)
             await session.commit()
             await session.refresh(new_session)
