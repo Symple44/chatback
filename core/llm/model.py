@@ -175,7 +175,7 @@ class ModelInference:
             return {
                 "response": response,
                 "tokens_used": len(outputs.sequences[0]),
-                "generation_time": metrics.get_timer_value("model_inference")
+                "generation_time": metrics.timers.get("model_inference", 0.0)
             }
             
         except Exception as e:
