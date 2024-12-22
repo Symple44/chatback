@@ -208,7 +208,7 @@ class SessionManager:
              
                 params = {
                     "id": record_id,  # Ajout de l'ID généré
-                    "user_id": user_id,
+                    "user_id": str(user_id),
                     "session_id": session_id,
                     "session_context": json.dumps(session_context),
                     "created_at": current_time,
@@ -295,7 +295,7 @@ class SessionManager:
                     }),
                     "metadata": {
                         **metadata,
-                        "user_id": user_id,
+                        "user_id": str(user_id),
                         "created_from": "chat_api"
                     }
                 },
