@@ -184,7 +184,7 @@ try:
         description="API de chat avec support vectoriel et traitement documentaire",
         version=settings.VERSION,
         lifespan=lifespan,
-        json_encoder=CustomJSONResponse
+        default_response_class=CustomJSONResponse
         #docs_url=None,
         #redoc_url=None
     )
