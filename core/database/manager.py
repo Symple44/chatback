@@ -159,53 +159,42 @@ class DatabaseManager:
         threshold: float = 0.8,
         limit: int = 5,
         metadata: Optional[Dict] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Trouve les questions similaires basées sur la similarité vectorielle.
-        
-        Args:
-            vector: Vecteur de recherche
-            threshold: Seuil de similarité
-            limit: Nombre maximum de résultats
-            metadata: Filtres additionnels
-            
-        Returns:
-            Liste des questions similaires
-        """
-        async with self.session_factory() as session:
-            try:
-                # Construction de la requête
-                query = """
-                SELECT 
-                    ch.id,
-                    ch.query,
-                    ch.response,
-                    1 - (ch.query_vector <-> :vector::vector) as similarity
-                FROM chat_history ch
-                WHERE 1 - (ch.query_vector <-> :vector::vector) > :threshold
-                """
+    ) -> List[Dict]:
+        """Trouve des questions similaires basées sur la similarité vectorielle."""
+        try:
+            async with self.session_factory() as session:
+                # Construction du vecteur pour PostgreSQL
+                vector_str = "{" + ",".join(str(x) for x in vector) + "}"
                 
-                # Ajout des conditions de métadonnées si présentes
-                params = {
-                    "vector": vector,
-                    "threshold": threshold,
-                    "limit": limit
-                }
+                # Utilise pgvector pour la recherche de similarité
+                query = text("""
+                    WITH scored_vectors AS (
+                        SELECT 
+                            ch.query,
+                            ch.response,
+                            1 - (ch.query_vector <-> cast(:vector as vector)) as similarity
+                        FROM chat_history ch
+                        WHERE 1 - (ch.query_vector <-> cast(:vector as vector)) > :threshold
+                        ORDER BY similarity DESC
+                        LIMIT :limit
+                    )
+                    SELECT * FROM scored_vectors
+                """)
                 
-                if metadata:
-                    for key, value in metadata.items():
-                        query += f" AND ch.chat_metadata->'{key}' = :value_{key}"
-                        params[f"value_{key}"] = value
-    
-                query += " ORDER BY similarity DESC LIMIT :limit"
-    
-                result = await session.execute(text(query), params)
+                result = await session.execute(
+                    query,
+                    {
+                        "vector": vector_str,  # On passe le vecteur au format string
+                        "threshold": threshold,
+                        "limit": limit
+                    }
+                )
+                
                 return [dict(row) for row in result]
-
-            except Exception as e:
-                logger.error(f"Erreur recherche similarité: {e}")
-                metrics.increment_counter("database_similarity_search_errors")
-                return []
+    
+        except Exception as e:
+            logger.error(f"Erreur recherche similarité: {e}")
+            return []
 
     async def get_user_statistics(self, user_id: str) -> Dict[str, Any]:
         """
