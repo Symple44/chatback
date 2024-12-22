@@ -424,15 +424,17 @@ class DatabaseManager:
             logger.error(f"Erreur recherche similarité: {e}")
             return []
                 
-    async def log_error(
-        self,
-        error_type: str,
-        error_message: str,
-        endpoint: str,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict] = None
-    ) -> None:
-        """Log une erreur dans la base de données."""
+    # core/database/manager.py
+async def log_error(
+    self,
+    error_type: str,
+    error_message: str,
+    endpoint: str,
+    user_id: Optional[str] = None,
+    metadata: Optional[Dict] = None
+) -> None:
+    """Log une erreur dans la base de données."""
+    try:
         async with self.session_factory() as session:
             error_log = ErrorLog(
                 error_type=error_type,
@@ -443,3 +445,5 @@ class DatabaseManager:
             )
             session.add(error_log)
             await session.commit()
+    except Exception as e:
+        logger.error(f"Erreur lors du log d'erreur: {e}")
