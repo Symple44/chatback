@@ -152,10 +152,9 @@ async def sync_documents(
     components=Depends(get_components)
 ) -> Dict:
     """Lance une synchronisation manuelle avec Google Drive."""
-    try:
-        background_tasks.add_task(components.sync_drive_documents)
-        return {
-            "message": "Synchronisation lancée",
-            "status": "pending",
-            "timestamp": datetime.utcnow().isoformat()
-        }
+    background_tasks.add_task(components.sync_drive_documents)
+    return {
+        "message": "Synchronisation lancée",
+        "status": "pending",
+        "timestamp": datetime.utcnow().isoformat()
+    }
