@@ -34,6 +34,14 @@ class Metrics:
             'gauges': self.gauges,
             'timestamp': datetime.utcnow().isoformat()
         }
+    def get_latest_timings(self) -> Dict[str, float]:
+        """Retourne les derniers timings enregistrés."""
+        return self.timers.copy()
+    
+    def get_timer_value(self, name: str) -> float:
+        """Retourne la valeur d'un timer spécifique."""
+        return self.timers.get(name, 0.0)
+        
     @contextmanager
     def timer(self, name: str):
         start = time.perf_counter()
