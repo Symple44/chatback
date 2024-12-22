@@ -320,25 +320,95 @@ class SessionManager:
             )
             return list(reversed(result.fetchall()))
 
-    async def cleanup_old_sessions(self, days: int = 30) -> int:
-        """Nettoie les anciennes sessions."""
+    async def get_session_stats(self, session_id: str) -> Dict[str, Any]:
+        """Calcule les statistiques d'une session."""
         async with self.async_session() as session:
             try:
-                cutoff_date = datetime.utcnow() - timedelta(days=days)
+                # Statistiques des messages
                 result = await session.execute(
                     text("""
-                    DELETE FROM chat_sessions 
-                    WHERE updated_at < :cutoff_date 
-                    RETURNING id
+                    SELECT 
+                        COUNT(*) as total_messages,
+                        AVG(processing_time) as avg_processing_time,
+                        AVG(confidence_score) as avg_confidence
+                    FROM chat_history 
+                    WHERE session_id = :session_id
                     """),
-                    {"cutoff_date": cutoff_date}
+                    {"session_id": session_id}
                 )
-                deleted = len(result.fetchall())
-                await session.commit()
-                logger.info(f"{deleted} anciennes sessions supprimées")
-                return deleted
+                stats = result.fetchone()._asdict()
+
+                # Durée de la session
+                result = await session.execute(
+                    text("""
+                    SELECT 
+                        created_at, 
+                        updated_at,
+                        is_active 
+                    FROM chat_sessions 
+                    WHERE session_id = :session_id
+                    """),
+                    {"session_id": session_id}
+                )
+                session_data = result.fetchone()
+                if session_data:
+                    duration = session_data.updated_at - session_data.created_at
+                    stats.update({
+                        'duration_hours': duration.total_seconds() / 3600,
+                        'is_active': session_data.is_active,
+                        'last_activity': session_data.updated_at.isoformat()
+                    })
                 
+                return stats
+            
+        except Exception as e:
+            logger.error(f"Erreur calcul statistiques session: {e}")
+            return {}
+
+    async def cleanup_old_sessions(self, days: int = 30, user_id: Optional[str] = None) -> int:
+        """Nettoie les anciennes sessions inactives."""
+        async with self.async_session() as session:
+            try:
+                # Construction de la requête de base
+                query = """
+                UPDATE chat_sessions 
+                SET 
+                    is_active = false,
+                    session_context = jsonb_set(
+                        session_context::jsonb,
+                        '{metadata,deactivated_at}',
+                        to_jsonb(:deactivation_time::text),
+                        true
+                    ),
+                    session_context = jsonb_set(
+                        session_context::jsonb,
+                        '{metadata,deactivation_reason}',
+                        '"automatic_cleanup"',
+                        true
+                    )
+                WHERE 
+                    updated_at < :cutoff_date 
+                    AND is_active = true
+                """
+                
+                params = {
+                    "cutoff_date": datetime.utcnow() - timedelta(days=days),
+                    "deactivation_time": datetime.utcnow().isoformat()
+                }
+
+                # Ajout du filtre utilisateur si spécifié
+                if user_id:
+                    query += " AND user_id = :user_id"
+                    params["user_id"] = user_id
+
+                result = await session.execute(text(query), params)
+                await session.commit()
+                
+                deactivated_count = result.rowcount
+                logger.info(f"Nettoyage: {deactivated_count} sessions désactivées")
+                return deactivated_count
+
             except Exception as e:
                 await session.rollback()
-                logger.error(f"Erreur lors du nettoyage des sessions: {e}")
+                logger.error(f"Erreur nettoyage sessions: {e}")
                 return 0

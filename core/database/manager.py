@@ -412,6 +412,122 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Erreur recherche similarité: {e}")
             return []
+    
+    async def initialize_user_resources(self, user_id: str) -> bool:
+        """Initialise les ressources pour un nouvel utilisateur."""
+        try:
+            # Création du répertoire utilisateur
+            user_dir = f"data/users/{user_id}"
+            os.makedirs(user_dir, exist_ok=True)
+            
+            # Configuration des préférences par défaut
+            async with self.session_factory() as session:
+                user = await session.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = user.scalar_one_or_none()
+                if user:
+                    user.metadata.update({
+                        "preferences": {
+                            "theme": "light",
+                            "language": "fr",
+                            "notifications": True
+                        },
+                        "resources": {
+                            "user_dir": user_dir
+                        }
+                    })
+                    await session.commit()
+                    
+                logger.info(f"Ressources initialisées pour l'utilisateur {user_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Erreur lors de l'initialisation des ressources: {e}")
+            return False
+
+    async def calculate_user_statistics(self, user_id: str) -> Dict[str, Any]:
+        """Calcule les statistiques complètes d'un utilisateur."""
+        async with self.session_factory() as session:
+            try:
+                # Statistiques des sessions
+                session_stats = await session.execute(
+                    select(
+                        func.count(ChatSession.id).label('total_sessions'),
+                        func.count(ChatSession.id).filter(
+                            ChatSession.is_active == True
+                        ).label('active_sessions')
+                    ).where(ChatSession.user_id == user_id)
+                )
+                session_stats = session_stats.first()
+
+                # Statistiques des messages
+                message_stats = await session.execute(
+                    select(
+                        func.count(ChatHistory.id).label('total_messages'),
+                        func.avg(ChatHistory.processing_time).label('avg_processing_time'),
+                        func.avg(ChatHistory.confidence_score).label('avg_confidence')
+                    ).where(ChatHistory.user_id == user_id)
+                )
+                message_stats = message_stats.first()
+
+                # Récupération des informations utilisateur
+                user = await session.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = user.scalar_one_or_none()
+
+                if user:
+                    return {
+                        "sessions": {
+                            "total": session_stats.total_sessions,
+                            "active": session_stats.active_sessions
+                        },
+                        "messages": {
+                            "total": message_stats.total_messages,
+                            "avg_processing_time": round(message_stats.avg_processing_time, 3) if message_stats.avg_processing_time else 0,
+                            "avg_confidence": round(message_stats.avg_confidence, 3) if message_stats.avg_confidence else 0
+                        },
+                        "account": {
+                            "age_days": (datetime.utcnow() - user.created_at).days,
+                            "last_login": user.last_login.isoformat() if user.last_login else None,
+                            "is_active": user.is_active
+                        }
+                    }
+                return {}
+                
+            except Exception as e:
+                logger.error(f"Erreur lors du calcul des statistiques: {e}")
+                return {}
+
+    async def cleanup_user_data(self, user_id: str) -> bool:
+        """Nettoie toutes les données associées à un utilisateur."""
+        async with self.session_factory() as session:
+            try:
+                # Suppression des sessions
+                await session.execute(
+                    delete(ChatSession).where(ChatSession.user_id == user_id)
+                )
+                
+                # Suppression de l'historique
+                await session.execute(
+                    delete(ChatHistory).where(ChatHistory.user_id == user_id)
+                )
+                
+                # Suppression du répertoire utilisateur
+                user_dir = f"data/users/{user_id}"
+                if os.path.exists(user_dir):
+                    import shutil
+                    shutil.rmtree(user_dir)
+                
+                await session.commit()    
+                logger.info(f"Données utilisateur nettoyées: {user_id}")
+                return True
+                
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Erreur lors du nettoyage des données: {e}")
+                return False
                 
     async def log_error(
         self,
@@ -436,5 +552,3 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Erreur lors du log d'erreur: {e}")
             
-    # core/database/manager.py
-    # core/database/manager.py

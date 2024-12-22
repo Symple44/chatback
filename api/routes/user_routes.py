@@ -23,68 +23,23 @@ async def create_user(
     background_tasks: BackgroundTasks,
     components=Depends(get_components)
 ) -> Dict:
-    """
-    Crée un nouvel utilisateur.
-    """
     try:
-        metrics.increment_counter("user_creation_attempts")
-        
-        async with components.db.session_factory() as session:
-            # Vérification de l'unicité de l'email
-            result = await session.execute(
-                select(User).where(User.email == user_data.email)
-            )
-            if result.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=400,
-                    detail="Un utilisateur avec cet email existe déjà"
-                )
+        # Création de l'utilisateur
+        new_user = await components.db_manager.create_user(user_data)
+        if not new_user:
+            raise HTTPException(status_code=500, detail="Erreur lors de la création de l'utilisateur")
 
-            # Vérification de l'unicité du username
-            result = await session.execute(
-                select(User).where(User.username == user_data.username)
-            )
-            if result.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=400,
-                    detail="Ce nom d'utilisateur est déjà pris"
-                )
+        # Initialisation des ressources en arrière-plan
+        background_tasks.add_task(
+            components.db_manager.initialize_user_resources,
+            str(new_user["id"])
+        )
 
-            # Création de l'utilisateur
-            user = User(
-                id=uuid.uuid4(),
-                email=user_data.email,
-                username=user_data.username,
-                full_name=user_data.full_name,
-                metadata={
-                    **user_data.metadata,
-                    "created_from": "api",
-                    "created_at": datetime.utcnow().isoformat()
-                },
-                is_active=True
-            )
-            
-            session.add(user)
-            await session.commit()
-            await session.refresh(user)
-            
-            # Initialisation des ressources en arrière-plan
-            background_tasks.add_task(
-                initialize_user_resources,
-                components,
-                str(user.id)
-            )
-            
-            metrics.increment_counter("user_creations_success")
-            logger.info(f"Nouvel utilisateur créé: {user.id}")
-            
-            return user.to_dict()
-            
+        return new_user
+
     except HTTPException as he:
-        metrics.increment_counter("user_creation_validation_errors")
         raise he
     except Exception as e:
-        metrics.increment_counter("user_creation_errors")
         logger.error(f"Erreur lors de la création de l'utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -184,11 +139,9 @@ async def delete_user(
     permanent: bool = Query(False),
     components=Depends(get_components)
 ) -> Dict:
-    """
-    Supprime ou désactive un utilisateur.
-    """
+    """Supprime ou désactive un utilisateur."""
     try:
-        async with components.db.session_factory() as session:
+        async with DatabaseSession() as session:
             user = await session.execute(
                 select(User).where(User.id == user_id)
             )
@@ -199,7 +152,9 @@ async def delete_user(
 
             if permanent:
                 # Suppression permanente
-                await cleanup_user_data(session, user_id)
+                success = await components.db_manager.cleanup_user_data(user_id)
+                if not success:
+                    raise HTTPException(status_code=500, detail="Erreur lors de la suppression des données")
                 await session.delete(user)
                 message = "Utilisateur supprimé définitivement"
             else:
@@ -209,10 +164,11 @@ async def delete_user(
                 message = "Utilisateur désactivé"
 
             await session.commit()
-            
             logger.info(f"Utilisateur {user_id} {'supprimé' if permanent else 'désactivé'}")
             return {"message": message}
             
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Erreur lors de la suppression de l'utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -222,125 +178,12 @@ async def get_user_statistics(
     user_id: str,
     components=Depends(get_components)
 ) -> Dict:
-    """
-    Récupère les statistiques détaillées d'un utilisateur.
-    """
+    """Récupère les statistiques détaillées d'un utilisateur."""
     try:
-        async with components.db.session_factory() as session:
-            user = await session.execute(
-                select(User).where(User.id == user_id)
-            )
-            user = user.scalar_one_or_none()
-            
-            if not user:
-                raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
-
-            return await calculate_user_statistics(session, user)
-            
+        stats = await components.db_manager.calculate_user_statistics(user_id)
+        if not stats:
+            raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
+        return stats
     except Exception as e:
         logger.error(f"Erreur lors de la récupération des statistiques: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# Fonctions utilitaires
-
-async def initialize_user_resources(components, user_id: str):
-    """Initialise les ressources pour un nouvel utilisateur."""
-    try:
-        # Création du répertoire utilisateur
-        user_dir = f"data/users/{user_id}"
-        os.makedirs(user_dir, exist_ok=True)
-        
-        # Configuration des préférences par défaut
-        async with components.db.session_factory() as session:
-            user = await session.execute(
-                select(User).where(User.id == user_id)
-            )
-            user = user.scalar_one_or_none()
-            if user:
-                user.metadata.update({
-                    "preferences": {
-                        "theme": "light",
-                        "language": "fr",
-                        "notifications": True
-                    },
-                    "resources": {
-                        "user_dir": user_dir
-                    }
-                })
-                await session.commit()
-                
-        logger.info(f"Ressources initialisées pour l'utilisateur {user_id}")
-        
-    except Exception as e:
-        logger.error(f"Erreur lors de l'initialisation des ressources: {e}")
-
-async def calculate_user_statistics(session, user) -> Dict:
-    """Calcule les statistiques complètes d'un utilisateur."""
-    try:
-        # Statistiques des sessions
-        session_stats = await session.execute(
-            select(
-                func.count(ChatSession.id).label("total_sessions"),
-                func.count(
-                    ChatSession.id
-                ).filter(ChatSession.is_active == True).label("active_sessions")
-            ).where(ChatSession.user_id == user.id)
-        )
-        session_stats = session_stats.first()
-
-        # Statistiques des messages
-        message_stats = await session.execute(
-            select(
-                func.count(ChatHistory.id).label("total_messages"),
-                func.avg(ChatHistory.processing_time).label("avg_processing_time"),
-                func.avg(ChatHistory.confidence_score).label("avg_confidence")
-            ).where(ChatHistory.user_id == user.id)
-        )
-        message_stats = message_stats.first()
-
-        # Calcul des statistiques
-        return {
-            "sessions": {
-                "total": session_stats.total_sessions,
-                "active": session_stats.active_sessions
-            },
-            "messages": {
-                "total": message_stats.total_messages,
-                "avg_processing_time": round(message_stats.avg_processing_time, 3) if message_stats.avg_processing_time else 0,
-                "avg_confidence": round(message_stats.avg_confidence, 3) if message_stats.avg_confidence else 0
-            },
-            "account": {
-                "age_days": (datetime.utcnow() - user.created_at).days,
-                "last_login": user.last_login.isoformat() if user.last_login else None,
-                "is_active": user.is_active
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur lors du calcul des statistiques: {e}")
-        return {}
-
-async def cleanup_user_data(session, user_id: str):
-    """Nettoie toutes les données associées à un utilisateur."""
-    try:
-        # Suppression des sessions
-        await session.execute(
-            select(ChatSession).where(ChatSession.user_id == user_id)
-        )
-        
-        # Suppression de l'historique
-        await session.execute(
-            select(ChatHistory).where(ChatHistory.user_id == user_id)
-        )
-        
-        # Suppression du répertoire utilisateur
-        user_dir = f"data/users/{user_id}"
-        if os.path.exists(user_dir):
-            import shutil
-            shutil.rmtree(user_dir)
-            
-        logger.info(f"Données utilisateur nettoyées: {user_id}")
-        
-    except Exception as e:
-        logger.error(f"Erreur lors du nettoyage des données: {e}")
-        raise
