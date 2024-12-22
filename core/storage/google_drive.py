@@ -25,7 +25,7 @@ class MemoryCache(Cache):
         MemoryCache._CACHE[url] = content
 
 class GoogleDriveManager:
-     def __init__(self, credentials_path: str):
+    def __init__(self, credentials_path: str):
         """Initialize Google Drive manager with credentials."""
         try:
             if not os.path.exists(credentials_path):
