@@ -24,8 +24,6 @@ from core.config import settings
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# api/routes/chat_routes.py
-
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
@@ -51,8 +49,8 @@ async def process_chat_message(
                         detail="Utilisateur non trouvé"
                     )
 
-            # 2. Gestion de la session
-            chat_session = await components.db_manager.get_or_create_session(
+            # 2. Gestion de la session - Utilisation du session_manager au lieu de db_manager
+            chat_session = await components.session_manager.get_or_create_session(
                 request.session_id,
                 request.user_id,
                 request.metadata
@@ -60,7 +58,7 @@ async def process_chat_message(
 
             # 3. Préparation du contexte
             query_vector = await components.model.create_embedding(request.query)
-            
+
             # 4. Recherche de documents pertinents
             relevant_docs = await components.es_client.search_documents(
                 query=request.query,
@@ -79,16 +77,18 @@ async def process_chat_message(
 
             response_text = model_response.get("response", "") if isinstance(model_response, dict) else str(model_response)
 
-            # 6. Mise à jour du contexte
-            await components.db_manager.update_session_context(
+            # 6. Mise à jour du contexte de session
+            await components.session_manager.update_session_context(
                 chat_session.session_id,
-                request.query,
-                response_text,
                 {
-                    "application": request.application,
-                    "language": request.language,
-                    "confidence": model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
-                    "processing_time": (datetime.utcnow() - start_time).total_seconds()
+                    "query": request.query,
+                    "response": response_text,
+                    "metadata": {
+                        "application": request.application,
+                        "language": request.language,
+                        "confidence": model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
+                        "processing_time": (datetime.utcnow() - start_time).total_seconds()
+                    }
                 }
             )
 
