@@ -337,7 +337,7 @@ def format_chat_response(response_data: Dict, chat_session, start_time: datetime
     processing_time = (datetime.utcnow() - start_time).total_seconds()
     
     return ChatResponse(
-        response=response_data["response"], t
+        response=response_data["response"],
         session_id=chat_session.session_id,
         conversation_id=uuid.uuid4(),
         documents=[],  
