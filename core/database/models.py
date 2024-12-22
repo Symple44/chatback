@@ -140,7 +140,7 @@ class ChatHistory(Base):
     confidence_score = Column(Float, nullable=False, default=0.0)
     tokens_used = Column(Integer, nullable=False, default=0)
     processing_time = Column(Float, nullable=False, default=0.0)
-    cost = Column(Float, default=0.0)
+    #cost = Column(Float, default=0.0)
     chat_metadata  = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -173,7 +173,7 @@ class ChatHistory(Base):
             "confidence_score": self.confidence_score,
             "tokens_used": self.tokens_used,
             "processing_time": self.processing_time,
-            "cost": self.cost,
+            #"cost": self.cost,
             "metadata": self.chat_metadata,
             "created_at": self.created_at.isoformat()
         }
