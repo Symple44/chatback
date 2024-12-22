@@ -123,10 +123,19 @@ try:
                     self._components["pdf_processor"] = pdf_processor
                     logger.info("Processeurs de documents initialisés")
                     
+                    # 9. Synchronisation des documents
+                    
                     from core.storage.google_drive import GoogleDriveManager
                     self._components["drive_manager"] = GoogleDriveManager(
                         credentials_path=settings.GOOGLE_DRIVE_CREDENTIALS_PATH
                     )
+                    if not await self._components["drive_manager"].check_credentials():
+                        logger.error("Google Drive credentials invalid - sync will be disabled")
+                        self._components.pop("drive_manager")
+                    else:
+                        logger.info("Google Drive credentials valid")
+                        # Première synchronisation
+                        await self.sync_drive_documents()
                     logger.info("Google Drive manager initialisé")
 
                     self.initialized = True

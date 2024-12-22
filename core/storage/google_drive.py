@@ -67,6 +67,18 @@ class GoogleDriveManager:
         except Exception as e:
             logger.error(f"Drive initialization error: {e}")
             raise
+    
+    async def check_credentials(self) -> bool:
+        """Vérifie la validité des credentials."""
+        try:
+            if not self.credentials.valid:
+                self.credentials.refresh(Request())
+            # Test simple pour vérifier l'accès
+            files = self.service.files().list(pageSize=1).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Credentials check failed: {e}")
+            return False
 
     async def _get_file_metadata(self, file_id: str) -> Optional[Dict]:
         """
