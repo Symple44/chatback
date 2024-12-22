@@ -444,5 +444,6 @@ class DatabaseManager:
                 )
                 session.add(error_log)
                 await session.commit()
-            except Exception as e:
+        except Exception as e:
             logger.error(f"Erreur lors du log d'erreur: {e}")
+            
