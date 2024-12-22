@@ -424,7 +424,6 @@ class DatabaseManager:
             logger.error(f"Erreur recherche similarité: {e}")
             return []
                 
-    # core/database/manager.py
     async def log_error(
         self,
         error_type: str,
@@ -445,5 +444,5 @@ class DatabaseManager:
                 )
                 session.add(error_log)
                 await session.commit()
-        except Exception as e:
-        logger.error(f"Erreur lors du log d'erreur: {e}")
+            except Exception as e:
+            logger.error(f"Erreur lors du log d'erreur: {e}")
