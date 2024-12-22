@@ -16,7 +16,7 @@ import json
 import uuid
 from typing import Optional, Dict
 from core.utils.logger import get_logger
-from core.database.models import ChatSession
+from core.database.models import ChatSession, ChatHistory
 
 logger = get_logger("session_manager")
 
