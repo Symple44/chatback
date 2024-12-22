@@ -139,6 +139,9 @@ class Settings(BaseSettings):
         "rate_limit": "Vous avez atteint la limite de requêtes.",
         "maintenance": "Le système est en maintenance."
     }
+
+    # Template chat
+    CHAT_TEMPLATE: str = "System: {system}\nQuestion: {query}\nContexte: {context}\n\nRéponse:"
     class Config:
         env_file = ".env"
         case_sensitive = True
