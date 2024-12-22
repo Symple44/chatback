@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from googleapiclient.discovery_cache.base import Cache
+from google.auth.transport.requests import Request
 
 logger = logging.getLogger(__name__)
 
