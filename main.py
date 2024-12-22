@@ -88,28 +88,34 @@ try:
                     from core.database.manager import DatabaseManager
                     self._components["db_manager"] = DatabaseManager(self._components["db"])
                     logger.info("Database manager initialisé")
+                    
+                    # 4. Initialisation du SessionManager
+                    from core.session_manager import SessionManager
+                    self._components["session_manager"] = SessionManager(settings.DATABASE_URL)
+                    await self._components["session_manager"].initialize()
+                    logger.info("Session manager initialisé")
 
-                    # 4. Cache Redis
+                    # 5. Cache Redis
                     from core.cache import RedisCache
                     cache = RedisCache()
                     await cache.initialize()
                     self._components["cache"] = cache
                     logger.info("Cache Redis initialisé")
 
-                    # 5. Elasticsearch
+                    # 6. Elasticsearch
                     from core.vectorstore.search import ElasticsearchClient
                     es_client = ElasticsearchClient()
                     await es_client.initialize()
                     self._components["es_client"] = es_client
                     logger.info("Elasticsearch initialisé")
 
-                    # 6. Modèle LLM
+                    # 7. Modèle LLM
                     from core.llm.model import ModelInference
                     model = ModelInference()
                     self._components["model"] = model
                     logger.info("Modèle LLM initialisé")
 
-                    # 7. Processeurs de documents
+                    # 8. Processeurs de documents
                     from core.document_processing.extractor import DocumentExtractor
                     from core.document_processing.pdf_processor import PDFProcessor
                     doc_extractor = DocumentExtractor()
