@@ -50,27 +50,27 @@ router = APIRouter(prefix="/api")
 # Inclusion des sous-routers avec leurs préfixes
 router.include_router(
     chat_router,
-    prefix="/chat",
+    #prefix="/chat",
     tags=["chat"]
 )
 router.include_router(
     session_router,
-    prefix="/sessions",
+    #prefix="/sessions",
     tags=["sessions"]
 )
 router.include_router(
     user_router,
-    prefix="/users",
+    #prefix="/users",
     tags=["users"]
 )
 router.include_router(
     health_router,
-    prefix="/health",
+    #prefix="/health",
     tags=["health"]
 )
 router.include_router(
     history_router,
-    prefix="/history",
+    #prefix="/history",
     tags=["history"]
 )
 
