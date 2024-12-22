@@ -361,9 +361,9 @@ class SessionManager:
                 
                 return stats
             
-        except Exception as e:
-            logger.error(f"Erreur calcul statistiques session: {e}")
-            return {}
+            except Exception as e:
+                logger.error(f"Erreur calcul statistiques session: {e}")
+                return {}
 
     async def cleanup_old_sessions(self, days: int = 30, user_id: Optional[str] = None) -> int:
         """Nettoie les anciennes sessions inactives."""
