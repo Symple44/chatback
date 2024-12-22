@@ -78,7 +78,7 @@ router.include_router(
     tags=["history"]
 )
 router.include_router(
-    #documents_router,
+    documents_router,
     #prefix="/history",
     tags=["documents"]
 )
