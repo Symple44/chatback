@@ -50,7 +50,7 @@ class ElasticsearchClient:
          raise
 
    async def initialize(self):
-       """Configure les indices et templates."""
+      """Configure les indices et templates."""
       try:
          if not await self.es.ping():
             raise ConnectionError("Elasticsearch connection failed") 
