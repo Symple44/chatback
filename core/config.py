@@ -75,6 +75,7 @@ class Settings(BaseSettings):
    NUMEXPR_NUM_THREADS: int = int(os.getenv("NUMEXPR_NUM_THREADS", "16")) 
    OMP_NUM_THREADS: int = int(os.getenv("OMP_NUM_THREADS", "16"))
    PYTORCH_ENABLE_CUDA_KERNEL_AUTOTUNING: bool = True
+   USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
 
    # Model Limits
    MAX_INPUT_LENGTH: int = 2048
