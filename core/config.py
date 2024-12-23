@@ -62,6 +62,9 @@ class Settings(BaseSettings):
    # GPU & Performance (RTX 3090)
    CUDA_VISIBLE_DEVICES: str = os.getenv("CUDA_VISIBLE_DEVICES", "0")
    CUDA_LAUNCH_BLOCKING: int = int(os.getenv("CUDA_LAUNCH_BLOCKING", "0"))
+   CUDA_DEVICE: int = int(os.getenv("CUDA_DEVICE", "0"))
+   CUDA_MEMORY_FRACTION: float = float(os.getenv("CUDA_MEMORY_FRACTION", "0.8"))
+   CUDA_ALLOW_GROWTH: bool = os.getenv("CUDA_ALLOW_GROWTH", "true").lower() == "true"
    TF_FORCE_GPU_ALLOW_GROWTH: bool = os.getenv("TF_FORCE_GPU_ALLOW_GROWTH", "true").lower() == "true"
    PYTORCH_CUDA_ALLOC_CONF: str = os.getenv("PYTORCH_CUDA_ALLOC_CONF")
    USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
@@ -70,6 +73,7 @@ class Settings(BaseSettings):
    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
    USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
    MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "20480"))
+   MODEL_PARALLEL_SIZE: int = int(os.getenv("MODEL_PARALLEL_SIZE", "1"))
    MAX_PARALLEL_PROCESSES: int = int(os.getenv("MAX_PARALLEL_PROCESSES", "4"))
    MKL_NUM_THREADS: int = int(os.getenv("MKL_NUM_THREADS", "16"))
    NUMEXPR_NUM_THREADS: int = int(os.getenv("NUMEXPR_NUM_THREADS", "16")) 
