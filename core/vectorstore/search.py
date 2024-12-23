@@ -1,6 +1,6 @@
 # core/vectorstore/search.py
 from elasticsearch import Elasticsearch, AsyncElasticsearch
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import logging
 import ssl
 import os
