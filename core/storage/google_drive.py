@@ -29,59 +29,117 @@ class MemoryCache(Cache):
 class GoogleDriveManager:
     def __init__(self, credentials_path: str):
         """Initialize Google Drive manager with credentials."""
+        self.credentials_path = credentials_path
+        self.credentials = None
+        self.service = None
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.semaphore = asyncio.Semaphore(4)
+        self.max_retries = 3
+        self.retry_delay = 1.0
+        
+        logger.info(f"GoogleDriveManager initialisé avec {credentials_path}")
+
+    async def initialize(self) -> bool:
+        """
+        Initialize credentials and service with proper error handling.
+        Returns:
+            bool: True if initialization successful
+        """
         try:
-            if not os.path.exists(credentials_path):
-                raise FileNotFoundError(f"Credentials file not found: {credentials_path}")
+            if not os.path.exists(self.credentials_path):
+                logger.error(f"Credentials file not found: {self.credentials_path}")
+                return False
 
-            # Vérifier que le fichier est lisible
-            with open(credentials_path, 'r') as f:
-                creds_content = json.load(f)
-                required_fields = ['client_email', 'private_key', 'project_id']
-                if not all(field in creds_content for field in required_fields):
-                    raise ValueError("Invalid credentials file format")
+            # Check file permissions
+            if not os.access(self.credentials_path, os.R_OK):
+                logger.error(f"Cannot read credentials file: {self.credentials_path}")
+                return False
 
-            # Création des credentials avec vérification explicite
-            self.credentials = ServiceAccountCredentials.from_service_account_file(
-                credentials_path,
-                scopes=['https://www.googleapis.com/auth/drive.readonly']
-            )
+            # Validate JSON structure
+            try:
+                with open(self.credentials_path, 'r') as f:
+                    creds_content = json.load(f)
+                    required_fields = ['client_email', 'private_key', 'project_id']
+                    if not all(field in creds_content for field in required_fields):
+                        logger.error("Invalid credentials file format")
+                        return False
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in credentials file: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error reading credentials: {e}")
+                return False
 
-            # Test de validité des credentials
-            if not self.credentials.valid:
-                self.credentials.refresh(Request())
+            # Create credentials with explicit scopes
+            try:
+                self.credentials = ServiceAccountCredentials.from_service_account_file(
+                    self.credentials_path,
+                    scopes=['https://www.googleapis.com/auth/drive.readonly']
+                )
+            except Exception as e:
+                logger.error(f"Error creating credentials: {e}")
+                return False
 
-            # Création du service
-            self.service = build(
-                'drive', 
-                'v3', 
-                credentials=self.credentials,
-                cache=MemoryCache()
-            )
+            # Test credentials validity
+            try:
+                if not self.credentials.valid:
+                    self.credentials.refresh(Request())
+            except Exception as e:
+                logger.error(f"Error refreshing credentials: {e}")
+                return False
 
-            logger.info("Google Drive manager initialized successfully")
-            
-        except FileNotFoundError as e:
-            logger.error(f"Credentials file error: {e}")
-            raise
-        except ValueError as e:
-            logger.error(f"Invalid credentials format: {e}")
-            raise
+            # Create service with retry
+            for attempt in range(self.max_retries):
+                try:
+                    self.service = build(
+                        'drive', 
+                        'v3', 
+                        credentials=self.credentials,
+                        cache=MemoryCache()
+                    )
+                    # Test service with simple request
+                    self.service.files().list(pageSize=1).execute()
+                    break
+                except Exception as e:
+                    if attempt == self.max_retries - 1:
+                        logger.error(f"Failed to create Drive service after {self.max_retries} attempts")
+                        return False
+                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+
+            logger.info("GoogleDriveManager initialized successfully")
+            return True
+
         except Exception as e:
-            logger.error(f"Drive initialization error: {e}")
-            raise
-    
+            logger.error(f"Unexpected error during initialization: {e}")
+            return False
+
     async def check_credentials(self) -> bool:
         """Vérifie la validité des credentials."""
+        if not self.service:
+            return False
+            
         try:
-            if not self.credentials.valid:
-                self.credentials.refresh(Request())
-            # Test simple pour vérifier l'accès
-            files = self.service.files().list(pageSize=1).execute()
-            return True
+            # Test simple request
+            files = await self._execute_with_retry(
+                self.service.files().list(pageSize=1).execute
+            )
+            return bool(files)
         except Exception as e:
             logger.error(f"Credentials check failed: {e}")
             return False
 
+    async def _execute_with_retry(self, func, max_retries: int = 3):
+        """Execute a function with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                return await asyncio.get_event_loop().run_in_executor(
+                    self.executor, 
+                    func
+                )
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(self.retry_delay * (2 ** attempt))
     async def _get_file_metadata(self, file_id: str) -> Optional[Dict]:
         """
         Récupère les métadonnées d'un fichier de Google Drive.
