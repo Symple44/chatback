@@ -207,9 +207,12 @@ try:
         async def sync_documents():
             while True:
                 try:
+                    logger.info("Début de la synchronisation des documents")
                     await components.sync_drive_documents()
+                    logger.info("Synchronisation des documents terminée")
                 except Exception as e:
                     logger.error(f"Erreur synchro documents: {e}")
+                logger.info(f"Attente de {settings.GOOGLE_DRIVE_SYNC_INTERVAL} secondes avant la prochaine synchronisation")
                 await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
 
         asyncio.create_task(sync_documents())
