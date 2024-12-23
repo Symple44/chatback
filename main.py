@@ -145,16 +145,16 @@ try:
                     logger.info("Initialisation des composants terminée avec succès")
 
                 except Exception as e:
-                logger.critical(f"Erreur critique lors de l'initialisation: {e}")
-                # Nettoyage sélectif des composants initialisés
-                for component in components_initialized:
-                    try:
-                        if hasattr(self._components[component], 'cleanup'):
-                            await self._components[component].cleanup()
-                        logger.info(f"Composant {component} nettoyé")
-                    except Exception as cleanup_error:
-                        logger.error(f"Erreur nettoyage {component}: {cleanup_error}")
-                raise
+                    logger.critical(f"Erreur critique lors de l'initialisation: {e}")
+                    # Nettoyage sélectif des composants initialisés
+                    for component in components_initialized:
+                        try:
+                            if hasattr(self._components[component], 'cleanup'):
+                                await self._components[component].cleanup()
+                            logger.info(f"Composant {component} nettoyé")
+                        except Exception as cleanup_error:
+                            logger.error(f"Erreur nettoyage {component}: {cleanup_error}")
+                    raise
             finally:
                 self._initializing = False
                     
