@@ -161,8 +161,6 @@ class GoogleDriveManager:
                         success = await self._download_file_with_retries(file['id'], file_path)
                         if success:
                             downloaded_files.add(file_path)
-                    else:
-                        logger.info(f"Le fichier {file['name']} est à jour")
 
             logger.info(f"Nombre de fichiers PDF trouvés: {len(downloaded_files)}")
             if not downloaded_files:
