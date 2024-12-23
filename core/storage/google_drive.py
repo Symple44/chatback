@@ -1,4 +1,4 @@
-# core/google_drive.py
+# core/storage/google_drive.py
 import os
 import asyncio
 from typing import List, Dict, Optional, Set
@@ -12,6 +12,7 @@ import json
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery_cache.base import Cache
 from google.auth.transport.requests import Request
 
@@ -42,17 +43,10 @@ class GoogleDriveManager:
     async def initialize(self) -> bool:
         """
         Initialize credentials and service with proper error handling.
-        Returns:
-            bool: True if initialization successful
         """
         try:
             if not os.path.exists(self.credentials_path):
                 logger.error(f"Credentials file not found: {self.credentials_path}")
-                return False
-
-            # Check file permissions
-            if not os.access(self.credentials_path, os.R_OK):
-                logger.error(f"Cannot read credentials file: {self.credentials_path}")
                 return False
 
             # Validate JSON structure
@@ -66,27 +60,16 @@ class GoogleDriveManager:
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON in credentials file: {e}")
                 return False
-            except Exception as e:
-                logger.error(f"Error reading credentials: {e}")
-                return False
 
-            # Create credentials with explicit scopes
-            try:
-                self.credentials = ServiceAccountCredentials.from_service_account_file(
-                    self.credentials_path,
-                    scopes=['https://www.googleapis.com/auth/drive.readonly']
-                )
-            except Exception as e:
-                logger.error(f"Error creating credentials: {e}")
-                return False
+            # Create credentials
+            self.credentials = ServiceAccountCredentials.from_service_account_file(
+                self.credentials_path,
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
 
             # Test credentials validity
-            try:
-                if not self.credentials.valid:
-                    self.credentials.refresh(Request())
-            except Exception as e:
-                logger.error(f"Error refreshing credentials: {e}")
-                return False
+            if not self.credentials.valid:
+                self.credentials.refresh(Request())
 
             # Create service with retry
             for attempt in range(self.max_retries):
@@ -97,39 +80,103 @@ class GoogleDriveManager:
                         credentials=self.credentials,
                         cache=MemoryCache()
                     )
-                    # Test service with simple request
+                    # Test service
                     self.service.files().list(pageSize=1).execute()
                     break
                 except Exception as e:
                     if attempt == self.max_retries - 1:
-                        logger.error(f"Failed to create Drive service after {self.max_retries} attempts")
-                        return False
+                        raise
                     await asyncio.sleep(self.retry_delay * (2 ** attempt))
 
             logger.info("GoogleDriveManager initialized successfully")
             return True
 
         except Exception as e:
-            logger.error(f"Unexpected error during initialization: {e}")
+            logger.error(f"Error during initialization: {e}")
             return False
 
-    async def check_credentials(self) -> bool:
-        """Vérifie la validité des credentials."""
-        if not self.service:
-            return False
-            
+    async def sync_drive_folder(self, folder_id: str, save_path: str = "documents") -> Set[str]:
+        """
+        Synchronise un dossier Google Drive avec le système de fichiers local.
+        Maintient la structure des dossiers d'applications.
+        """
+        logger.info(f"Démarrage de la synchronisation du dossier {folder_id}")
+        logger.info(f"Chemin de sauvegarde: {save_path}")
+        
+        downloaded_files = set()
+        
         try:
-            # Test simple request
-            files = await self._execute_with_retry(
-                self.service.files().list(pageSize=1).execute
-            )
-            return bool(files)
+            # 1. Récupérer tous les sous-dossiers (applications)
+            app_folders = await self.list_folders(folder_id)
+            logger.info(f"Nombre de dossiers d'applications trouvés: {len(app_folders)}")
+            
+            for app_folder in app_folders:
+                app_name = app_folder['name']
+                app_id = app_folder['id']
+                
+                logger.info(f"Traitement de l'application: {app_name}")
+                
+                # Créer le dossier de l'application en local
+                app_path = os.path.join(save_path, app_name)
+                os.makedirs(app_path, exist_ok=True)
+                
+                # 2. Récupérer les fichiers PDF dans le dossier de l'application
+                query = f"'{app_id}' in parents and mimeType='application/pdf'"
+                results = await self._execute_with_retry(
+                    lambda: self.service.files().list(
+                        q=query,
+                        fields="files(id, name, md5Checksum, modifiedTime, size)",
+                        pageSize=1000
+                    ).execute()
+                )
+                
+                files = results.get('files', [])
+                logger.info(f"Nombre de fichiers PDF trouvés dans {app_name}: {len(files)}")
+                
+                # 3. Télécharger les fichiers
+                for file in files:
+                    file_path = os.path.join(app_path, file['name'])
+                    should_download = False
+                    
+                    # Vérifier si le fichier existe localement
+                    if not os.path.exists(file_path):
+                        logger.info(f"Nouveau fichier à télécharger: {file['name']}")
+                        should_download = True
+                    else:
+                        # Vérifier le MD5 si disponible
+                        if 'md5Checksum' in file:
+                            local_md5 = await self._calculate_local_md5(file_path)
+                            if local_md5 != file['md5Checksum']:
+                                logger.info(f"Le fichier {file['name']} a été modifié (MD5 différent)")
+                                should_download = True
+                        else:
+                            # Si pas de MD5, vérifier la date de modification
+                            remote_time = datetime.fromisoformat(file['modifiedTime'].replace('Z', '+00:00'))
+                            local_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                            if remote_time > local_time:
+                                logger.info(f"Le fichier {file['name']} a été modifié (date plus récente)")
+                                should_download = True
+                    
+                    if should_download:
+                        success = await self._download_file_with_retries(file['id'], file_path)
+                        if success:
+                            downloaded_files.add(file_path)
+                    else:
+                        logger.info(f"Le fichier {file['name']} est à jour")
+
+            logger.info(f"Nombre de fichiers PDF trouvés: {len(downloaded_files)}")
+            if not downloaded_files:
+                logger.info("Aucun fichier PDF trouvé dans le dossier")
+            
+            return downloaded_files
+
         except Exception as e:
-            logger.error(f"Credentials check failed: {e}")
-            return False
+            logger.error(f"Erreur lors de la synchronisation: {e}")
+            return downloaded_files
 
     async def _execute_with_retry(self, func, max_retries: int = 3):
         """Execute a function with retry logic."""
+        last_error = None
         for attempt in range(max_retries):
             try:
                 return await asyncio.get_event_loop().run_in_executor(
@@ -137,175 +184,56 @@ class GoogleDriveManager:
                     func
                 )
             except Exception as e:
+                last_error = e
                 if attempt == max_retries - 1:
                     raise
                 await asyncio.sleep(self.retry_delay * (2 ** attempt))
-    async def _get_file_metadata(self, file_id: str) -> Optional[Dict]:
-        """
-        Récupère les métadonnées d'un fichier de Google Drive.
-        """
-        try:
-            logger.debug(f"Récupération des métadonnées pour le fichier {file_id}")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                self.executor,
-                lambda: self.service.files().get(
-                    fileId=file_id,
-                    fields="id, name, mimeType, modifiedTime, md5Checksum, size, parents"
-                ).execute()
-            )
-            logger.debug(f"Métadonnées récupérées: {result}")
-            return result
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des métadonnées pour {file_id}: {e}", exc_info=True)
-            return None
+        raise last_error
 
     async def _download_file_with_retries(self, file_id: str, file_path: str) -> bool:
         """
-        Télécharge un fichier depuis Google Drive avec un mécanisme de réessai en cas d'échec.
+        Télécharge un fichier depuis Google Drive avec mécanisme de retry.
         """
         async with self.semaphore:
-            retry_count = 0
-            while retry_count < self.max_retries:
+            for attempt in range(self.max_retries):
                 try:
-                    logger.info(f"Début du téléchargement de {file_path}")
                     request = self.service.files().get_media(fileId=file_id)
-                    file_handle = open(file_path, 'wb')
-                    downloader = MediaIoBaseDownload(file_handle, request, chunksize=5 * 1024 * 1024)
-
-                    loop = asyncio.get_event_loop()
-                    done = False
-                    while not done:
-                        status, done = await loop.run_in_executor(
-                            self.executor,
-                            downloader.next_chunk
-                        )
-                        logger.info(f"Téléchargement {file_path}: {int(status.progress() * 100)}%")
-
-                    logger.info(f"Téléchargement terminé: {file_path}")
+                    
+                    # Assurer que le répertoire existe
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    
+                    with open(file_path, 'wb') as file_handle:
+                        downloader = MediaIoBaseDownload(file_handle, request, chunksize=1024*1024)
+                        done = False
+                        while not done:
+                            status, done = downloader.next_chunk()
+                            if status:
+                                logger.debug(f"Téléchargement {file_path}: {int(status.progress() * 100)}%")
+                    
+                    logger.info(f"Fichier téléchargé: {file_path}")
                     return True
-                except ssl.SSLError as e:
-                    logger.error(f"Erreur SSL lors du téléchargement de {file_path}: {e}", exc_info=True)
-                    retry_count += 1
-                    if retry_count < self.max_retries:
-                        delay = self.retry_delay * 2 ** retry_count
-                        logger.info(f"Nouvelle tentative dans {delay:.2f} secondes...")
-                        await asyncio.sleep(delay)
+                    
                 except Exception as e:
-                    logger.error(f"Erreur lors du téléchargement de {file_path}: {e}", exc_info=True)
-                    retry_count += 1
-                    if retry_count < self.max_retries:
-                        delay = self.retry_delay * 2 ** retry_count
-                        logger.info(f"Nouvelle tentative dans {delay:.2f} secondes...")
-                        await asyncio.sleep(delay)
-                finally:
-                    if 'file_handle' in locals():
-                        file_handle.close()
-
-            logger.error(f"Échec du téléchargement de {file_path} après {self.max_retries} tentatives")
-            return False
+                    logger.error(f"Erreur téléchargement {file_path}: {e}")
+                    if attempt == self.max_retries - 1:
+                        return False
+                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+        
+        return False
 
     async def _calculate_local_md5(self, file_path: str) -> str:
-        """
-        Calcule le MD5 d'un fichier local de manière asynchrone.
-        """
-        try:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                self._calculate_md5_sync,
-                file_path
-            )
-        except Exception as e:
-            logger.error(f"Erreur lors du calcul du MD5 pour {file_path}: {e}")
-            return ""
-
-    def _calculate_md5_sync(self, file_path: str) -> str:
-        """
-        Calcule le MD5 d'un fichier de manière synchrone.
-        """
+        """Calculate MD5 hash of a local file."""
         import hashlib
-        md5_hash = hashlib.md5()
-        with open(file_path, "rb") as f:
-            # Lecture par blocs pour gérer les gros fichiers
-            for chunk in iter(lambda: f.read(4096), b""):
-                md5_hash.update(chunk)
-        return md5_hash.hexdigest()
-
-    async def sync_drive_folder(self, folder_id: str, save_path: str = "documents") -> Set[str]:
-    """
-    Synchronise un dossier Google Drive avec le système de fichiers local.
-    """
-    logger.info(f"Démarrage de la synchronisation du dossier {folder_id}")
-    logger.info(f"Chemin de sauvegarde: {save_path}")
-    
-    downloaded_files = set()
-    
-    try:
-        # 1. Récupérer tous les sous-dossiers (applications)
-        app_folders = await self.list_folders(folder_id)
-        
-        for app_folder in app_folders:
-            app_name = app_folder['name']
-            app_id = app_folder['id']
-            
-            logger.info(f"Traitement de l'application: {app_name}")
-            
-            # Créer le dossier de l'application en local
-            app_path = os.path.join(save_path, app_name)
-            os.makedirs(app_path, exist_ok=True)
-            
-            # 2. Récupérer les fichiers dans le dossier de l'application
-            query = f"'{app_id}' in parents and mimeType='application/pdf'"
-            results = await self._execute_with_retry(
-                lambda: self.service.files().list(
-                    q=query,
-                    fields="files(id, name, md5Checksum, modifiedTime, size)",
-                    pageSize=1000
-                ).execute()
-            )
-            
-            files = results.get('files', [])
-            logger.info(f"Nombre de fichiers PDF trouvés dans {app_name}: {len(files)}")
-            
-            # 3. Télécharger les fichiers
-            for file in files:
-                file_path = os.path.join(app_path, file['name'])
-                should_download = False
-                
-                # Vérifier si le fichier existe localement
-                if not os.path.exists(file_path):
-                    logger.info(f"Nouveau fichier à télécharger: {file['name']}")
-                    should_download = True
-                else:
-                    # Vérifier le MD5 si disponible
-                    if 'md5Checksum' in file:
-                        local_md5 = await self._calculate_local_md5(file_path)
-                        if local_md5 != file['md5Checksum']:
-                            logger.info(f"Le fichier {file['name']} a été modifié (MD5 différent)")
-                            should_download = True
-                    else:
-                        # Si pas de MD5, vérifier la date de modification
-                        remote_time = datetime.fromisoformat(file['modifiedTime'].replace('Z', '+00:00'))
-                        local_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                        if remote_time > local_time:
-                            logger.info(f"Le fichier {file['name']} a été modifié (date plus récente)")
-                            should_download = True
-                
-                if should_download:
-                    success = await self._download_file_with_retries(file['id'], file_path)
-                    if success:
-                        downloaded_files.add(file_path)
-                else:
-                    logger.info(f"Le fichier {file['name']} est à jour")
-                    
-        logger.info(f"{len(downloaded_files)} fichiers téléchargés")
-        
-        return downloaded_files
-        
-    except Exception as e:
-        logger.error(f"Erreur lors de la synchronisation: {e}")
-        return downloaded_files
+        try:
+            md5_hash = hashlib.md5()
+            with open(file_path, "rb") as f:
+                # Lecture par blocs pour les gros fichiers
+                for chunk in iter(lambda: f.read(4096), b""):
+                    md5_hash.update(chunk)
+            return md5_hash.hexdigest()
+        except Exception as e:
+            logger.error(f"Erreur calcul MD5 pour {file_path}: {e}")
+            return ""
 
     async def list_folders(self, parent_folder_id: Optional[str] = None) -> List[Dict]:
         """
@@ -323,9 +251,7 @@ class GoogleDriveManager:
             
             logger.debug(f"Requête de recherche des dossiers: {final_query}")
             
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                self.executor,
+            results = await self._execute_with_retry(
                 lambda: self.service.files().list(
                     q=final_query,
                     fields="files(id, name, parents)",
@@ -336,13 +262,12 @@ class GoogleDriveManager:
             folders = results.get('files', [])
             logger.info(f"Nombre de dossiers trouvés: {len(folders)}")
             return folders
+
         except Exception as e:
-            logger.error(f"Erreur lors du listage des dossiers: {e}", exc_info=True)
+            logger.error(f"Erreur lors du listage des dossiers: {e}")
             return []
 
     def __del__(self):
-        """
-        Nettoyage des ressources lors de la destruction de l'objet.
-        """
+        """Cleanup resources."""
         if hasattr(self, 'executor'):
             self.executor.shutdown(wait=True)
