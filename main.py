@@ -3,6 +3,19 @@ import sys
 import os
 from pathlib import Path
 
+import torch
+import torch.backends.cuda
+import torch.backends.cudnn
+
+# Then other imports
+import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')  # Disable TF GPU usage
+
+# Configure CUDA settings
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
+
 # Ajout du répertoire parent au PYTHONPATH
 sys.path.append(str(Path(__file__).resolve().parent))
 
@@ -28,6 +41,7 @@ try:
     from core.utils.metrics import metrics
     from core.utils.system_optimizer import SystemOptimizer
     from core.storage.google_drive import GoogleDriveManager
+    
 
     # Configuration du logger
     logger = get_logger("main")
