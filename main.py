@@ -205,6 +205,7 @@ try:
     
     async def start_background_tasks(app: FastAPI):
         async def sync_documents():
+            await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
             while True:
                 try:
                     logger.info("Début de la synchronisation des documents")
