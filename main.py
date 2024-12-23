@@ -205,11 +205,15 @@ try:
     
     async def start_background_tasks(app: FastAPI):
         async def sync_documents():
+            await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
             while True:
                 try:
+                    logger.info("Début de la synchronisation des documents")
                     await components.sync_drive_documents()
+                    logger.info("Synchronisation des documents terminée")
                 except Exception as e:
                     logger.error(f"Erreur synchro documents: {e}")
+                logger.info(f"Attente de {settings.GOOGLE_DRIVE_SYNC_INTERVAL} secondes avant la prochaine synchronisation")
                 await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
 
         asyncio.create_task(sync_documents())
@@ -273,7 +277,7 @@ try:
         """Gestionnaire d'erreurs global."""
         error_id = str(uuid.uuid4())
         logger.error(f"Erreur non gérée [{error_id}]: {exc}", exc_info=True)
-        return CustomJSONResponse(  # Utilisez CustomJSONResponse ici aussi
+        return CustomJSONResponse(  
             status_code=500,
             content={
                 "error_id": error_id,
