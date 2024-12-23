@@ -232,41 +232,47 @@ class GoogleDriveManager:
                 md5_hash.update(chunk)
         return md5_hash.hexdigest()
 
-    async def sync_drive_folder(self, folder_id: str, save_path: str = "downloads") -> Set[str]:
-        """
-        Synchronise un dossier Google Drive avec le système de fichiers local.
-        Ne télécharge que les fichiers nouveaux ou modifiés.
-        """
-        logger.info(f"Démarrage de la synchronisation du dossier {folder_id}")
-        logger.info(f"Chemin de sauvegarde: {save_path}")
+    async def sync_drive_folder(self, folder_id: str, save_path: str = "documents") -> Set[str]:
+    """
+    Synchronise un dossier Google Drive avec le système de fichiers local.
+    """
+    logger.info(f"Démarrage de la synchronisation du dossier {folder_id}")
+    logger.info(f"Chemin de sauvegarde: {save_path}")
+    
+    downloaded_files = set()
+    
+    try:
+        # 1. Récupérer tous les sous-dossiers (applications)
+        app_folders = await self.list_folders(folder_id)
         
-        downloaded_files = set()
-        os.makedirs(save_path, exist_ok=True)
-
-        try:
-            # Récupérer la liste des fichiers dans Drive
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                self.executor,
+        for app_folder in app_folders:
+            app_name = app_folder['name']
+            app_id = app_folder['id']
+            
+            logger.info(f"Traitement de l'application: {app_name}")
+            
+            # Créer le dossier de l'application en local
+            app_path = os.path.join(save_path, app_name)
+            os.makedirs(app_path, exist_ok=True)
+            
+            # 2. Récupérer les fichiers dans le dossier de l'application
+            query = f"'{app_id}' in parents and mimeType='application/pdf'"
+            results = await self._execute_with_retry(
                 lambda: self.service.files().list(
-                    q=f"'{folder_id}' in parents and mimeType='application/pdf'",
+                    q=query,
                     fields="files(id, name, md5Checksum, modifiedTime, size)",
                     pageSize=1000
                 ).execute()
             )
-
+            
             files = results.get('files', [])
-            logger.info(f"Nombre de fichiers PDF trouvés: {len(files)}")
-
-            if not files:
-                logger.info("Aucun fichier PDF trouvé dans le dossier")
-                return downloaded_files
-
-            # Vérification des fichiers existants
+            logger.info(f"Nombre de fichiers PDF trouvés dans {app_name}: {len(files)}")
+            
+            # 3. Télécharger les fichiers
             for file in files:
-                file_path = os.path.join(save_path, file['name'])
+                file_path = os.path.join(app_path, file['name'])
                 should_download = False
-
+                
                 # Vérifier si le fichier existe localement
                 if not os.path.exists(file_path):
                     logger.info(f"Nouveau fichier à télécharger: {file['name']}")
@@ -285,19 +291,20 @@ class GoogleDriveManager:
                         if remote_time > local_time:
                             logger.info(f"Le fichier {file['name']} a été modifié (date plus récente)")
                             should_download = True
-
+                
                 if should_download:
                     success = await self._download_file_with_retries(file['id'], file_path)
                     if success:
                         downloaded_files.add(file_path)
                 else:
-                    logger.info(f"Le fichier {file['name']} est à jour, pas de téléchargement nécessaire")
-
-            logger.info(f"{len(downloaded_files)} fichiers téléchargés sur {len(files)} fichiers trouvés")
-
-        except Exception as e:
-            logger.error(f"Erreur lors de la synchronisation du dossier {folder_id}: {e}", exc_info=True)
+                    logger.info(f"Le fichier {file['name']} est à jour")
+                    
+        logger.info(f"{len(downloaded_files)} fichiers téléchargés")
         
+        return downloaded_files
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la synchronisation: {e}")
         return downloaded_files
 
     async def list_folders(self, parent_folder_id: Optional[str] = None) -> List[Dict]:
