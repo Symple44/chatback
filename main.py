@@ -27,6 +27,7 @@ try:
     from core.utils.logger import get_logger, logger_manager
     from core.utils.metrics import metrics
     from core.utils.system_optimizer import SystemOptimizer
+    from core.storage.google_drive import GoogleDriveManager
 
     # Configuration du logger
     logger = get_logger("main")
