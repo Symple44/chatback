@@ -155,8 +155,8 @@ try:
                         except Exception as cleanup_error:
                             logger.error(f"Erreur nettoyage {component}: {cleanup_error}")
                     raise
-            finally:
-                self._initializing = False
+                finally:
+                    self._initializing = False
                     
         async def sync_drive_documents(self):
             """Synchronise les documents depuis Google Drive."""
