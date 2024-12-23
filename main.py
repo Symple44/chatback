@@ -277,7 +277,7 @@ try:
         """Gestionnaire d'erreurs global."""
         error_id = str(uuid.uuid4())
         logger.error(f"Erreur non gérée [{error_id}]: {exc}", exc_info=True)
-        return CustomJSONResponse(  # Utilisez CustomJSONResponse ici aussi
+        return CustomJSONResponse(  
             status_code=500,
             content={
                 "error_id": error_id,
