@@ -3,6 +3,14 @@ import sys
 import os
 from pathlib import Path
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TF warnings
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # Disable oneDNN custom ops
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["XLA_FLAGS"] = "--xla_gpu_cuda_data_dir=/usr/local/cuda"
+
+# Disable TF GPU usage since we're using PyTorch
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # for TensorFlow
+
 import torch
 import torch.backends.cuda
 import torch.backends.cudnn
