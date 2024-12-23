@@ -74,6 +74,7 @@ try:
 
                 logger.info("Début de l'initialisation des composants")
                 self._initializing = True
+                components_initialized = []
 
                 try:
                     # 1. Optimisation système
@@ -123,30 +124,39 @@ try:
                     self._components["pdf_processor"] = pdf_processor
                     logger.info("Processeurs de documents initialisés")
                     
-                    # 9. Synchronisation des documents
-                    
-                    from core.storage.google_drive import GoogleDriveManager
-                    self._components["drive_manager"] = GoogleDriveManager(
-                        credentials_path=settings.GOOGLE_DRIVE_CREDENTIALS_PATH
-                    )
-                    if not await self._components["drive_manager"].check_credentials():
-                        logger.error("Google Drive credentials invalid - sync will be disabled")
-                        self._components.pop("drive_manager")
+                     # 9. Google Drive Manager
+                    # Configuration plus résiliente de Google Drive
+                    if os.path.exists(settings.GOOGLE_DRIVE_CREDENTIALS_PATH):
+                        drive_manager = GoogleDriveManager(
+                            credentials_path=settings.GOOGLE_DRIVE_CREDENTIALS_PATH
+                        )
+                        if await drive_manager.initialize():
+                            self._components["drive_manager"] = drive_manager
+                            components_initialized.append("drive_manager")
+                            # Première synchronisation seulement si l'initialisation a réussi
+                            await self.sync_drive_documents()
+                            logger.info("Google Drive manager initialisé avec succès")
+                        else:
+                            logger.warning("Google Drive manager non initialisé - sync désactivée")
                     else:
-                        logger.info("Google Drive credentials valid")
-                        # Première synchronisation
-                        await self.sync_drive_documents()
-                    logger.info("Google Drive manager initialisé")
-
+                        logger.warning(f"Fichier credentials Google Drive non trouvé: {settings.GOOGLE_DRIVE_CREDENTIALS_PATH}")
+    
                     self.initialized = True
                     logger.info("Initialisation des composants terminée avec succès")
 
                 except Exception as e:
-                    logger.critical(f"Erreur critique lors de l'initialisation: {e}")
-                    await self.cleanup()
-                    raise
-                finally:
-                    self._initializing = False
+                logger.critical(f"Erreur critique lors de l'initialisation: {e}")
+                # Nettoyage sélectif des composants initialisés
+                for component in components_initialized:
+                    try:
+                        if hasattr(self._components[component], 'cleanup'):
+                            await self._components[component].cleanup()
+                        logger.info(f"Composant {component} nettoyé")
+                    except Exception as cleanup_error:
+                        logger.error(f"Erreur nettoyage {component}: {cleanup_error}")
+                raise
+            finally:
+                self._initializing = False
                     
         async def sync_drive_documents(self):
             """Synchronise les documents depuis Google Drive."""
