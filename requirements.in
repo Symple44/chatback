@@ -43,6 +43,7 @@ tokenizers
 accelerate
 optimum
 safetensors
+tf-keras
 
 # Recherche vectorielle
 faiss-cpu
