@@ -42,7 +42,7 @@ class Settings(BaseSettings):
    ELASTICSEARCH_CLIENT_KEY: Optional[str] = os.getenv("ELASTICSEARCH_CLIENT_KEY")
    ELASTICSEARCH_INDEX_PREFIX: str = "chat"
    ELASTICSEARCH_EMBEDDING_DIM: int = 384
-   ELASTICSEARCH_VERIFY_CERT: bool = True
+   #ELASTICSEARCH_VERIFY_CERT: bool = True
 
    # Paths
    BASE_DIR: Path = Path(__file__).resolve().parent.parent
