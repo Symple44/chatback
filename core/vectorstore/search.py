@@ -71,10 +71,9 @@ class ElasticsearchClient:
                raise FileNotFoundError(f"Client cert non trouvé: {settings.ELASTICSEARCH_CLIENT_CERT}")
 
    async def _setup_templates(self):
-       """Configure les templates d'index."""
-       document_template = {
-           "index_patterns": [f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents*"],
-           "settings": {
+      document_template = {
+         "template": {  # Wrapper requis
+            "settings": {
                "number_of_shards": 2,
                "number_of_replicas": 1,
                "refresh_interval": "1s",
@@ -91,7 +90,7 @@ class ElasticsearchClient:
            "mappings": {
                "properties": {
                    "title": {
-                       "type": "text",
+                       "type": "text", 
                        "analyzer": "content_analyzer",
                        "fields": {"keyword": {"type": "keyword"}}
                    },
@@ -100,18 +99,20 @@ class ElasticsearchClient:
                    "embedding": {
                        "type": "dense_vector",
                        "dims": self.embedding_dim,
-                       "index": True,
+                       "index": True,  
                        "similarity": "cosine"
                    },
                    "timestamp": {"type": "date"}
                }
            }
-       }
+       },
+       "index_patterns": [f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents*"]
+   }
 
-       await self.es.indices.put_index_template(
-           name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
-           body=document_template
-       )
+   await self.es.indices.put_index_template(
+       name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
+       body=document_template
+   )
 
    async def _setup_indices(self):
        """Crée les indices s'ils n'existent pas."""
