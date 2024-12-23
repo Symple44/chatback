@@ -64,6 +64,7 @@ class Settings(BaseSettings):
    CUDA_LAUNCH_BLOCKING: int = int(os.getenv("CUDA_LAUNCH_BLOCKING", "0"))
    TF_FORCE_GPU_ALLOW_GROWTH: bool = os.getenv("TF_FORCE_GPU_ALLOW_GROWTH", "true").lower() == "true"
    PYTORCH_CUDA_ALLOC_CONF: str = os.getenv("PYTORCH_CUDA_ALLOC_CONF")
+   USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
    GPU_MEMORY_FRACTION: float = float(os.getenv("GPU_MEMORY_FRACTION", "0.8"))
    MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
