@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import asyncio
 import os
-from ..core.storage.google_drive import GoogleDriveManager
-from ..core.config import settings
+from core.storage.google_drive import GoogleDriveManager
+from core.config import settings
 
 async def main():
     drive_manager = GoogleDriveManager(settings.GOOGLE_DRIVE_CREDENTIALS_PATH)
