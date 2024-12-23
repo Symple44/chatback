@@ -17,49 +17,50 @@ logger = get_logger(__name__)
 
 class ElasticsearchClient:
    def __init__(self):
-       """Initialise le client Elasticsearch."""
-       try:
+      """Initialise le client Elasticsearch."""
+      try:
            # Configuration SSL
-           ssl_context = {
-               'verify_certs': True if settings.ELASTICSEARCH_CA_CERT else False,
-               'ca_certs': settings.ELASTICSEARCH_CA_CERT or certifi.where(),
-               'client_cert': settings.ELASTICSEARCH_CLIENT_CERT,
-               'client_key': settings.ELASTICSEARCH_CLIENT_KEY
-           }
+         ssl_context = {
+             'verify_certs': True if settings.ELASTICSEARCH_CA_CERT else False,
+             'ca_certs': settings.ELASTICSEARCH_CA_CERT or certifi.where(),
+             'client_cert': settings.ELASTICSEARCH_CLIENT_CERT,
+             'client_key': settings.ELASTICSEARCH_CLIENT_KEY
+         }
 
-           # Configuration client
-           self.es = AsyncElasticsearch(
-               hosts=[settings.ELASTICSEARCH_HOST],
-               basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
-               **ssl_context,
-               retry_on_timeout=True,
-               max_retries=3,
-               timeout=30,
-               sniff_on_start=True,
-               sniff_timeout=5,
-               sniffer_timeout=60
-           )
+         # Configuration client
+         self.es = AsyncElasticsearch(
+             hosts=[settings.ELASTICSEARCH_HOST],
+             basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
+             **ssl_context,
+             retry_on_timeout=True, 
+             max_retries=3,
+             timeout=30,
+             sniff_on_start=False,  # Désactivé
+             sniff_on_node_failure=False
+         )
            
-           self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents"
-           self.vector_index = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_vectors"
-           self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
+         self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents"
+         self.vector_index = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_vectors"
+         self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
            
-           logger.info("Client Elasticsearch initialisé")
+         logger.info("Client Elasticsearch initialisé")
            
-       except Exception as e:
-           logger.error(f"Erreur initialisation Elasticsearch: {e}")
-           raise
+      except Exception as e:
+         logger.error(f"Erreur initialisation Elasticsearch: {e}")
+         raise
 
    async def initialize(self):
        """Configure les indices et templates."""
-       try:
-           await self._verify_ssl_certs()
-           await self._setup_templates()
-           await self._setup_indices()
-           logger.info("Indices et templates configurés")
-       except Exception as e:
-           logger.error(f"Erreur initialisation: {e}")
-           raise
+      try:
+         if not await self.es.ping():
+            raise ConnectionError("Elasticsearch connection failed") 
+         await self._verify_ssl_certs()
+         await self._setup_templates()
+         await self._setup_indices()
+         logger.info("Indices et templates configurés")
+      except Exception as e:
+         logger.error(f"Erreur initialisation: {e}")
+         raise
 
    async def _verify_ssl_certs(self):
        """Vérifie les certificats SSL."""
