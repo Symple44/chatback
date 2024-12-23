@@ -110,8 +110,8 @@ class ElasticsearchClient:
    }
 
    await self.es.indices.put_index_template(
-       name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
-       body=document_template
+      name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
+      body=document_template
    )
 
    async def _setup_indices(self):
