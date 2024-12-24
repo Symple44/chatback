@@ -57,6 +57,7 @@ from contextlib import asynccontextmanager
 import logging
 import uuid
 import json
+import shutil
 from typing import Dict, Optional
 
 from fastapi import FastAPI, WebSocket, HTTPException, Request
