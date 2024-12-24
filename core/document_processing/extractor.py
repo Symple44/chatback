@@ -337,9 +337,9 @@ class DocumentExtractor:
     async def cleanup(self):
         """Nettoie les ressources temporaires."""
         try:
-            # Suppression des fichiers temporaires
-            for file in self.temp_dir.glob("*"):
-                file.unlink()
-            logger.info("Nettoyage des ressources terminé")
-        except Exception as e:
-            logger.error(f"Erreur nettoyage ressources: {e}")
+            if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
+            self.temp_dir.mkdir(exist_ok=True)
+        logger.info("Ressources nettoyées avec succès")
+    except Exception as e:
+        logger.error(f"Erreur nettoyage ressources: {e}")
