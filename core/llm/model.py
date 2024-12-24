@@ -79,20 +79,22 @@ class ModelInference:
 
     def _setup_cuda_environment(self):
         """Configure l'environnement CUDA pour la RTX 3090."""
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
             # Optimisations spécifiques RTX 3090
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.enabled = True
             torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
             torch.backends.cudnn.allow_tf32 = True
             
             # Configuration mémoire GPU optimisée pour 24GB
-            torch.cuda.set_per_process_memory_fraction(0.95)  # Utilise 95% de la VRAM
+            torch.cuda.set_per_process_memory_fraction(settings.GPU_MEMORY_FRACTION)
+            torch.cuda.empty_cache()
             
-            # Paramètres CUDA supplémentaires
-            os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
-            os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6"  # Ampere architecture
+            os.environ.update({
+                "CUDA_DEVICE_ORDER": settings.CUDA_DEVICE_ORDER,
+                "CUDA_VISIBLE_DEVICES": settings.CUDA_VISIBLE_DEVICES,
+                "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF
+            })
 
     def _get_optimal_device(self) -> str:
         """Détermine le meilleur device disponible avec vérification détaillée."""
