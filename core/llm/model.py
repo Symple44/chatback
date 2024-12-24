@@ -174,8 +174,8 @@ class ModelInference:
     def _setup_generation_config(self):
         """Configure les paramètres de génération optimisés."""
         self.generation_config = GenerationConfig(
-            max_new_tokens=settings.MAX_NEW_TOKENS,
-            min_new_tokens=settings.MIN_NEW_TOKENS,
+            max_new_tokens=int(settings.MAX_NEW_TOKENS),
+            min_new_tokens=int(settings.MIN_NEW_TOKENS),
             do_sample=settings.DO_SAMPLE,
             temperature=settings.TEMPERATURE,
             top_p=settings.TOP_P,
