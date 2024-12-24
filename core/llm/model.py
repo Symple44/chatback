@@ -129,9 +129,9 @@ class ModelInference:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
             model_kwargs = {
-                "device_map": "auto",
-                "torch_dtype": torch.bfloat16,
-                "load_in_8bit": settings.USE_8BIT,
+                "device_map": "cuda:0",
+                "torch_dtype": torch.float16,
+                "use_flash_attention_2": True,
                 "trust_remote_code": True,
                 "max_memory": {0: "20GiB"},  # RTX 3090 optimisé
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
