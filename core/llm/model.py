@@ -129,17 +129,11 @@ class ModelInference:
             
             model_kwargs = {
                 "torch_dtype": torch.bfloat16,
-                "low_cpu_mem_usage": True,
-                "trust_remote_code": True
+                "load_in_8bit": settings.USE_8BIT,
+                "device_map": "cuda" if not settings.USE_CPU_ONLY else "cpu",
+                "trust_remote_code": True,
+                "max_memory": {0: f"{int(settings.GPU_MEMORY_FRACTION * 24)}GiB"}
             }
-
-            # Configuration spécifique pour GPU
-            if self.device == "cuda":
-                model_kwargs.update({
-                    "device_map": "auto",
-                    "max_memory": {0: "22GiB"},  # Réservé pour la RTX 3090
-                    "quantization_config": self.quantization_config if settings.USE_4BIT else None
-                })
             
             # Chargement avec retry et monitoring
             for attempt in range(3):
