@@ -25,6 +25,9 @@ def setup_environment():
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Désactive GPU pour TF
 
+    # Création du dossier pour le offloading si nécessaire
+    os.makedirs("offload_folder", exist_ok=True)
+
 # Setup initial
 setup_environment()
 
