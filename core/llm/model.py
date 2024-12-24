@@ -83,7 +83,6 @@ class ModelInference:
             # Configuration du modèle
             model_kwargs = {
                 "device_map": "auto",
-                "load_in_4bit": True,
                 "quantization_config": BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.bfloat16,
