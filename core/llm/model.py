@@ -178,13 +178,13 @@ class ModelInference:
             min_new_tokens=int(settings.MIN_NEW_TOKENS),
             do_sample=settings.DO_SAMPLE,
             temperature = max(float(settings.TEMPERATURE), 1e-6),
-            top_p=settings.TOP_P,
-            top_k=settings.TOP_K,
+            top_p=max(float(settings.TOP_P), 0.0),
+            top_k=max(int(settings.TOP_K), 1),
             num_beams=1,  # Optimisé pour la performance
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
-            repetition_penalty=1.1,
-            length_penalty=1.0,
+            repetition_penalty=max(float(settings.REPETITION_PENALTY), 1.0),
+            length_penalty=float(settings.LENGTH_PENALTY)
             #early_stopping=True
         )
 
