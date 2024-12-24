@@ -256,6 +256,7 @@ async def lifespan(app: FastAPI):
 async def periodic_sync():
     """Tâche périodique de synchronisation."""
     while True:
+        await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
         try:
             await components.sync_drive_documents()
         except Exception as e:
