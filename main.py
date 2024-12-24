@@ -6,14 +6,14 @@ from pathlib import Path
 def setup_environment():
     """Configure l'environnement avant l'import des dépendances."""
     # Configuration CUDA
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_DEVICE_ORDER"] = os.getenv("CUDA_DEVICE_ORDE","PCI_BUS_ID")
     os.environ["CUDA_VISIBLE_DEVICES"] = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    os.environ["CUDA_AUTO_TUNE"] = "1"
-    os.environ["TORCH_USE_CUDA_DSA"] = "1"
+    os.environ["CUDA_AUTO_TUNE"] = os.getenv("CUDA_AUTO_TUNE","1")
+    os.environ["TORCH_USE_CUDA_DSA"] = os.getenv("TORCH_USE_CUDA_DSA","1")
     
     # Configuration PyTorch
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:2048"
-    os.environ["TORCH_ALLOW_TF32_CUBLAS_OVERRIDE"] = "1"
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = os.getenv("PYTORCH_CUDA_ALLOC_CONF","max_split_size_mb:2048")
+    os.environ["TORCH_ALLOW_TF32_CUBLAS_OVERRIDE"] = os.getenv("TORCH_ALLOW_TF32_CUBLAS_OVERRIDE","1")
     
     # Optimisation CPU
     os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "1")
