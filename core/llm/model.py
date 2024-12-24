@@ -1,5 +1,6 @@
 # core/llm/model.py
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
+from transformers import BitsAndBytesConfig
 import torch
 from transformers import (
     AutoTokenizer, 
@@ -9,6 +10,7 @@ from transformers import (
 )
 import asyncio
 from datetime import datetime
+import time
 import gc
 import psutil
 from threading import Thread
@@ -67,9 +69,18 @@ class ModelInference:
             
             # Configuration du modèle
             model_kwargs = {
-                "torch_dtype": torch.float16 if settings.USE_4BIT else torch.float32,
+                "device_map": "auto",
+                "load_in_4bit": settings.USE_4BIT,  # Activation du 4-bit
+                "trust_remote_code": True,
+                "torch_dtype": torch.bfloat16,  # Utilisation de bfloat16
                 "low_cpu_mem_usage": True,
-                "device_map": "auto" if self.device == "cuda" else None
+                "max_memory": {0: f"{int(23 * 1024)}MB"},  # Limite par GPU RTX 3090
+                "quantization_config": BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4"
+                )
             }
             
             # Chargement avec retry
@@ -85,15 +96,17 @@ class ModelInference:
                         raise
                     logger.warning(f"Tentative {attempt + 1} échouée: {e}")
                     gc.collect()
-                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-                    
-            # Optimisations
-            if settings.USE_4BIT:
-                self.model = self.model.half()
-            
-            self.model.eval()  # Mode évaluation
-            if self.device != "cuda":
-                self.model = self.model.to(self.device)
+                    torch.cuda.empty_cache()
+                    time.sleep(30) 
+
+            # Optimisations post-chargement
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+
+            # Désactivation du gradient pour l'inférence
+            self.model.eval()  
+            for param in self.model.parameters():
+                param.requires_grad = False
             
             logger.info("Modèle chargé avec succès")
             
