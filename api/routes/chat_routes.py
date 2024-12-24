@@ -63,7 +63,7 @@ async def process_chat_message(
             relevant_docs = await components.es_client.search_documents(
                 query=request.query,
                 vector=query_vector,
-                metadata_filter=metadata_filter,
+                metadata_filter={"application": request.application} if request.application else None,
                 size=settings.MAX_RELEVANT_DOCS
             )
 
