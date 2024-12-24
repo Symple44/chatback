@@ -25,107 +25,167 @@ logger = get_logger("model")
 
 class ModelInference:
     def __init__(self):
-        """Initialise le modèle d'inférence."""
+        """Initialise le modèle d'inférence avec des optimisations matérielles."""
         try:
-            # Nettoyage initial de la mémoire
-            gc.collect()
-            torch.cuda.empty_cache()
+            # Force CUDA path et env vars avant tout
+            os.environ["CUDA_HOME"] = "/usr/local/cuda"
+            os.environ["PATH"] = f"{os.environ['PATH']}:/usr/local/cuda/bin"
             
-            self.device = "cpu" if settings.USE_CPU_ONLY else self._get_optimal_device()
+            # Nettoyage initial agressif
+            self._cleanup_memory()
+            
+            # Configuration CUDA optimisée pour RTX 3090
+            if not settings.USE_CPU_ONLY:
+                self._setup_cuda_environment()
+
+            self.device = self._get_optimal_device()
             logger.info(f"Utilisation du device: {self.device}")
-            logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-            
-            # Configuration de la mémoire GPU
+
             if torch.cuda.is_available():
-                torch.cuda.set_per_process_memory_fraction(float(settings.CUDA_MEMORY_FRACTION))
-                # Optimisations CUDA
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.benchmark = True
+                for i in range(torch.cuda.device_count()):
+                    logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+                    logger.info(f"Mémoire GPU {i}: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB")
+
+            # Configuration BitsAndBytes pour quantification 4-bit
+            self.quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True if settings.USE_4BIT else False,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True
+            ) if settings.USE_4BIT else None
 
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
             
+            # Initialisation séquentielle
             self._setup_model()
             self._setup_tokenizer()
-            
-            # Configuration de génération adaptée
-            self.generation_config = GenerationConfig(
-                max_new_tokens=settings.MAX_NEW_TOKENS,
-                min_new_tokens=settings.MIN_NEW_TOKENS,
-                do_sample=settings.DO_SAMPLE,
-                temperature=settings.TEMPERATURE,
-                top_p=settings.TOP_P,
-                top_k=settings.TOP_K,
-                num_beams=1,  # Réduit pour économiser la mémoire
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
+            self._setup_generation_config()
             
             logger.info("Modèle initialisé avec succès")
             
         except Exception as e:
             logger.error(f"Erreur initialisation modèle: {e}")
+            self._cleanup_memory()
             raise
 
-    def _get_optimal_device(self) -> str:
-        """Détermine le meilleur device disponible."""
+    def _cleanup_memory(self):
+        """Nettoyage agressif de la mémoire."""
+        gc.collect()
         if torch.cuda.is_available():
-            # Vérifier la mémoire GPU disponible
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory
-            if gpu_memory >= 4 * (1024**3):  # 4GB minimum
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+    def _setup_cuda_environment(self):
+        """Configure l'environnement CUDA pour la RTX 3090."""
+        if torch.cuda.is_available():
+            # Optimisations spécifiques RTX 3090
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.enabled = True
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.allow_tf32 = True
+            
+            # Configuration mémoire GPU optimisée pour 24GB
+            torch.cuda.set_per_process_memory_fraction(0.95)  # Utilise 95% de la VRAM
+            
+            # Paramètres CUDA supplémentaires
+            os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
+            os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6"  # Ampere architecture
+
+    def _get_optimal_device(self) -> str:
+        """Détermine le meilleur device disponible avec vérification détaillée."""
+        if settings.USE_CPU_ONLY:
+            return "cpu"
+
+        try:
+            if torch.cuda.is_available():
+                # Vérification détaillée de la GPU
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory
+                logger.info(f"Mémoire GPU totale détectée: {gpu_memory / 1e9:.2f} GB")
+                
+                # Vérifie si CUDA est réellement utilisable
+                test_tensor = torch.tensor([1.0], device="cuda")
+                del test_tensor
+                
                 return "cuda"
+        except Exception as e:
+            logger.warning(f"Erreur détection CUDA: {e}")
+        
         return "cpu"
 
     def _setup_model(self):
-        """Configure le modèle avec optimisations."""
+        """Configure le modèle avec gestion optimisée de la mémoire."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration du modèle
+            # Configuration adaptative selon la mémoire disponible
+            gpu_memory = None
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory
+            
             model_kwargs = {
-                "device_map": "auto",
                 "torch_dtype": torch.bfloat16,
                 "low_cpu_mem_usage": True,
-                # Gestion mémoire par GPU
-                "max_memory": {0: "22GiB"},  # Laisse ~2GB pour le système
-                "offload_folder": "offload_folder",  # Dossier pour décharger si nécessaire
                 "trust_remote_code": True
             }
+
+            # Configuration spécifique pour GPU
+            if self.device == "cuda":
+                model_kwargs.update({
+                    "device_map": "auto",
+                    "max_memory": {0: "22GiB"},  # Réservé pour la RTX 3090
+                    "quantization_config": self.quantization_config if settings.USE_4BIT else None
+                })
             
-            # Chargement avec retry
+            # Chargement avec retry et monitoring
             for attempt in range(3):
                 try:
+                    start_time = time.time()
                     self.model = AutoModelForCausalLM.from_pretrained(
                         settings.MODEL_NAME,
                         **model_kwargs
                     )
+                    
+                    load_time = time.time() - start_time
+                    logger.info(f"Modèle chargé en {load_time:.2f}s")
+                    
+                    if self.device == "cuda":
+                        memory_allocated = torch.cuda.memory_allocated() / 1e9
+                        logger.info(f"Mémoire GPU allouée: {memory_allocated:.2f}GB")
+                    
                     break
                 except Exception as e:
                     if attempt == 2:
                         raise
                     logger.warning(f"Tentative {attempt + 1} échouée: {e}")
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    time.sleep(30) 
+                    self._cleanup_memory()
+                    time.sleep(30)
 
             # Optimisations post-chargement
+            self.model.eval()
             if hasattr(self.model, "enable_input_require_grads"):
                 self.model.enable_input_require_grads()
-
-            # Désactivation du gradient pour l'inférence
-            self.model.eval()  
-            if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
-                # Optimisations CUDA supplémentaires
-                if hasattr(torch.cuda, 'empty_cache'):
-                    torch.cuda.empty_cache()
-                if hasattr(torch.cuda, 'max_memory_allocated'):
-                    logger.info(f"Mémoire GPU max allouée: {torch.cuda.max_memory_allocated()/1e9:.2f}GB")
-            
-            logger.info("Modèle chargé avec succès")
-            
+                
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             raise
+    def _setup_generation_config(self):
+        """Configure les paramètres de génération optimisés."""
+        self.generation_config = GenerationConfig(
+            max_new_tokens=settings.MAX_NEW_TOKENS,
+            min_new_tokens=settings.MIN_NEW_TOKENS,
+            do_sample=settings.DO_SAMPLE,
+            temperature=settings.TEMPERATURE,
+            top_p=settings.TOP_P,
+            top_k=settings.TOP_K,
+            num_beams=1,  # Optimisé pour la performance
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            repetition_penalty=1.1,
+            length_penalty=1.0,
+            early_stopping=True
+        )
 
     def _setup_tokenizer(self):
         """Configure le tokenizer."""
