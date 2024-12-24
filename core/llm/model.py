@@ -43,9 +43,6 @@ class ModelInference:
                 # Optimisations CUDA
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.benchmark = True
-
-            # Création du dossier pour le offloading si nécessaire
-            os.makedirs("offload_folder", exist_ok=True)
             
             self._setup_model()
             self._setup_tokenizer()
