@@ -159,7 +159,8 @@ async def stream_chat_response(
             relevant_docs = await components.es_client.search_documents(
                 query=query,
                 vector=query_vector,
-                size=settings.MAX_RELEVANT_DOCS
+                size=settings.MAX_RELEVANT_DOCS,
+                metadata_filter={"application": request.application} if request.application else None
             )
 
             # Streaming de la réponse
