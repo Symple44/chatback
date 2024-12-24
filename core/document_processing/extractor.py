@@ -1,7 +1,8 @@
 # core/document_processing/extractor.py
 from typing import List, Dict, Optional, Any, Tuple, Generator
 from dataclasses import dataclass
-import fitz  # PyMuPDF
+import fitz
+import shutil
 from pathlib import Path
 import os
 import io
@@ -333,6 +334,7 @@ class DocumentExtractor:
         except Exception as e:
             logger.error(f"Erreur calcul pertinence: {e}")
             return 0.0
+    
 
     async def cleanup(self):
         """Nettoie les ressources temporaires."""
