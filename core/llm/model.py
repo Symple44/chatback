@@ -185,7 +185,7 @@ class ModelInference:
             eos_token_id=self.tokenizer.eos_token_id,
             repetition_penalty=1.1,
             length_penalty=1.0,
-            early_stopping=True
+            #early_stopping=True
         )
 
     def _setup_tokenizer(self):
