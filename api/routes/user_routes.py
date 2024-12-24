@@ -173,6 +173,71 @@ async def delete_user(
         logger.error(f"Erreur lors de la suppression de l'utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/lookup")
+async def lookup_user(
+    username: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    components=Depends(get_components)
+) -> Dict:
+    """
+    Récupère l'ID d'un utilisateur à partir de son username ou email.
+    Au moins l'un des deux paramètres doit être fourni.
+    
+    Args:
+        username: Nom d'utilisateur
+        email: Adresse email
+        components: Composants de l'application
+    
+    Returns:
+        Dict contenant l'ID et les informations de base de l'utilisateur
+    """
+    try:
+        if not username and not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Au moins un paramètre de recherche (username ou email) doit être fourni"
+            )
+
+        async with components.db.session_factory() as session:
+            query = select(User)
+            
+            # Construction de la condition de recherche
+            conditions = []
+            if username:
+                conditions.append(User.username == username)
+            if email:
+                conditions.append(User.email == email)
+            
+            # Combinaison des conditions avec OR si les deux paramètres sont fournis
+            query = query.where(or_(*conditions))
+            
+            result = await session.execute(query)
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Utilisateur non trouvé"
+                )
+            
+            # Retourne les informations de base
+            return {
+                "id": str(user.id),
+                "username": user.username,
+                "email": user.email,
+                "is_active": user.is_active,
+                "created_at": user.created_at.isoformat()
+            }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Erreur lors de la recherche de l'utilisateur: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur lors de la recherche de l'utilisateur"
+        )
+
 @router.get("/{user_id}/stats")
 async def get_user_statistics(
     user_id: str,
