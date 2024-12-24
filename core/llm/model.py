@@ -83,17 +83,12 @@ class ModelInference:
             # Configuration du modèle
             model_kwargs = {
                 "device_map": "auto",
-                "quantization_config": BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4",
-                ),
                 "torch_dtype": torch.bfloat16,
                 "low_cpu_mem_usage": True,
                 # Gestion mémoire par GPU
                 "max_memory": {0: "22GiB"},  # Laisse ~2GB pour le système
                 "offload_folder": "offload_folder",  # Dossier pour décharger si nécessaire
+                "trust_remote_code": True
             }
             
             # Chargement avec retry
