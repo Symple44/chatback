@@ -250,7 +250,7 @@ class ElasticsearchClient:
                       "script": {
                           "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
                           "params": {"query_vector": vector}
-                    
+                      }  
                   }
               }]
 
