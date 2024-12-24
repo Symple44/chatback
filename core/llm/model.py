@@ -177,7 +177,7 @@ class ModelInference:
             max_new_tokens=int(settings.MAX_NEW_TOKENS),
             min_new_tokens=int(settings.MIN_NEW_TOKENS),
             do_sample=settings.DO_SAMPLE,
-            temperature=settings.TEMPERATURE,
+            temperature = max(float(settings.TEMPERATURE), 1e-6),
             top_p=settings.TOP_P,
             top_k=settings.TOP_K,
             num_beams=1,  # Optimisé pour la performance
