@@ -33,16 +33,17 @@ class ModelInference:
             
             self.device = "cpu" if settings.USE_CPU_ONLY else self._get_optimal_device()
             logger.info(f"Utilisation du device: {self.device}")
+            logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
             
-            self.executor = ThreadPoolExecutor(max_workers=2)
-            self.embeddings = EmbeddingsManager()
-
             # Configuration de la mémoire GPU
             if torch.cuda.is_available():
                 torch.cuda.set_per_process_memory_fraction(float(settings.CUDA_MEMORY_FRACTION))
                 # Optimisations CUDA
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.benchmark = True
+
+            self.executor = ThreadPoolExecutor(max_workers=2)
+            self.embeddings = EmbeddingsManager()
             
             self._setup_model()
             self._setup_tokenizer()
