@@ -296,6 +296,25 @@ async def global_exception_handler(request: Request, exc: Exception):
             "timestamp": datetime.utcnow().isoformat()
         }
     )
+    
+async def shutdown():
+    """Nettoie proprement les ressources lors de l'arrêt."""
+    try:
+        logger.info("Arrêt de l'application...")
+        
+        # Nettoyage des composants
+        await components.cleanup()
+        
+        # Nettoyage des répertoires temporaires
+        temp_dirs = ["temp", "temp/pdf", "offload_folder"]
+        for dir_path in temp_dirs:
+            if os.path.exists(dir_path):
+                shutil.rmtree(dir_path)
+                logger.info(f"Répertoire {dir_path} nettoyé")
+        
+        logger.info("Application arrêtée proprement")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'arrêt: {e}")
 
 if __name__ == "__main__":
     try:
@@ -318,6 +337,7 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         logger.info("Arrêt manuel détecté")
+        asyncio.run(shutdown())
     except Exception as e:
         logger.critical(f"Erreur fatale: {e}")
         sys.exit(1)
