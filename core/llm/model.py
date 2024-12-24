@@ -40,12 +40,28 @@ class ModelInference:
             # Configuration de la mémoire GPU
             if torch.cuda.is_available():
                 torch.cuda.set_per_process_memory_fraction(float(settings.CUDA_MEMORY_FRACTION))
+                # Optimisations CUDA
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.benchmark = True
+
+            # Création du dossier pour le offloading si nécessaire
+            os.makedirs("offload_folder", exist_ok=True)
             
             self._setup_model()
             self._setup_tokenizer()
             
-            # Configuration de génération par défaut
-            self.generation_config = GenerationConfig(**settings.generation_config)
+            # Configuration de génération adaptée
+            self.generation_config = GenerationConfig(
+                max_new_tokens=settings.MAX_NEW_TOKENS,
+                min_new_tokens=settings.MIN_NEW_TOKENS,
+                do_sample=settings.DO_SAMPLE,
+                temperature=settings.TEMPERATURE,
+                top_p=settings.TOP_P,
+                top_k=settings.TOP_K,
+                num_beams=1,  # Réduit pour économiser la mémoire
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
             
             logger.info("Modèle initialisé avec succès")
             
@@ -70,17 +86,18 @@ class ModelInference:
             # Configuration du modèle
             model_kwargs = {
                 "device_map": "auto",
-                "load_in_4bit": settings.USE_4BIT,  # Activation du 4-bit
-                "trust_remote_code": True,
-                "torch_dtype": torch.bfloat16,  # Utilisation de bfloat16
-                "low_cpu_mem_usage": True,
-                "max_memory": {0: f"{int(23 * 1024)}MB"},  # Limite par GPU RTX 3090
+                "load_in_4bit": True,
                 "quantization_config": BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.bfloat16,
                     bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
-                )
+                    bnb_4bit_quant_type="nf4",
+                ),
+                "torch_dtype": torch.bfloat16,
+                "low_cpu_mem_usage": True,
+                # Gestion mémoire par GPU
+                "max_memory": {0: "22GiB"},  # Laisse ~2GB pour le système
+                "offload_folder": "offload_folder",  # Dossier pour décharger si nécessaire
             }
             
             # Chargement avec retry
@@ -105,8 +122,12 @@ class ModelInference:
 
             # Désactivation du gradient pour l'inférence
             self.model.eval()  
-            for param in self.model.parameters():
-                param.requires_grad = False
+            if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
+                # Optimisations CUDA supplémentaires
+                if hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
+                if hasattr(torch.cuda, 'max_memory_allocated'):
+                    logger.info(f"Mémoire GPU max allouée: {torch.cuda.max_memory_allocated()/1e9:.2f}GB")
             
             logger.info("Modèle chargé avec succès")
             
