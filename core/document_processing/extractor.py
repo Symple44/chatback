@@ -340,8 +340,8 @@ class DocumentExtractor:
         """Nettoie les ressources temporaires."""
         try:
             if self.temp_dir.exists():
-            shutil.rmtree(self.temp_dir)
-            self.temp_dir.mkdir(exist_ok=True)
-        logger.info("Ressources nettoyées avec succès")
-    except Exception as e:
-        logger.error(f"Erreur nettoyage ressources: {e}")
+                shutil.rmtree(self.temp_dir)
+                self.temp_dir.mkdir(exist_ok=True)
+            logger.info("Ressources nettoyées avec succès")
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources: {e}")
