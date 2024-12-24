@@ -27,25 +27,25 @@ class ModelInference:
     def __init__(self):
         """Initialise le modèle d'inférence."""
         try:
+            # Nettoyage initial de la mémoire
+            gc.collect()
+            torch.cuda.empty_cache()
+            
             self.device = "cpu" if settings.USE_CPU_ONLY else self._get_optimal_device()
             logger.info(f"Utilisation du device: {self.device}")
             
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
+
+            # Configuration de la mémoire GPU
+            if torch.cuda.is_available():
+                torch.cuda.set_per_process_memory_fraction(float(settings.CUDA_MEMORY_FRACTION))
+            
             self._setup_model()
             self._setup_tokenizer()
             
             # Configuration de génération par défaut
-            self.generation_config = GenerationConfig(
-                max_new_tokens=settings.MAX_NEW_TOKENS,
-                min_new_tokens=settings.MIN_NEW_TOKENS,
-                do_sample=settings.DO_SAMPLE,
-                temperature=settings.TEMPERATURE,
-                top_p=settings.TOP_P,
-                top_k=settings.TOP_K,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
+            self.generation_config = GenerationConfig(**settings.generation_config)
             
             logger.info("Modèle initialisé avec succès")
             
