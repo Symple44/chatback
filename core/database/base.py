@@ -25,8 +25,8 @@ class DatabaseSessionManager:
         self.engine = create_async_engine(
             database_url,
             echo=settings.DEBUG,
-            pool_size=settings.int(DB_POOL_SIZE),
-            max_overflow=int(settings.DB_MAX_OVERFLOW),
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_MAX_OVERFLOW,
             pool_timeout=30,
             pool_recycle=1800,
             pool_pre_ping=True,
