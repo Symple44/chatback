@@ -57,6 +57,7 @@ class ChatRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "user_id": "123e4567-e89b-12d3-a456-426614174000",
+                "session_id": "987fcdeb-51d3-a456-426614174000",
                 "query": "Comment puis-je vous aider?",
                 "language": "fr"
             }
