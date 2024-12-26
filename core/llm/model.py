@@ -89,20 +89,41 @@ class ModelInference:
         """Vérifie l'installation de BitsAndBytes."""
         try:
             import bitsandbytes as bnb
-            if not bnb.cuda.COMPILED_WITH_CUDA:
-                logger.warning("BitsAndBytes n'est pas compilé avec CUDA")
+            from bitsandbytes.cuda_setup.main import get_compute_capability, get_cuda_version
+            
+            if not torch.cuda.is_available():
+                logger.warning("CUDA n'est pas disponible, désactivation de BitsAndBytes")
                 return False
                 
-            # Vérification de la version CUDA
-            cuda_version = torch.version.cuda
-            if cuda_version:
-                logger.info(f"Version CUDA détectée: {cuda_version}")
-                if not cuda_version.startswith("12."):
-                    logger.warning(f"Version CUDA {cuda_version} pourrait ne pas être compatible")
+            # Vérification de la capacité de calcul
+            cc = get_compute_capability()
+            cuda_version = get_cuda_version()
+            
+            logger.info(f"Capacité de calcul CUDA: {cc}")
+            logger.info(f"Version CUDA BnB: {cuda_version}")
+            
+            # Pour RTX 3090, on attend une capacité de calcul de 8.6
+            if cc < (8, 0):
+                logger.warning(f"Capacité de calcul {cc} insuffisante pour 4-bit")
+                return False
+                
+            # Test de chargement de la bibliothèque native
+            try:
+                import ctypes
+                lib_path = bnb.__file__.replace('__init__.py', f'libbitsandbytes_cuda{cuda_version}.so')
+                ctypes.CDLL(lib_path)
+                logger.info(f"Bibliothèque BnB chargée: {lib_path}")
+            except Exception as e:
+                logger.error(f"Erreur chargement bibliothèque BnB: {e}")
+                return False
             
             return True
-        except ImportError:
-            logger.error("BitsAndBytes n'est pas installé correctement")
+            
+        except ImportError as e:
+            logger.error(f"Erreur import BitsAndBytes: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Erreur vérification BnB: {e}")
             return False
             
     def _setup_cuda_environment(self):
