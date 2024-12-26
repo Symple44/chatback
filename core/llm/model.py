@@ -47,14 +47,22 @@ class ModelInference:
                     logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
                     logger.info(f"Mémoire GPU {i}: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB")
 
+            if settings.USE_4BIT or settings.USE_8BIT:
+                if not self._verify_bnb_installation():
+                    logger.warning("Désactivation de la quantification")
+                    settings.USE_4BIT = False
+                    settings.USE_8BIT = False
+                    
             # Configuration BitsAndBytes pour quantification 4-bit
-            self.quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True if settings.USE_4BIT else False,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True
-            ) if settings.USE_4BIT else None
-
+            self.quantization_config = None
+            if settings.USE_4BIT:
+                self.quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4"
+                )
+            
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
             
@@ -76,7 +84,27 @@ class ModelInference:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-
+            
+    def _verify_bnb_installation(self):
+        """Vérifie l'installation de BitsAndBytes."""
+        try:
+            import bitsandbytes as bnb
+            if not bnb.cuda.COMPILED_WITH_CUDA:
+                logger.warning("BitsAndBytes n'est pas compilé avec CUDA")
+                return False
+                
+            # Vérification de la version CUDA
+            cuda_version = torch.version.cuda
+            if cuda_version:
+                logger.info(f"Version CUDA détectée: {cuda_version}")
+                if not cuda_version.startswith("12."):
+                    logger.warning(f"Version CUDA {cuda_version} pourrait ne pas être compatible")
+            
+            return True
+        except ImportError:
+            logger.error("BitsAndBytes n'est pas installé correctement")
+            return False
+            
     def _setup_cuda_environment(self):
         if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
             # Optimisations RTX 3090
@@ -129,7 +157,7 @@ class ModelInference:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
             model_kwargs = {
-                "device_map": "cuda:0",
+                "device_map": "auto",
                 "torch_dtype": torch.float16,
                 "use_flash_attention_2": True,
                 "trust_remote_code": True,
@@ -137,6 +165,9 @@ class ModelInference:
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "low_cpu_mem_usage": True
             }
+
+            if not settings.USE_4BIT and settings.USE_8BIT:
+                model_kwargs["load_in_8bit"] = True
     
             # Configuration dispatch GPU
             if torch.cuda.is_available():
