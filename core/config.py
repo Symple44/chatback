@@ -5,6 +5,13 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
+# Ajout de l'import de torch avec gestion d'erreur
+try:
+    import torch
+    CUDA_AVAILABLE = torch.cuda.is_available()
+except ImportError:
+    CUDA_AVAILABLE = False
+
 load_dotenv()
 
 class Settings(BaseSettings):
