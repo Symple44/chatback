@@ -199,30 +199,50 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration quantification pour tout sur GPU
+            # Configuration mémoire CUDA améliorée
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128,garbage_collection_threshold:0.8,expandable_segments:True"
+            
+            # Configuration quantification optimisée
             if settings.USE_4BIT:
                 self.quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_quant_storage="auto"
                 )
     
-            # Tout mettre sur GPU avec Flash Attention
+            # Chargement progressif
             model_kwargs = {
-                "device_map": "cuda:0",  # Force tout sur GPU
+                "device_map": {
+                    "transformer.word_embeddings": 0,
+                    "transformer.final_layernorm": 0,
+                    "lm_head": 0,
+                    "transformer.layers": "balanced"  # Distribution équilibrée des couches
+                },
                 "torch_dtype": torch.float16,
-                "attn_implementation": "flash_attention_2",
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "trust_remote_code": True,
-                "low_cpu_mem_usage": True
+                "offload_folder": "offload_folder",
+                "low_cpu_mem_usage": True,
+                "max_memory": {0: "19GiB"}  # Limiter la mémoire GPU pour éviter l'OOM
             }
     
-            # Optimisations CUDA
+            # Nettoyage avant chargement
+            self._cleanup_memory()
             torch.cuda.empty_cache()
-            torch.cuda.set_per_process_memory_fraction(0.85)
             
-            # Chargement du modèle
+            # Configuration des optimisations CUDA
+            if torch.cuda.is_available():
+                # Réduction de la fragmentation
+                torch.cuda.set_per_process_memory_fraction(0.95)
+                torch.cuda.empty_cache()
+                
+                # Optimisations de performance
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.benchmark = True
+    
+            # Chargement par étapes
             logger.info("Début du chargement du modèle")
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
@@ -230,6 +250,8 @@ class ModelInference:
             )
             
             logger.info("Modèle chargé avec succès")
+            
+            # Vérification finale de la mémoire
             self._cleanup_memory()
             
         except Exception as e:
