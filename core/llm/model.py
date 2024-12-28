@@ -128,29 +128,30 @@ class ModelInference:
             
     def _setup_cuda_environment(self):
         if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
-            # Optimisations RTX 3090
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.enabled = True
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.allow_tf32 = True
-            
-            # Flash Attention si disponible
-            if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
-                torch.backends.cuda.enable_flash_sdp(True)
-            
-            # Configuration mémoire optimisée
-            torch.cuda.set_per_process_memory_fraction(0.85)
-            
-            # Environnement CUDA
-            os.environ.update({
-                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
-                "CUDA_VISIBLE_DEVICES": "0",
-                "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:4096"
-            })
-            
-            # Optimisation pour architecture Ampere
-            if torch.cuda.get_device_capability()[0] >= 8:
-                torch.set_float32_matmul_precision('high')
+            try:
+                # Vérification de la version CUDA
+                cuda_version = torch.version.cuda
+                logger.info(f"Version CUDA détectée: {cuda_version}")
+                
+                # Configuration pour RTX 3090
+                torch.cuda.set_device(0)  # Force l'utilisation de la première GPU
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.enabled = True
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.allow_tf32 = True
+                
+                # Flash Attention si disponible
+                if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+                    torch.backends.cuda.enable_flash_sdp(True)
+                
+                # Configuration mémoire optimisée pour RTX 3090
+                memory_fraction = float(settings.GPU_MEMORY_FRACTION)
+                torch.cuda.set_per_process_memory_fraction(memory_fraction)
+                
+                logger.info(f"Environnement CUDA configuré avec succès")
+                
+            except Exception as e:
+                logger.error(f"Erreur configuration CUDA: {e}")
 
     def _get_optimal_device(self) -> str:
         """Détermine le meilleur device disponible avec vérification détaillée."""
@@ -180,9 +181,9 @@ class ModelInference:
             model_kwargs = {
                 "device_map": "auto",
                 "torch_dtype": torch.float16,
-                "use_flash_attention_2": True,
+                "use_flash_attention_2": torch.cuda.is_available(),
                 "trust_remote_code": True,
-                "max_memory": {0: "20GiB"},  # RTX 3090 optimisé
+                "max_memory": {0: "20GiB"} if torch.cuda.is_available() else None,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "low_cpu_mem_usage": True
             }
