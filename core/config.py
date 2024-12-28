@@ -59,12 +59,13 @@ class Settings(BaseSettings):
     # GPU Configuration
     USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
     CUDA_VISIBLE_DEVICES: str = os.getenv("CUDA_VISIBLE_DEVICES", "0")
+    
     GPU_MEMORY_FRACTION: float = float(os.getenv("GPU_MEMORY_FRACTION", "0.9"))
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
     USE_8BIT: bool = os.getenv("USE_8BIT", "false").lower() == "true"
     USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
     MODEL_PARALLEL_SIZE: int = int(os.getenv("MODEL_PARALLEL_SIZE", "2"))
-    DEVICE: str = "cuda" if not USE_CPU_ONLY else "cpu"
+    DEVICE: str = "cuda" if not USE_CPU_ONLY and torch.cuda.is_available() else "cpu"
 
     # Performance
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
