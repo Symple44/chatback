@@ -89,36 +89,36 @@ class ModelInference:
         """Vérifie l'installation de BitsAndBytes."""
         try:
             import bitsandbytes as bnb
-            from bitsandbytes.cuda_setup.main import get_compute_capability, get_cuda_version
             
             if not torch.cuda.is_available():
                 logger.warning("CUDA n'est pas disponible, désactivation de BitsAndBytes")
                 return False
                 
-            # Vérification de la capacité de calcul
-            cc = get_compute_capability()
-            cuda_version = get_cuda_version()
+            # Nouvelle méthode de vérification pour version >=0.45
+            if not bnb.COMPILED_WITH_CUDA:
+                logger.warning("BitsAndBytes compilé sans support CUDA")
+                return False
             
-            logger.info(f"Capacité de calcul CUDA: {cc}")
-            logger.info(f"Version CUDA BnB: {cuda_version}")
+            # Test de la capacité de calcul CUDA
+            cc_major, cc_minor = torch.cuda.get_device_capability()
+            compute_capability = f"{cc_major}.{cc_minor}"
+            logger.info(f"Capacité de calcul CUDA: {compute_capability}")
             
             # Pour RTX 3090, on attend une capacité de calcul de 8.6
-            if cc < (8, 0):
-                logger.warning(f"Capacité de calcul {cc} insuffisante pour 4-bit")
+            if float(compute_capability) < 8.0:
+                logger.warning(f"Capacité de calcul {compute_capability} insuffisante pour 4-bit")
+                return False
+            
+            # Test de fonctionnalité basique
+            try:
+                test_tensor = torch.zeros(1, device='cuda')
+                _ = bnb.nn.Linear8bitLt(1, 1, has_fp16_weights=False)
+                logger.info("Test BitsAndBytes réussi")
+                return True
+            except Exception as e:
+                logger.error(f"Erreur test BitsAndBytes: {e}")
                 return False
                 
-            # Test de chargement de la bibliothèque native
-            try:
-                import ctypes
-                lib_path = bnb.__file__.replace('__init__.py', f'libbitsandbytes_cuda{cuda_version}.so')
-                ctypes.CDLL(lib_path)
-                logger.info(f"Bibliothèque BnB chargée: {lib_path}")
-            except Exception as e:
-                logger.error(f"Erreur chargement bibliothèque BnB: {e}")
-                return False
-            
-            return True
-            
         except ImportError as e:
             logger.error(f"Erreur import BitsAndBytes: {e}")
             return False
