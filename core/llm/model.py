@@ -105,8 +105,8 @@ class ModelInference:
                     fragmentation = stats.get('allocated_bytes.all.current', 0) / (stats.get('reserved_bytes.all.current', 1) or 1)
                     logger.info(f"Fragmentation mémoire : {fragmentation:.2%}")
     
-    except Exception as e:
-        logger.error(f"Erreur monitoring mémoire: {e}")
+        except Exception as e:
+            logger.error(f"Erreur monitoring mémoire: {e}")
             
     def _verify_bnb_installation(self):
         """Vérifie l'installation de BitsAndBytes."""
