@@ -199,45 +199,41 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration CUDA plus agressive pour la gestion mémoire
+            # Configuration CUDA
             os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-                "max_split_size_mb:64,"  # Réduit la taille des splits
-                "garbage_collection_threshold:0.6,"  # Plus agressif
+                "max_split_size_mb:64,"
+                "garbage_collection_threshold:0.6,"
                 "expandable_segments:True"
             )
     
-            # Configuration de la quantification pour une utilisation mémoire minimale
+            # Nettoyage initial
+            self._cleanup_memory()
+            torch.cuda.empty_cache()
+            
+            # Configuration pour chargement optimal
+            model_kwargs = {
+                "device_map": {
+                    "": "cuda:0"
+                },
+                "torch_dtype": torch.bfloat16,
+                "offload_state_dict": True,
+                "offload_folder": "offload_folder",
+                "low_cpu_mem_usage": True,
+                "max_memory": {0: "16GiB"}
+            }
+    
+            # Ajout de la quantification si activée
             if settings.USE_4BIT:
-                self.quantization_config = BitsAndBytesConfig(
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4"
                 )
     
-            # Nettoyage initial très agressif
-            self._cleanup_memory()
-            torch.cuda.empty_cache()
-    
-            # Configuration pour chargement par shards
-            model_kwargs = {
-                "device_map": {
-                    "": "cuda:0"  # Force tout sur CUDA mais avec chargement séquentiel
-                },
-                "torch_dtype": torch.bfloat16,  # bfloat16 utilise moins de mémoire
-                "quantization_config": self.quantization_config if settings.USE_4BIT else None,
-                "offload_state_dict": True,  # Important pour le chargement par morceaux
-                "offload_folder": "offload_folder",
-                "low_cpu_mem_usage": True,
-                "max_memory": {0: "16GiB"},  # Limite plus conservative
-                "load_in_4bit": True
-            }
-    
-            # Configuration pour le chargement progressif
+            # Configuration modèle
             from transformers import AutoConfig
             config = AutoConfig.from_pretrained(settings.MODEL_NAME)
-            
-            # Désactivation des fonctionnalités gourmandes en mémoire
             if hasattr(config, "pretraining_tp"):
                 config.pretraining_tp = 1
             config.use_cache = False
