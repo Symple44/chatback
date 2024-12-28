@@ -176,28 +176,45 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
+            # Configuration de la quantification
+            if settings.USE_4BIT:
+                self.quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                    llm_int8_enable_fp32_cpu_offload=True
+                )
+            
+            # Configuration device map pour utilisation optimale de la mémoire
+            max_memory = {
+                0: "20GiB",  # Réserver 20GB pour le GPU
+                "cpu": "24GB"  # Autoriser l'utilisation de la RAM
+            }
+            
             model_kwargs = {
                 "device_map": "auto",
                 "torch_dtype": torch.float16,
-                "attn_implementation": "flash_attention_2" if torch.cuda.is_available() else "eager",
-                "trust_remote_code": True,
-                "max_memory": {0: "20GiB"} if torch.cuda.is_available() else None,
+                "attn_implementation": "flash_attention_2",
+                "max_memory": max_memory,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
+                "trust_remote_code": True,
+                "offload_folder": "offload_folder",
                 "low_cpu_mem_usage": True
             }
-
-            if not settings.USE_4BIT and settings.USE_8BIT:
-                model_kwargs["load_in_8bit"] = True
     
-            # Configuration dispatch GPU
+            # Configuration dispatch GPU optimisée pour Mixtral
             if torch.cuda.is_available():
-                n_gpu_layers = 32  # Optimisé pour 24GB VRAM
+                n_gpu_layers = 32  # Nombre de couches à garder sur GPU
                 model_kwargs.update({
-                    "device_map": "balanced",
-                    "max_memory": {0: "20GiB", "cpu": "24GiB"},
-                    "offload_folder": "offload_folder",
+                    "device_map": {
+                        "model.embed_tokens": 0,
+                        "model.norm": 0,
+                        "lm_head": 0,
+                        "model.layers": "sequential"  # Distribution séquentielle des couches
+                    }
                 })
-    
+            
             # Chargement avec retry et monitoring
             for attempt in range(3):
                 try:
@@ -205,12 +222,6 @@ class ModelInference:
                         settings.MODEL_NAME,
                         **model_kwargs
                     )
-                    
-                    # Post-chargement optimisations
-                    if torch.cuda.is_available():
-                        self.model.tie_weights()
-                        torch.cuda.empty_cache()
-                    
                     break
                 except Exception as e:
                     if attempt == 2:
@@ -219,6 +230,8 @@ class ModelInference:
                     self._cleanup_memory()
                     time.sleep(30)
     
+            logger.info("Modèle chargé avec succès")
+            
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             raise
