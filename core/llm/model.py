@@ -79,20 +79,20 @@ class ModelInference:
             raise
 
     def _cleanup_memory(self):
-    """Nettoyage agressif de la mémoire."""
-    try:
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            
-        # Forcer la collection des tensors CUDA
-        if hasattr(torch.cuda, 'memory_stats'):
-            stats = torch.cuda.memory_stats()
-            logger.info(f"Mémoire CUDA disponible: {stats.get('allocated_bytes.all.current', 0) / 1e9:.2f} GB")
-            
-    except Exception as e:
-        logger.error(f"Erreur nettoyage mémoire: {e}")
+        """Nettoyage agressif de la mémoire."""
+        try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+            # Forcer la collection des tensors CUDA
+            if hasattr(torch.cuda, 'memory_stats'):
+                stats = torch.cuda.memory_stats()
+                logger.info(f"Mémoire CUDA disponible: {stats.get('allocated_bytes.all.current', 0) / 1e9:.2f} GB")
+                
+        except Exception as e:
+            logger.error(f"Erreur nettoyage mémoire: {e}")
             
     def _verify_bnb_installation(self):
         """Vérifie l'installation de BitsAndBytes."""
