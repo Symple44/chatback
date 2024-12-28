@@ -199,47 +199,28 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration quantification avec offloading activé
+            # Configuration quantification pour tout sur GPU
             if settings.USE_4BIT:
                 self.quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4",
-                    llm_int8_enable_fp32_cpu_offload=True,  # Activé !
-                    bnb_4bit_quant_storage=torch.float16
+                    bnb_4bit_quant_type="nf4"
                 )
-            
-            # Configuration mémoire équilibrée
-            max_memory = {
-                0: "21GiB",        # Légèrement réduit pour GPU
-                "cpu": "12GB"      # Augmenté pour l'offloading
-            }
-            
-            # Configuration du device map optimisé
-            device_map = {
-                "transformer.word_embeddings": 0,
-                "transformer.word_embeddings_layernorm": 0,
-                "lm_head": "cpu",  # Layer moins utilisée sur CPU
-            }
-            
-            # Les couches transformer sur GPU
-            for i in range(32):
-                device_map[f"transformer.h.{i}"] = 0
-            
+    
+            # Tout mettre sur GPU avec Flash Attention
             model_kwargs = {
-                "device_map": device_map,
+                "device_map": "cuda:0",  # Force tout sur GPU
                 "torch_dtype": torch.float16,
                 "attn_implementation": "flash_attention_2",
-                "max_memory": max_memory,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "trust_remote_code": True,
-                "offload_folder": "offload_folder",
                 "low_cpu_mem_usage": True
             }
     
-            # Configuration CUDA
-            torch.cuda.set_per_process_memory_fraction(0.8)
+            # Optimisations CUDA
+            torch.cuda.empty_cache()
+            torch.cuda.set_per_process_memory_fraction(0.85)
             
             # Chargement du modèle
             logger.info("Début du chargement du modèle")
