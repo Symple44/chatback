@@ -186,14 +186,24 @@ class ModelInference:
                     llm_int8_enable_fp32_cpu_offload=True
                 )
             
-            # Configuration device map pour utilisation optimale de la mémoire
+            # Configuration mémoire optimisée pour RTX 3090
             max_memory = {
-                0: "20GiB",  # Réserver 20GB pour le GPU
-                "cpu": "24GB"  # Autoriser l'utilisation de la RAM
+                0: "20GiB",      # GPU
+                "cpu": "24GB"    # RAM
             }
             
+            # Construction du device_map optimisé
+            device_map = {
+                "model.embed_tokens": 0,
+                "model.norm": 0,
+                "lm_head": 0,
+            }
+            # Distribution des couches sur le GPU
+            for i in range(32):  # Mixtral a 32 couches
+                device_map[f"model.layers.{i}"] = 0
+                
             model_kwargs = {
-                "device_map": "auto",
+                "device_map": device_map,  # Utilisation du device_map personnalisé
                 "torch_dtype": torch.float16,
                 "attn_implementation": "flash_attention_2",
                 "max_memory": max_memory,
@@ -203,18 +213,6 @@ class ModelInference:
                 "low_cpu_mem_usage": True
             }
     
-            # Configuration dispatch GPU optimisée pour Mixtral
-            if torch.cuda.is_available():
-                n_gpu_layers = 32  # Nombre de couches à garder sur GPU
-                model_kwargs.update({
-                    "device_map": {
-                        "model.embed_tokens": 0,
-                        "model.norm": 0,
-                        "lm_head": 0,
-                        "model.layers": "sequential"  # Distribution séquentielle des couches
-                    }
-                })
-            
             # Chargement avec retry et monitoring
             for attempt in range(3):
                 try:
@@ -222,6 +220,7 @@ class ModelInference:
                         settings.MODEL_NAME,
                         **model_kwargs
                     )
+                    logger.info("Modèle chargé avec succès")
                     break
                 except Exception as e:
                     if attempt == 2:
@@ -229,8 +228,6 @@ class ModelInference:
                     logger.warning(f"Tentative {attempt + 1} échouée: {e}")
                     self._cleanup_memory()
                     time.sleep(30)
-    
-            logger.info("Modèle chargé avec succès")
             
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
