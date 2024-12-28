@@ -209,7 +209,7 @@ class ModelInference:
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
-                    bnb_4bit_quant_storage_dtype=torch.float16
+                    bnb_4bit_quant_storage_dtype=torch.float16  # Correction ici
                 )
     
             # Chargement progressif
@@ -218,31 +218,25 @@ class ModelInference:
                     "transformer.word_embeddings": 0,
                     "transformer.final_layernorm": 0,
                     "lm_head": 0,
-                    "transformer.layers": "balanced"  # Distribution équilibrée des couches
+                    "transformer.layers": "balanced"
                 },
                 "torch_dtype": torch.float16,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "trust_remote_code": True,
                 "offload_folder": "offload_folder",
                 "low_cpu_mem_usage": True,
-                "max_memory": {0: "19GiB"}  # Limiter la mémoire GPU pour éviter l'OOM
+                "max_memory": {0: "19GiB"}
             }
     
             # Nettoyage avant chargement
             self._cleanup_memory()
             torch.cuda.empty_cache()
             
-            # Configuration des optimisations CUDA
             if torch.cuda.is_available():
-                # Réduction de la fragmentation
                 torch.cuda.set_per_process_memory_fraction(0.95)
-                torch.cuda.empty_cache()
-                
-                # Optimisations de performance
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.benchmark = True
     
-            # Chargement par étapes
             logger.info("Début du chargement du modèle")
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
@@ -250,8 +244,6 @@ class ModelInference:
             )
             
             logger.info("Modèle chargé avec succès")
-            
-            # Vérification finale de la mémoire
             self._cleanup_memory()
             
         except Exception as e:
