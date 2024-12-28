@@ -181,7 +181,7 @@ class ModelInference:
             model_kwargs = {
                 "device_map": "auto",
                 "torch_dtype": torch.float16,
-                "use_flash_attention_2": torch.cuda.is_available(),
+                "attn_implementation": "flash_attention_2" if torch.cuda.is_available() else "eager",
                 "trust_remote_code": True,
                 "max_memory": {0: "20GiB"} if torch.cuda.is_available() else None,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
