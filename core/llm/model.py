@@ -93,30 +93,28 @@ class ModelInference:
             if not torch.cuda.is_available():
                 logger.warning("CUDA n'est pas disponible, désactivation de BitsAndBytes")
                 return False
-                
-            # Nouvelle méthode de vérification pour version >=0.45
-            if not bnb.COMPILED_WITH_CUDA:
-                logger.warning("BitsAndBytes compilé sans support CUDA")
-                return False
             
-            # Test de la capacité de calcul CUDA
-            cc_major, cc_minor = torch.cuda.get_device_capability()
-            compute_capability = f"{cc_major}.{cc_minor}"
-            logger.info(f"Capacité de calcul CUDA: {compute_capability}")
-            
-            # Pour RTX 3090, on attend une capacité de calcul de 8.6
-            if float(compute_capability) < 8.0:
-                logger.warning(f"Capacité de calcul {compute_capability} insuffisante pour 4-bit")
-                return False
-            
-            # Test de fonctionnalité basique
+            # Test des fonctionnalités CUDA de BnB
             try:
-                test_tensor = torch.zeros(1, device='cuda')
-                _ = bnb.nn.Linear8bitLt(1, 1, has_fp16_weights=False)
-                logger.info("Test BitsAndBytes réussi")
+                # Création d'une couche 8-bit pour tester
+                test_input = torch.zeros(1, 1, device='cuda')
+                test_layer = bnb.nn.Linear8bitLt(1, 1).cuda()
+                _ = test_layer(test_input)
+                
+                # Vérification de la capacité de calcul
+                cc_major, cc_minor = torch.cuda.get_device_capability()
+                compute_capability = f"{cc_major}.{cc_minor}"
+                logger.info(f"Test BnB réussi - Capacité CUDA: {compute_capability}")
+                
+                # Vérification pour RTX 3090 (8.6)
+                if float(compute_capability) < 8.0:
+                    logger.warning(f"Capacité de calcul {compute_capability} insuffisante pour 4-bit")
+                    return False
+                    
                 return True
+                
             except Exception as e:
-                logger.error(f"Erreur test BitsAndBytes: {e}")
+                logger.error(f"Erreur test BnB CUDA: {e}")
                 return False
                 
         except ImportError as e:
