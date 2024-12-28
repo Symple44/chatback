@@ -1,6 +1,7 @@
 # requirements.in
 # pip-compile --output-file=requirements.txt requirements.in
 # pip install -r requirements.txt
+
 # Base FastAPI
 fastapi
 uvicorn[standard]
@@ -38,21 +39,25 @@ sentence-transformers
 
 # Traitement du langage et IA
 transformers
-torch
 tokenizers
 accelerate
 optimum
 safetensors
 tf-keras
 
+# Ces bibliothèques GPU doivent être installées séparément pour gérer CUDA
+# bitsandbytes (pour la prise en charge 8/4 bits) - bitsandbytes-cuda124
+# torch (PyTorch, la bibliothèque principale) - torch
+# torchvision (pour les traitements d'images) - torchvision
+# torchaudio (pour les traitements audio) - torchaudio
+
 # Recherche vectorielle
 faiss-cpu
 pgvector
 
 # Utilitaires asynchrones
-aiohttp
-aiofiles  # Ajouté pour les opérations fichiers asynchrones
-httpx
+aiohttp  # Utilisé pour les requêtes HTTP asynchrones
+httpx  # Également utilisé pour les requêtes HTTP asynchrones
 
 # Google Drive
 google-auth
@@ -63,8 +68,6 @@ google-api-python-client
 # Utilitaires et optimisation
 python-dotenv
 tenacity
-aiohttp
-httpx
 urllib3
 pathspec
 packaging
