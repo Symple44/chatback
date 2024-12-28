@@ -79,11 +79,20 @@ class ModelInference:
             raise
 
     def _cleanup_memory(self):
-        """Nettoyage agressif de la mémoire."""
+    """Nettoyage agressif de la mémoire."""
+    try:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            
+        # Forcer la collection des tensors CUDA
+        if hasattr(torch.cuda, 'memory_stats'):
+            stats = torch.cuda.memory_stats()
+            logger.info(f"Mémoire CUDA disponible: {stats.get('allocated_bytes.all.current', 0) / 1e9:.2f} GB")
+            
+    except Exception as e:
+        logger.error(f"Erreur nettoyage mémoire: {e}")
             
     def _verify_bnb_installation(self):
         """Vérifie l'installation de BitsAndBytes."""
@@ -176,7 +185,7 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration de la quantification
+            # Configuration de la quantification optimisée
             if settings.USE_4BIT:
                 self.quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
@@ -186,24 +195,15 @@ class ModelInference:
                     llm_int8_enable_fp32_cpu_offload=True
                 )
             
-            # Configuration mémoire optimisée pour RTX 3090
+            # Configuration mémoire plus conservative
             max_memory = {
-                0: "20GiB",      # GPU
-                "cpu": "24GB"    # RAM
+                0: "18GiB",        # Réduire la mémoire GPU allouée
+                "cpu": "24GB"      # Garder assez de RAM pour l'offload
             }
             
-            # Construction du device_map optimisé
-            device_map = {
-                "model.embed_tokens": 0,
-                "model.norm": 0,
-                "lm_head": 0,
-            }
-            # Distribution des couches sur le GPU
-            for i in range(32):  # Mixtral a 32 couches
-                device_map[f"model.layers.{i}"] = 0
-                
+            # Configuration auto du device_map
             model_kwargs = {
-                "device_map": device_map,  # Utilisation du device_map personnalisé
+                "device_map": "auto",  # Laisser HF gérer la distribution
                 "torch_dtype": torch.float16,
                 "attn_implementation": "flash_attention_2",
                 "max_memory": max_memory,
@@ -213,15 +213,28 @@ class ModelInference:
                 "low_cpu_mem_usage": True
             }
     
-            # Chargement avec retry et monitoring
+            # Configuration mémoire CUDA
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                torch.cuda.reset_peak_memory_stats()
+    
+            # Configuration allocation CUDA
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512,garbage_collection_threshold:0.8,expandable_segments:True"
+    
+            # Chargement avec monitoring mémoire
             for attempt in range(3):
                 try:
+                    # Nettoyage avant chargement
+                    self._cleanup_memory()
+                    
+                    logger.info("Début du chargement du modèle")
                     self.model = AutoModelForCausalLM.from_pretrained(
                         settings.MODEL_NAME,
                         **model_kwargs
                     )
                     logger.info("Modèle chargé avec succès")
                     break
+                    
                 except Exception as e:
                     if attempt == 2:
                         raise
