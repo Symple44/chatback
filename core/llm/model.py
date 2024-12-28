@@ -209,42 +209,51 @@ class ModelInference:
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
-                    bnb_4bit_quant_storage_dtype=torch.float16  # Correction ici
+                    bnb_4bit_quant_storage_dtype=torch.float16
                 )
     
-            # Chargement progressif
-            model_kwargs = {
-                "device_map": {
-                    "transformer.word_embeddings": 0,
-                    "transformer.final_layernorm": 0,
-                    "lm_head": 0,
-                    "transformer.layers": "balanced"
-                },
+            # Configuration de base
+            base_model_kwargs = {
                 "torch_dtype": torch.float16,
                 "quantization_config": self.quantization_config if settings.USE_4BIT else None,
                 "trust_remote_code": True,
-                "offload_folder": "offload_folder",
-                "low_cpu_mem_usage": True,
-                "max_memory": {0: "19GiB"}
+                "low_cpu_mem_usage": True
             }
     
-            # Nettoyage avant chargement
-            self._cleanup_memory()
-            torch.cuda.empty_cache()
-            
-            if torch.cuda.is_available():
-                torch.cuda.set_per_process_memory_fraction(0.95)
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.benchmark = True
+            # Première tentative avec device_map auto
+            try:
+                logger.info("Tentative de chargement avec device_map='auto'")
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    settings.MODEL_NAME,
+                    device_map="auto",
+                    **base_model_kwargs
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Échec du chargement auto: {e}")
+                self._cleanup_memory()
     
-            logger.info("Début du chargement du modèle")
+            # Deuxième tentative avec device_map spécifique
+            try:
+                logger.info("Tentative de chargement avec device_map personnalisé")
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    settings.MODEL_NAME,
+                    device_map={"": 0},  # Force tout sur GPU 0
+                    **base_model_kwargs
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Échec du chargement personnalisé: {e}")
+                self._cleanup_memory()
+    
+            # Dernière tentative avec approche progressive
+            logger.info("Tentative de chargement progressif")
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
-                **model_kwargs
-            )
-            
+                **base_model_kwargs
+            ).to("cuda:0")  # Force explicitement tout sur GPU
+    
             logger.info("Modèle chargé avec succès")
-            self._cleanup_memory()
             
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
