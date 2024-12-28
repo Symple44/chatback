@@ -79,20 +79,34 @@ class ModelInference:
             raise
 
     def _cleanup_memory(self):
-        """Nettoyage agressif de la mémoire."""
+        """Nettoyage et monitoring de la mémoire."""
         try:
+            import gc
             gc.collect()
+            
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
                 
-            # Forcer la collection des tensors CUDA
-            if hasattr(torch.cuda, 'memory_stats'):
-                stats = torch.cuda.memory_stats()
-                logger.info(f"Mémoire CUDA disponible: {stats.get('allocated_bytes.all.current', 0) / 1e9:.2f} GB")
+                # Obtenir les statistiques de mémoire correctes
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                allocated = torch.cuda.memory_allocated(0)
+                reserved = torch.cuda.memory_reserved(0)
+                free_memory = total_memory - allocated
                 
-        except Exception as e:
-            logger.error(f"Erreur nettoyage mémoire: {e}")
+                logger.info(f"Mémoire GPU totale    : {total_memory / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU allouée   : {allocated / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU réservée  : {reserved / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU libre     : {free_memory / 1e9:.2f} GB")
+                
+                # Vérifier la fragmentation
+                if hasattr(torch.cuda, 'memory_stats'):
+                    stats = torch.cuda.memory_stats()
+                    fragmentation = stats.get('allocated_bytes.all.current', 0) / (stats.get('reserved_bytes.all.current', 1) or 1)
+                    logger.info(f"Fragmentation mémoire : {fragmentation:.2%}")
+    
+    except Exception as e:
+        logger.error(f"Erreur monitoring mémoire: {e}")
             
     def _verify_bnb_installation(self):
         """Vérifie l'installation de BitsAndBytes."""
