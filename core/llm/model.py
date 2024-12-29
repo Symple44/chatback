@@ -388,20 +388,74 @@ class ModelInference:
             logger.error(f"Erreur monitoring mémoire: {e}")
 
     async def cleanup(self):
-        """Nettoie les ressources."""
+        """Nettoie les ressources et libère la mémoire."""
         try:
-            self.executor.shutdown(wait=True)
-            await self.embeddings.cleanup()
+            logger.info("Début du nettoyage des ressources...")
             
-            self.model.cpu()
-            del self.model
-            del self.tokenizer
+            # 1. Arrêt de l'executor
+            if hasattr(self, 'executor'):
+                logger.debug("Arrêt de l'executor...")
+                self.executor.shutdown(wait=True)
             
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # 2. Nettoyage des embeddings
+            if hasattr(self, 'embeddings'):
+                logger.debug("Nettoyage des embeddings...")
+                await self.embeddings.cleanup()
+            
+            # 3. Nettoyage du modèle
+            if hasattr(self, 'model'):
+                logger.debug("Nettoyage du modèle...")
+                # Déplacer le modèle sur CPU avant suppression
+                try:
+                    self.model.cpu()
+                except Exception as e:
+                    logger.warning(f"Erreur lors du déplacement du modèle vers CPU: {e}")
                 
-            logger.info("Ressources modèle nettoyées")
+                # Supprimer les références au modèle
+                try:
+                    del self.model
+                except Exception as e:
+                    logger.warning(f"Erreur lors de la suppression du modèle: {e}")
+            
+            # 4. Nettoyage du tokenizer
+            if hasattr(self, 'tokenizer'):
+                logger.debug("Nettoyage du tokenizer...")
+                try:
+                    del self.tokenizer
+                except Exception as e:
+                    logger.warning(f"Erreur lors de la suppression du tokenizer: {e}")
+            
+            # 5. Nettoyage de la mémoire CUDA
+            if torch.cuda.is_available():
+                logger.debug("Nettoyage de la mémoire CUDA...")
+                try:
+                    # Synchroniser et vider le cache CUDA
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                    
+                    # Log des stats mémoire finales
+                    allocated = torch.cuda.memory_allocated(0)
+                    reserved = torch.cuda.memory_reserved(0)
+                    logger.info(f"Mémoire GPU finale - Allouée: {allocated/1e9:.2f}GB, Réservée: {reserved/1e9:.2f}GB")
+                except Exception as e:
+                    logger.warning(f"Erreur lors du nettoyage CUDA: {e}")
+            
+            # 6. Nettoyage Python
+            gc.collect()
+            
+            logger.info("Nettoyage des ressources terminé avec succès")
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des ressources: {e}")
+            raise
+        finally:
+            # Forcer un dernier nettoyage mémoire
+            try:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                pass
 
     def _prepare_prompt(
         self,
