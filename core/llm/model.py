@@ -266,115 +266,59 @@ class ModelInference:
             raise
 
     def _setup_tokenizer(self):
-        """Configure le tokenizer."""
+        """
+        Configure et initialise le tokenizer pour le modèle spécifié.
+        """
+        logger.info("Initialisation du tokenizer...")
+
         try:
-            logger.info(f"Initialisation du tokenizer pour {settings.MODEL_NAME}")
-            
-            # Configuration du cache
-            cache_dir = os.path.join(settings.MODEL_DIR, "tokenizer_cache")
-            os.makedirs(cache_dir, exist_ok=True)
-            
-            # Configuration du tokenizer avec options détaillées
-            tokenizer_kwargs = {
-                "pretrained_model_name_or_path": settings.MODEL_NAME,
-                "use_fast": True,
-                "model_max_length": settings.MAX_INPUT_LENGTH,
-                "padding_side": "left",
-                "truncation_side": "left",
-                "cache_dir": cache_dir,
-                "revision": settings.MODEL_REVISION,
-                "trust_remote_code": True,
-                "local_files_only": False
-            }
+            # Charger le tokenizer à partir du modèle spécifié
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                settings.MODEL_NAME,
+                use_fast=True,  # Utilisation de la version rapide si disponible
+                model_max_length=settings.MAX_INPUT_LENGTH
+            )
+            logger.info(f"Tokenizer chargé avec succès : {settings.MODEL_NAME}")
 
-            logger.debug(f"Paramètres tokenizer: {tokenizer_kwargs}")
-            self.tokenizer = AutoTokenizer.from_pretrained(**tokenizer_kwargs)
-            
-            # Configuration des tokens spéciaux
-            special_tokens = {
-                "pad_token": "<pad>",
-                "eos_token": "</s>",
-                "bos_token": "<s>",
-                "unk_token": "<unk>"
-            }
+            # Vérifier et définir un token de padding si nécessaire
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                logger.info("Token de padding défini sur le token de fin (EOS).")
 
-            # S'assurer que tous les tokens spéciaux sont définis
-            for token_name, token_value in special_tokens.items():
-                if getattr(self.tokenizer, token_name) is None:
-                    setattr(self.tokenizer, token_name, token_value)
-                    logger.debug(f"Token spécial défini: {token_name}={token_value}")
-
-            # Test complet du tokenizer
+            # Tester le tokenizer
             self._test_tokenizer()
-            
-            logger.info("Tokenizer configuré avec succès")
-            
+
+            logger.info("Configuration du tokenizer terminée avec succès.")
+
         except Exception as e:
-            logger.error(f"Erreur configuration tokenizer: {str(e)}")
-            self.tokenizer = None
-            raise ValueError(f"Échec configuration tokenizer: {str(e)}")
+            logger.error(f"Erreur lors de la configuration du tokenizer : {e}")
+            raise ValueError(f"Échec de la configuration du tokenizer : {e}")
 
     def _test_tokenizer(self):
-        """Test complet du tokenizer avec diagnostics détaillés."""
-        test_inputs = [
-            "Test simple du tokenizer",
-            "Un test plus long avec des phrases complètes.",
-            "Test avec des caractères spéciaux: é à ç ! ? .",
-        ]
-
-        def log_token_info(tokens, decoded):
-            logger.debug(f"Tokens: {tokens['input_ids'].tolist()}")
-            logger.debug(f"Attention mask: {tokens['attention_mask'].tolist()}")
-            logger.debug(f"Décodage: {decoded}")
-            logger.debug(f"Longueur originale: {len(tokens['input_ids'][0])}")
-
+        """
+        Vérifie le bon fonctionnement du tokenizer en effectuant un test simple.
+        """
+        logger.info("Test du tokenizer en cours...")
+        test_input = "Test simple du tokenizer"
+    
         try:
-            for test_input in test_inputs:
-                logger.debug(f"\nTest tokenization pour: '{test_input}'")
-                
-                # Test de base
-                tokens = self.tokenizer(
-                    test_input,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True
-                )
-
-                if not isinstance(tokens, dict) or "input_ids" not in tokens:
-                    raise ValueError(f"Format de tokens invalide pour: '{test_input}'")
-
-                # Test decode/encode
-                decoded = self.tokenizer.decode(tokens["input_ids"][0])
-                if not decoded:
-                    raise ValueError(f"Décodage échoué pour: '{test_input}'")
-
-                # Test de la cohérence decode/encode
-                re_encoded = self.tokenizer(
-                    decoded,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True
-                )
-
-                log_token_info(tokens, decoded)
-
-                # Vérifier les dimensions
-                if tokens["input_ids"].dim() != 2:
-                    raise ValueError(f"Dimension incorrecte des tokens pour: '{test_input}'")
-
-            # Test des tokens spéciaux
-            special_tokens = ["<pad>", "</s>", "<s>", "<unk>"]
-            for token in special_tokens:
-                token_id = self.tokenizer.convert_tokens_to_ids(token)
-                if token_id == self.tokenizer.unk_token_id and token != "<unk>":
-                    logger.warning(f"Token spécial non reconnu: {token}")
-
-            logger.info("Tests du tokenizer réussis")
-            return True
-
+            # Tokeniser une phrase de test
+            tokens = self.tokenizer(test_input)
+            logger.info(f"Tokens générés pour '{test_input}' : {tokens}")
+    
+            # Vérifier que les clés nécessaires sont présentes
+            if not isinstance(tokens, dict):
+                raise ValueError("Le tokenizer n'a pas retourné un dictionnaire.")
+    
+            required_keys = ["input_ids", "attention_mask"]
+            for key in required_keys:
+                if key not in tokens:
+                    raise ValueError(f"Clé manquante dans les tokens : {key}")
+    
+            logger.info("Test du tokenizer réussi.")
         except Exception as e:
-            logger.error(f"Test du tokenizer échoué: {str(e)}")
-            raise ValueError(f"Test du tokenizer échoué: {str(e)}")
+            logger.error(f"Erreur lors du test du tokenizer : {e}")
+            raise ValueError(f"Test du tokenizer échoué : {e}")
 
     def _setup_generation_config(self):
         """Configure les paramètres de génération."""
@@ -518,69 +462,42 @@ class ModelInference:
         return "cpu"
 
     def _cleanup_memory(self):
-        """Nettoie la mémoire."""
-        try:
-            gc.collect()
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                
-                total_memory = torch.cuda.get_device_properties(0).total_memory
-                allocated = torch.cuda.memory_allocated(0)
-                reserved = torch.cuda.memory_reserved(0)
-                free_memory = total_memory - allocated
-                
-                logger.info(f"Mémoire GPU totale    : {total_memory / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU allouée   : {allocated / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU réservée  : {reserved / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU libre     : {free_memory / 1e9:.2f} GB")
-                
-                if hasattr(torch.cuda, 'memory_stats'):
-                    stats = torch.cuda.memory_stats()
-                    fragmentation = stats.get('allocated_bytes.all.current', 0) / (stats.get('reserved_bytes.all.current', 1) or 1)
-                    logger.info(f"Fragmentation mémoire : {fragmentation:.2%}")
-    
-        except Exception as e:
-            logger.error(f"Erreur monitoring mémoire: {e}")
+        """
+        Méthode pour nettoyer les ressources utilisées par le modèle et libérer la mémoire GPU/CPU.
+        """
+        logger.info("Début du nettoyage des ressources...")
 
-    async def cleanup(self):
-        """Nettoie les ressources de manière asynchrone."""
+        # Libération du modèle et du tokenizer
         try:
-            logger.info("Début du nettoyage des ressources...")
+            if self.model is not None:
+                logger.info("Déplacement du modèle sur CPU avant suppression.")
+                self.model.cpu()  # Déplacement sur CPU pour éviter des blocages GPU
+                del self.model
+                logger.info("Modèle supprimé de la mémoire.")
             
-            if hasattr(self, 'executor'):
-                self.executor.shutdown(wait=False)
-            
-            if hasattr(self, 'embeddings'):
-                await self.embeddings.cleanup()
-            
-            if hasattr(self, 'model'):
-                try:
-                    self.model.cpu()
-                    del self.model
-                except Exception as e:
-                    logger.warning(f"Erreur nettoyage modèle: {e}")
-            
-            if hasattr(self, 'tokenizer'):
-                try:
-                    del self.tokenizer
-                except Exception as e:
-                    logger.warning(f"Erreur nettoyage tokenizer: {e}")
-            
-            # Nettoyage mémoire
-            gc.collect()
-            if torch.cuda.is_available():
-                try:
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                except Exception as e:
-                    logger.warning(f"Erreur nettoyage CUDA: {e}")
-            
-            logger.info("Nettoyage des ressources terminé")
-            
+            if self.tokenizer is not None:
+                del self.tokenizer
+                logger.info("Tokenizer supprimé de la mémoire.")
         except Exception as e:
-            logger.error(f"Erreur lors du nettoyage: {e}")
+            logger.warning(f"Erreur lors de la suppression du modèle ou du tokenizer: {e}")
+
+        # Libération explicite de la mémoire GPU
+        if torch.cuda.is_available():
+            try:
+                logger.info("Libération de la mémoire GPU.")
+                torch.cuda.empty_cache()  # Vide le cache des allocations CUDA
+                torch.cuda.synchronize()  # Synchronisation pour éviter des conflits asynchrones
+            except Exception as e:
+                logger.warning(f"Erreur lors de la libération de la mémoire GPU: {e}")
+        
+        # Nettoyage de la mémoire système
+        try:
+            logger.info("Collecte des ordures (Garbage Collection).")
+            gc.collect()  # Collecte explicite des ordures pour libérer la mémoire CPU
+        except Exception as e:
+            logger.warning(f"Erreur lors du Garbage Collection: {e}")
+
+        logger.info("Nettoyage des ressources terminé.")
 
     def _prepare_prompt(
         self,
@@ -729,6 +646,44 @@ class ModelInference:
         """Crée un embedding pour un texte."""
         return await self.embeddings.generate_embedding(text)
 
+    async def cleanup(self):
+        """Nettoie les ressources de manière asynchrone."""
+        try:
+            logger.info("Début du nettoyage des ressources...")
+            
+            if hasattr(self, 'executor'):
+                self.executor.shutdown(wait=False)
+            
+            if hasattr(self, 'embeddings'):
+                await self.embeddings.cleanup()
+            
+            if hasattr(self, 'model'):
+                try:
+                    self.model.cpu()
+                    del self.model
+                except Exception as e:
+                    logger.warning(f"Erreur nettoyage modèle: {e}")
+            
+            if hasattr(self, 'tokenizer'):
+                try:
+                    del self.tokenizer
+                except Exception as e:
+                    logger.warning(f"Erreur nettoyage tokenizer: {e}")
+            
+            # Nettoyage mémoire
+            gc.collect()
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                except Exception as e:
+                    logger.warning(f"Erreur nettoyage CUDA: {e}")
+            
+            logger.info("Nettoyage des ressources terminé")
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage: {e}")
+            
     def __del__(self):
         """Destructeur de la classe avec gestion de la coroutine cleanup."""
         try:
