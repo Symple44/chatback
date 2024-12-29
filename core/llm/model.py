@@ -35,6 +35,7 @@ class ModelInference:
             # Initialisation des flags de contrôle
             self._cuda_initialized = False
             self._model_loaded = False
+            self._tokenizer_loaded = False
             self.tokenizer = None
             self.model = None
             self.generation_config = None
@@ -296,6 +297,7 @@ class ModelInference:
         logger.info("Initialisation du tokenizer...")
         try:
             # Charger le tokenizer
+            self._tokenizer_loaded = False  # Ajout du flag initial
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 use_fast=True,
@@ -310,12 +312,14 @@ class ModelInference:
     
             # Tester le tokenizer
             self._test_tokenizer()
-    
+
+            self._tokenizer_loaded = True  
             logger.info("Configuration du tokenizer terminée avec succès.")
         except ValueError as ve:
             logger.error(f"Erreur de configuration : {ve}")
             raise ValueError(f"Configuration du tokenizer échouée : {ve}")
         except Exception as e:
+            self._tokenizer_loaded = False
             logger.error(f"Erreur imprévue lors de la configuration du tokenizer : {e}")
             raise RuntimeError(f"Erreur imprévue dans le tokenizer : {e}")
 
