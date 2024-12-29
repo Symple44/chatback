@@ -212,14 +212,12 @@ class ModelInference:
             
             # Configuration pour chargement optimal
             model_kwargs = {
-                "device_map": {
-                    "": "cuda:0"
-                },
+                "device_map": "auto",
                 "torch_dtype": torch.bfloat16,
                 "offload_state_dict": True,
                 "offload_folder": "offload_folder",
                 "low_cpu_mem_usage": True,
-                "max_memory": {0: "16GiB"}
+                "max_memory": {0: "22GiB", "cpu": "12GB"}
             }
     
             # Ajout de la quantification si activée
@@ -228,7 +226,8 @@ class ModelInference:
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
+                    bnb_4bit_quant_type="nf4",
+                    llm_int8_enable_fp32_cpu_offload=True
                 )
     
             # Configuration modèle
