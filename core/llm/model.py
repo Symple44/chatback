@@ -266,54 +266,49 @@ class ModelInference:
             raise
 
     def _setup_tokenizer(self):
-        """
-        Configure et initialise le tokenizer pour le modèle spécifié.
-        """
         logger.info("Initialisation du tokenizer...")
-
         try:
-            # Charger le tokenizer à partir du modèle spécifié
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
-                use_fast=True,  # Utilisation de la version rapide si disponible
+                use_fast=True,
                 model_max_length=settings.MAX_INPUT_LENGTH
             )
             logger.info(f"Tokenizer chargé avec succès : {settings.MODEL_NAME}")
-
-            # Vérifier et définir un token de padding si nécessaire
+    
+            # Vérifier et configurer le token de padding
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
                 logger.info("Token de padding défini sur le token de fin (EOS).")
-
+    
             # Tester le tokenizer
             self._test_tokenizer()
-
+    
             logger.info("Configuration du tokenizer terminée avec succès.")
-
         except Exception as e:
             logger.error(f"Erreur lors de la configuration du tokenizer : {e}")
             raise ValueError(f"Échec de la configuration du tokenizer : {e}")
 
     def _test_tokenizer(self):
         """
-        Vérifie le bon fonctionnement du tokenizer en effectuant un test simple.
+        Vérifie le bon fonctionnement du tokenizer en testant une entrée simple.
         """
         logger.info("Test du tokenizer en cours...")
         test_input = "Test simple du tokenizer"
     
         try:
-            # Tokeniser une phrase de test
+            # Tokenisation
             tokens = self.tokenizer(test_input)
             logger.info(f"Tokens générés pour '{test_input}' : {tokens}")
     
-            # Vérifier que les clés nécessaires sont présentes
+            # Vérifier que la sortie est un dictionnaire
             if not isinstance(tokens, dict):
                 raise ValueError("Le tokenizer n'a pas retourné un dictionnaire.")
     
-            required_keys = ["input_ids", "attention_mask"]
-            for key in required_keys:
-                if key not in tokens:
-                    raise ValueError(f"Clé manquante dans les tokens : {key}")
+            # Vérifier les clés nécessaires
+            required_keys = {"input_ids", "attention_mask"}
+            missing_keys = required_keys - tokens.keys()
+            if missing_keys:
+                raise ValueError(f"Clés manquantes dans les tokens : {missing_keys}")
     
             logger.info("Test du tokenizer réussi.")
         except Exception as e:
