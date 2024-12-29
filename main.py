@@ -5,25 +5,24 @@ from pathlib import Path
 
 def setup_environment():
     """Configure l'environnement avant l'import des dépendances."""
-    # Configuration CUDA
-    os.environ["CUDA_DEVICE_ORDER"] = os.getenv("CUDA_DEVICE_ORDE","PCI_BUS_ID")
+    # Configuration CUDA à partir des variables d'environnement
+    os.environ["CUDA_DEVICE_ORDER"] = os.getenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     os.environ["CUDA_VISIBLE_DEVICES"] = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    os.environ["CUDA_AUTO_TUNE"] = os.getenv("CUDA_AUTO_TUNE","1")
-    os.environ["TORCH_USE_CUDA_DSA"] = os.getenv("TORCH_USE_CUDA_DSA","1")
+    os.environ["CUDA_AUTO_TUNE"] = os.getenv("CUDA_AUTO_TUNE", "1")
+    os.environ["TORCH_USE_CUDA_DSA"] = os.getenv("TORCH_USE_CUDA_DSA", "1")
     
     # Configuration PyTorch
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = os.getenv("PYTORCH_CUDA_ALLOC_CONF","max_split_size_mb:2048")
-    os.environ["TORCH_ALLOW_TF32_CUBLAS_OVERRIDE"] = os.getenv("TORCH_ALLOW_TF32_CUBLAS_OVERRIDE","1")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = os.getenv("PYTORCH_CUDA_ALLOC_CONF", 
+        "max_split_size_mb:1024,garbage_collection_threshold:0.8,expandable_segments:True")
     
-    # Optimisation CPU
-    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "1")
-    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "1")
-    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "1")
-    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "1")
+    # Optimisation CPU 
+    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "12")
+    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "12")
+    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "12")
+    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "12")
     
     # Configuration TensorFlow (désactivé pour PyTorch)
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Désactive GPU pour TF
 
     # Création du dossier pour le offloading si nécessaire
     os.makedirs("offload_folder", exist_ok=True)
@@ -31,18 +30,19 @@ def setup_environment():
 # Setup initial
 setup_environment()
 
-# Ajout du répertoire parent au PYTHONPATH
-sys.path.append(str(Path(__file__).resolve().parent))
-
-# Import PyTorch et configuration
+# Import PyTorch et configuration après setup_environment
 import torch
 import torch.backends.cuda
 import torch.backends.cudnn
 
-# Configuration PyTorch
-torch.set_num_threads(1)
+# Configuration PyTorch si CUDA est disponible
 if torch.cuda.is_available():
+    # Récupération de la fraction de mémoire depuis l'environnement
+    memory_fraction = float(os.getenv("CUDA_MEMORY_FRACTION", "0.95"))
     torch.cuda.empty_cache()
+    torch.cuda.set_per_process_memory_fraction(memory_fraction)
+    
+    # Optimisations CUDA
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
