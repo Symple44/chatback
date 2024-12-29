@@ -1,5 +1,6 @@
 # core/llm/model.py
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
+from pathlib import Path
 import torch
 from transformers import (
     AutoTokenizer, 
