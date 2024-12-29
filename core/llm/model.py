@@ -71,32 +71,91 @@ class ModelInference:
         os.environ["PATH"] = f"{os.environ['PATH']}:/usr/local/cuda/bin"
 
     def _setup_cuda_environment(self):
-        """Configure l'environnement CUDA."""
+        """Configure l'environnement CUDA en évitant les doubles initialisations."""
         if torch.cuda.is_available():
             try:
                 # Vérification de la version CUDA
                 cuda_version = torch.version.cuda
                 logger.info(f"Version CUDA détectée: {cuda_version}")
                 
-                # Configuration GPU
-                torch.cuda.set_device(int(settings.CUDA_VISIBLE_DEVICES))
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.enabled = True
-                torch.backends.cudnn.benchmark = True
-                torch.backends.cudnn.allow_tf32 = True
-                
-                # Configuration Flash Attention si disponible
-                if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
-                    torch.backends.cuda.enable_flash_sdp(True)
-                
-                # Configuration mémoire GPU
-                memory_fraction = float(settings.CUDA_MEMORY_FRACTION)
-                torch.cuda.set_per_process_memory_fraction(memory_fraction)
-                
-                logger.info(f"Environnement CUDA configuré avec succès")
+                # Configuration unique du device CUDA
+                device_id = int(settings.CUDA_VISIBLE_DEVICES)
+                if device_id >= 0 and device_id < torch.cuda.device_count():
+                    torch.cuda.set_device(device_id)
+                else:
+                    logger.warning(f"Device ID invalide: {device_id}, utilisation du device 0")
+                    torch.cuda.set_device(0)
+    
+                # Configuration des optimisations PyTorch une seule fois
+                if not getattr(self, '_cuda_initialized', False):
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.enabled = True
+                    torch.backends.cudnn.benchmark = True
+                    torch.backends.cudnn.deterministic = False
+                    torch.backends.cudnn.allow_tf32 = True
+    
+                    # Flash Attention uniquement si disponible et non déjà initialisé
+                    if (hasattr(torch.nn.functional, 'scaled_dot_product_attention') and
+                        not getattr(torch.backends.cuda, '_flash_sdp_initialized', False)):
+                        torch.backends.cuda.enable_flash_sdp(True)
+                        setattr(torch.backends.cuda, '_flash_sdp_initialized', True)
+    
+                    # Configuration mémoire
+                    memory_fraction = float(settings.CUDA_MEMORY_FRACTION)
+                    if memory_fraction > 0 and memory_fraction <= 1:
+                        torch.cuda.set_per_process_memory_fraction(memory_fraction)
+                    
+                    # Marquer comme initialisé
+                    self._cuda_initialized = True
+                    
+                # Configuration du garbage collector CUDA
+                gc.collect()
+                if hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
+    
+                logger.info(f"Environnement CUDA configuré avec succès pour device {torch.cuda.current_device()}")
                 
             except Exception as e:
                 logger.error(f"Erreur configuration CUDA: {e}")
+                raise
+    
+    def _verify_cuda_setup(self):
+        """Vérifie la configuration CUDA."""
+        if torch.cuda.is_available():
+            try:
+                # Test basique CUDA
+                test_tensor = torch.zeros(1, device='cuda')
+                del test_tensor
+                torch.cuda.empty_cache()
+    
+                # Vérification des capacités
+                device = torch.cuda.current_device()
+                capabilities = torch.cuda.get_device_capability(device)
+                device_name = torch.cuda.get_device_name(device)
+                logger.info(f"GPU {device}: {device_name} (Compute {capabilities[0]}.{capabilities[1]})")
+    
+                # Vérification de la mémoire
+                total_memory = torch.cuda.get_device_properties(device).total_memory
+                logger.info(f"Mémoire GPU totale: {total_memory / 1e9:.2f} GB")
+    
+                return True
+            except Exception as e:
+                logger.error(f"Erreur vérification CUDA: {e}")
+                return False
+        return False
+    
+    def _get_optimal_device(self) -> str:
+        """Détermine le meilleur device disponible avec vérification détaillée."""
+        if settings.USE_CPU_ONLY:
+            return "cpu"
+    
+        try:
+            if torch.cuda.is_available() and self._verify_cuda_setup():
+                return f"cuda:{torch.cuda.current_device()}"
+        except Exception as e:
+            logger.warning(f"Erreur détection CUDA: {e}")
+        
+        return "cpu"
 
     def _log_gpu_info(self):
         """Log les informations sur les GPUs disponibles."""
