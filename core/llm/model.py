@@ -268,6 +268,7 @@ class ModelInference:
     def _setup_tokenizer(self):
         logger.info("Initialisation du tokenizer...")
         try:
+            # Charger le tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 use_fast=True,
@@ -275,7 +276,7 @@ class ModelInference:
             )
             logger.info(f"Tokenizer chargé avec succès : {settings.MODEL_NAME}")
     
-            # Vérifier et configurer le token de padding
+            # Configurer le token de padding si nécessaire
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
                 logger.info("Token de padding défini sur le token de fin (EOS).")
@@ -284,9 +285,12 @@ class ModelInference:
             self._test_tokenizer()
     
             logger.info("Configuration du tokenizer terminée avec succès.")
+        except ValueError as ve:
+            logger.error(f"Erreur de configuration : {ve}")
+            raise ValueError(f"Configuration du tokenizer échouée : {ve}")
         except Exception as e:
-            logger.error(f"Erreur lors de la configuration du tokenizer : {e}")
-            raise ValueError(f"Échec de la configuration du tokenizer : {e}")
+            logger.error(f"Erreur imprévue lors de la configuration du tokenizer : {e}")
+            raise RuntimeError(f"Erreur imprévue dans le tokenizer : {e}")
 
     def _test_tokenizer(self):
         """
@@ -300,14 +304,16 @@ class ModelInference:
             tokens = self.tokenizer(test_input)
             logger.info(f"Tokens générés pour '{test_input}' : {tokens}")
     
-            # Vérifier que la sortie est un dictionnaire
+            # Vérification du type de sortie
             if not isinstance(tokens, dict):
+                logger.error(f"Type inattendu pour les tokens : {type(tokens)}")
                 raise ValueError("Le tokenizer n'a pas retourné un dictionnaire.")
     
-            # Vérifier les clés nécessaires
+            # Vérification des clés nécessaires
             required_keys = {"input_ids", "attention_mask"}
             missing_keys = required_keys - tokens.keys()
             if missing_keys:
+                logger.error(f"Clés manquantes dans les tokens : {missing_keys}")
                 raise ValueError(f"Clés manquantes dans les tokens : {missing_keys}")
     
             logger.info("Test du tokenizer réussi.")
