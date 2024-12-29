@@ -2,6 +2,7 @@
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
 from pathlib import Path
 import torch
+from transformers.tokenization_utils_base import BatchEncoding
 from transformers import (
     AutoTokenizer, 
     AutoModelForCausalLM,
@@ -23,6 +24,7 @@ from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .embeddings import EmbeddingsManager
+
 
 logger = get_logger("model")
 
