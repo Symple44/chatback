@@ -32,6 +32,8 @@ class ModelInference:
             # Initialisation des flags de contrôle
             self._cuda_initialized = False
             self._model_loaded = False
+            self.model = None
+            self.tokenizer = None  # Initialisation explicite à None
             
             # Nettoyage initial
             self._cleanup_memory()
@@ -55,12 +57,21 @@ class ModelInference:
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
             
-            # Initialisation séquentielle avec vérifications
-            if self._setup_model():
-                self._setup_tokenizer()
-                self._setup_generation_config()
-                self._model_loaded = True
-                logger.info("Modèle initialisé avec succès")
+            # Initialisation du tokenizer avant le modèle
+            self._setup_tokenizer()
+            if not self.tokenizer:
+                raise RuntimeError("Échec de l'initialisation du tokenizer")
+                
+            # Initialisation du modèle
+            self._setup_model()
+            if not self.model:
+                raise RuntimeError("Échec de l'initialisation du modèle")
+                
+            # Configuration de la génération
+            self._setup_generation_config()
+            
+            self._model_loaded = True
+            logger.info("Modèle initialisé avec succès")
             
         except Exception as e:
             logger.error(f"Erreur initialisation modèle: {e}")
@@ -264,20 +275,31 @@ class ModelInference:
     def _setup_tokenizer(self):
         """Configure le tokenizer."""
         try:
+            logger.info(f"Initialisation du tokenizer pour {settings.MODEL_NAME}")
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 use_fast=True,
                 model_max_length=settings.MAX_INPUT_LENGTH,
+                padding_side="left",  # Important pour la génération de texte
+                truncation_side="left",  # Cohérent avec le padding
                 revision=settings.MODEL_REVISION
             )
             
+            # Configuration des tokens spéciaux
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
                 
-            logger.info("Tokenizer configuré")
+            # Vérification de l'initialisation
+            test_text = "Test tokenizer initialization"
+            test_tokens = self.tokenizer(test_text, return_tensors="pt")
+            if not isinstance(test_tokens, dict) or "input_ids" not in test_tokens:
+                raise ValueError("Tokenizer initialization failed")
+                
+            logger.info("Tokenizer configuré avec succès")
             
         except Exception as e:
             logger.error(f"Erreur configuration tokenizer: {e}")
+            self.tokenizer = None  # Reset en cas d'erreur
             raise
 
     def _setup_generation_config(self):
