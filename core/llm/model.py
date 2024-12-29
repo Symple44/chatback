@@ -35,8 +35,10 @@ class ModelInference:
             # Initialisation des flags de contrôle
             self._cuda_initialized = False
             self._model_loaded = False
-            self.model = None
             self.tokenizer = None
+            self.model = None
+            self.generation_config = None
+            self.quantization_config = None
             
             # Nettoyage initial
             self._cleanup_memory()
@@ -59,11 +61,17 @@ class ModelInference:
             # Initialisation des composants dans l'ordre correct
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
-            self._setup_tokenizer()  # Doit réussir avant de continuer
+            
+            # Initialiser d'abord le tokenizer
+            self._setup_tokenizer()
             if not self.tokenizer:
                 raise RuntimeError("Échec de l'initialisation du tokenizer")
-            self._setup_model()  # Initialisation du modèle après le tokenizer
+                
+            # Configurer la génération après le tokenizer
             self._setup_generation_config()
+            
+            # Initialiser le modèle en dernier
+            self._setup_model()
             
             self._model_loaded = True
             logger.info("Modèle initialisé avec succès")
@@ -327,19 +335,27 @@ class ModelInference:
 
     def _setup_generation_config(self):
         """Configure les paramètres de génération."""
-        self.generation_config = GenerationConfig(
-            max_new_tokens=int(settings.MAX_NEW_TOKENS),
-            min_new_tokens=int(settings.MIN_NEW_TOKENS),
-            do_sample=settings.DO_SAMPLE.lower() == 'true',
-            temperature=float(settings.TEMPERATURE),
-            top_p=float(settings.TOP_P),
-            top_k=int(settings.TOP_K),
-            num_beams=int(settings.NUM_BEAMS),
-            repetition_penalty=float(settings.REPETITION_PENALTY),
-            length_penalty=float(settings.LENGTH_PENALTY),
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id
-        )
+        if not self.tokenizer:
+            raise RuntimeError("Tokenizer non initialisé")
+            
+        try:
+            self.generation_config = GenerationConfig(
+                max_new_tokens=int(settings.MAX_NEW_TOKENS),
+                min_new_tokens=int(settings.MIN_NEW_TOKENS),
+                do_sample=settings.DO_SAMPLE.lower() == 'true',
+                temperature=float(settings.TEMPERATURE),
+                top_p=float(settings.TOP_P),
+                top_k=int(settings.TOP_K),
+                num_beams=int(settings.NUM_BEAMS),
+                repetition_penalty=float(settings.REPETITION_PENALTY),
+                length_penalty=float(settings.LENGTH_PENALTY),
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+            logger.info("Configuration de génération initialisée")
+        except Exception as e:
+            logger.error(f"Erreur configuration génération: {e}")
+            raise
 
     async def generate_response(
         self,
