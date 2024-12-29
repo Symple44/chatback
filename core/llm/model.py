@@ -225,20 +225,24 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration de base du modèle
-            model_kwargs = {
-                "device_map": "auto",
-                "torch_dtype": torch.float16,
-                "low_cpu_mem_usage": True,
-                "max_memory": {
-                    0: f"{int(settings.MEMORY_LIMIT)}MB",
-                    "cpu": "22GB"
-                }
+            # Configuration mémoire optimisée pour RTX 3090
+            max_memory = {
+                0: "20GiB",  # Réserve 20GB pour le GPU
+                "cpu": "24GB"  # Autorise l'utilisation de la RAM
             }
-
-            # Ajout de la configuration de quantification si activée
-            if self.quantization_config:
-                model_kwargs["quantization_config"] = self.quantization_config
+            
+            # Configuration de quantification 4-bit améliorée
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                llm_int8_enable_fp32_cpu_offload=True,  # Active l'offload CPU
+                llm_int8_skip_modules=None
+            )
+    
+            # Configuration du device map automatique
+            device_map = "auto"
             
             # Configuration du modèle
             config = AutoConfig.from_pretrained(
@@ -249,16 +253,22 @@ class ModelInference:
             
             # Optimisations
             config.use_cache = True
-            config.pretraining_tp = settings.MODEL_PARALLEL_SIZE
+            config.pretraining_tp = 1
             
             # Nettoyage préventif
             self._cleanup_memory()
             
-            # Chargement du modèle
+            # Chargement du modèle avec tous les paramètres optimisés
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
-                **model_kwargs
+                device_map=device_map,
+                max_memory=max_memory,
+                quantization_config=quantization_config,
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True,
+                offload_folder="offload_folder"
             )
             
             # Post-configuration
