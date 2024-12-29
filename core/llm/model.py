@@ -199,51 +199,50 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration CUDA
-            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-                "max_split_size_mb:64,"
-                "garbage_collection_threshold:0.6,"
-                "expandable_segments:True"
-            )
-    
-            # Nettoyage initial
-            self._cleanup_memory()
-            torch.cuda.empty_cache()
+            # Configuration CUDA optimisée
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
             
-            # Configuration pour chargement optimal
+            # Configuration du modèle
             model_kwargs = {
-                "device_map": "auto",
-                "torch_dtype": torch.bfloat16,
-                "offload_state_dict": True,
-                "offload_folder": "offload_folder",
-                "low_cpu_mem_usage": True,
-                "max_memory": {0: "22GiB", "cpu": "12GB"}
+                "device_map": "sequential",  # Distribution séquentielle sur GPU
+                "torch_dtype": torch.float16,  # Utiliser float16 au lieu de bfloat16
+                "low_cpu_mem_usage": True
             }
     
-            # Ajout de la quantification si activée
+            # Configuration de quantification 4-bit
             if settings.USE_4BIT:
                 model_kwargs["quantization_config"] = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_compute_dtype=torch.float16,  # Utiliser float16
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
-                    llm_int8_enable_fp32_cpu_offload=True
+                    llm_int8_skip_modules=["lm_head", "embed_tokens"],
+                    llm_int8_enable_fp32_cpu_offload=False
                 )
     
-            # Configuration modèle
-            from transformers import AutoConfig
-            config = AutoConfig.from_pretrained(settings.MODEL_NAME)
-            if hasattr(config, "pretraining_tp"):
-                config.pretraining_tp = 1
-            config.use_cache = False
+            # Configuration du modèle
+            config = AutoConfig.from_pretrained(
+                settings.MODEL_NAME,
+                trust_remote_code=True
+            )
+            
+            # Désactiver le gradient checkpointing
+            config.use_cache = True
+            config.pretraining_tp = 1
     
-            logger.info("Début du chargement du modèle")
+            # Charger le modèle
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
                 **model_kwargs
             )
             
+            # Optimisations post-chargement
+            self.model.eval()  # Mode évaluation
+            if torch.cuda.is_available():
+                self.model = self.model.cuda()
+                
             logger.info("Modèle chargé avec succès")
             self._cleanup_memory()
             
