@@ -3,28 +3,65 @@ import os
 import sys
 from pathlib import Path
 
-def setup_environment():
-    """Configure l'environnement avant l'import des dépendances."""
-    # Optimisation CPU
-    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")         # Adapté pour AMD 8845HS
-    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16") # Adapté pour AMD 8845HS
-    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")         # Adapté pour AMD 8845HS
-    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16") # Adapté pour AMD 8845HS
+def setup_cuda_environment():
+    """Configure l'environnement CUDA avant le chargement des bibliothèques."""
     
-    # Configuration TensorFlow minimale
+    # Désactive les avertissements TF
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    
+    # Force l'ordre de chargement CUDA
+    os.environ["CUDA_MODULE_LOADING"] = "LAZY"
+    
+    # Configuration des bibliothèques numériques
+    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")
+    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16")
+    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")
+    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16")
+    
+    # Configuration CUDA pour la RTX 3090
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.getenv("CUDA_VISIBLE_DEVICES", "0")
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    
+    # Configuration de la mémoire PyTorch
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:2048"
+    
+    # Désactive JIT PyTorch pour éviter les conflits
+    os.environ["PYTORCH_JIT"] = "0"
+    
+    # Configuration du provider CUDA pour ONNX
+    os.environ["ONNXRUNTIME_CUDA_PROVIDER_OPTIONS"] = """
+    {
+        "arena_extend_strategy": "kSameAsRequested",
+        "cudnn_conv_use_max_workspace": "1",
+        "do_copy_in_default_stream": "1"
+    }
+    """
 
-    # Création des répertoires nécessaires
-    REQUIRED_DIRS = ["offload_folder", "static", "documents", "model_cache", "logs", "data", "temp"]
+def setup_environment():
+    """Configure l'environnement complet avant le démarrage."""
+    # Configuration CUDA
+    setup_cuda_environment()
+    
+    # Création des répertoires
+    REQUIRED_DIRS = [
+        "offload_folder",
+        "static",
+        "documents",
+        "model_cache",
+        "logs",
+        "data",
+        "temp"
+    ]
     for dir_name in REQUIRED_DIRS:
         path = Path(dir_name)
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o755)  # Permissions sécurisées
 
-# Setup initial
-setup_environment()
-
-# Import des dépendances
+# Exécution de la configuration avant tout import
+if __name__ == "__main__":
+    setup_environment()
+    
+# Import des dépendances après la configuration
 import asyncio
 import uvicorn
 from datetime import datetime
