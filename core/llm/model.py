@@ -222,6 +222,7 @@ class ModelInference:
             return False
 
     def _setup_model(self):
+        """Configure le modèle avec conservation du tokenizer."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
@@ -237,7 +238,7 @@ class ModelInference:
                 bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
-                llm_int8_enable_fp32_cpu_offload=True,  # Active l'offload CPU
+                llm_int8_enable_fp32_cpu_offload=True,
                 llm_int8_skip_modules=None
             )
     
@@ -255,8 +256,17 @@ class ModelInference:
             config.use_cache = True
             config.pretraining_tp = 1
             
-            # Nettoyage préventif
-            self._cleanup_memory()
+            # Nettoyage préventif sans affecter le tokenizer
+            if hasattr(self, 'model'):
+                try:
+                    if torch.cuda.is_available():
+                        self.model.cpu()
+                    del self.model
+                except Exception:
+                    pass
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             # Chargement du modèle avec tous les paramètres optimisés
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -274,16 +284,13 @@ class ModelInference:
             # Post-configuration
             if torch.cuda.is_available():
                 self.model.eval()
-                if hasattr(self.model, "enable_input_require_grads"):
-                    self.model.enable_input_require_grads()
             
             logger.info("Modèle chargé avec succès")
-            self._cleanup_memory()
+            return True
             
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
-            self._cleanup_memory()
-            raise
+            return False
 
     def _setup_tokenizer(self):
         logger.info("Initialisation du tokenizer...")
@@ -377,6 +384,10 @@ class ModelInference:
     ) -> Dict[str, Any]:
         """Génère une réponse."""
         try:
+            # Vérification de l'état du modèle
+            self._ensure_model_ready()
+            
+            # Préparation du prompt
             prompt = self._prepare_prompt(
                 query=query,
                 context_docs=context_docs,
@@ -384,8 +395,10 @@ class ModelInference:
                 language=language
             )
             
+            # Tokenisation
             inputs = self._tokenize(prompt)
             
+            # Configuration de génération
             gen_config = self.generation_config
             if generation_config:
                 gen_config = GenerationConfig(**{
@@ -393,6 +406,7 @@ class ModelInference:
                     **generation_config
                 })
             
+            # Génération avec mesure du temps
             with metrics.timer("model_inference"):
                 with torch.inference_mode():
                     outputs = self.model.generate(
@@ -402,6 +416,7 @@ class ModelInference:
                         output_scores=True
                     )
             
+            # Décodage et post-traitement
             response = self.tokenizer.decode(
                 outputs.sequences[0],
                 skip_special_tokens=True,
@@ -410,6 +425,7 @@ class ModelInference:
             
             response = self._post_process_response(response)
             
+            # Métriques
             metrics.increment_counter("model_generations")
             
             return {
@@ -491,44 +507,6 @@ class ModelInference:
             logger.warning(f"Erreur détection CUDA: {e}")
         
         return "cpu"
-
-    def _cleanup_memory(self):
-        """
-        Méthode pour nettoyer les ressources utilisées par le modèle et libérer la mémoire GPU/CPU.
-        """
-        logger.info("Début du nettoyage des ressources...")
-
-        # Libération du modèle et du tokenizer
-        try:
-            if self.model is not None:
-                logger.info("Déplacement du modèle sur CPU avant suppression.")
-                self.model.cpu()  # Déplacement sur CPU pour éviter des blocages GPU
-                del self.model
-                logger.info("Modèle supprimé de la mémoire.")
-            
-            if self.tokenizer is not None:
-                del self.tokenizer
-                logger.info("Tokenizer supprimé de la mémoire.")
-        except Exception as e:
-            logger.warning(f"Erreur lors de la suppression du modèle ou du tokenizer: {e}")
-
-        # Libération explicite de la mémoire GPU
-        if torch.cuda.is_available():
-            try:
-                logger.info("Libération de la mémoire GPU.")
-                torch.cuda.empty_cache()  # Vide le cache des allocations CUDA
-                torch.cuda.synchronize()  # Synchronisation pour éviter des conflits asynchrones
-            except Exception as e:
-                logger.warning(f"Erreur lors de la libération de la mémoire GPU: {e}")
-        
-        # Nettoyage de la mémoire système
-        try:
-            logger.info("Collecte des ordures (Garbage Collection).")
-            gc.collect()  # Collecte explicite des ordures pour libérer la mémoire CPU
-        except Exception as e:
-            logger.warning(f"Erreur lors du Garbage Collection: {e}")
-
-        logger.info("Nettoyage des ressources terminé.")
 
     def _prepare_prompt(
         self,
@@ -698,6 +676,64 @@ class ModelInference:
         """Crée un embedding pour un texte."""
         return await self.embeddings.generate_embedding(text)
 
+    def _is_model_ready(self) -> bool:
+        """Vérifie si le modèle est prêt à être utilisé."""
+        return (
+            hasattr(self, 'model') and 
+            self.model is not None and 
+            hasattr(self, 'tokenizer') and 
+            self.tokenizer is not None and 
+            self._tokenizer_loaded
+        )
+    
+    def _ensure_model_ready(self):
+        """S'assure que le modèle est prêt, sinon lève une exception."""
+        if not self._is_model_ready():
+            if not hasattr(self, 'tokenizer') or self.tokenizer is None:
+                raise RuntimeError("Tokenizer non initialisé")
+            if not hasattr(self, 'model') or self.model is None:
+                raise RuntimeError("Modèle non initialisé")
+            raise RuntimeError("Modèle non prêt")
+
+    def _cleanup_memory(self):
+        """Nettoie les ressources de manière sécurisée."""
+        logger.info("Début du nettoyage des ressources...")
+        try:
+            # Ne pas supprimer le tokenizer s'il est déjà initialisé
+            if hasattr(self, '_tokenizer_loaded') and not self._tokenizer_loaded:
+                if hasattr(self, 'tokenizer'):
+                    delattr(self, 'tokenizer')
+                    logger.info("Tokenizer supprimé de la mémoire.")
+                
+            # Nettoyage du modèle si nécessaire
+            if hasattr(self, 'model') and self.model is not None:
+                try:
+                    if torch.cuda.is_available():
+                        self.model.cpu()
+                    del self.model
+                    self.model = None
+                    logger.info("Modèle supprimé de la mémoire.")
+                except Exception as e:
+                    logger.warning(f"Erreur lors de la suppression du modèle: {e}")
+            
+            # Libération de la mémoire GPU
+            if torch.cuda.is_available():
+                try:
+                    logger.info("Libération de la mémoire GPU.")
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                except Exception as e:
+                    logger.warning(f"Erreur libération mémoire GPU: {e}")
+    
+            # Collecte des ordures
+            gc.collect()
+            logger.info("Collecte des ordures (Garbage Collection).")
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage: {e}")
+        finally:
+            logger.info("Nettoyage des ressources terminé.")
+            
     async def cleanup(self):
         """Nettoie les ressources de manière asynchrone."""
         try:
@@ -709,18 +745,15 @@ class ModelInference:
             if hasattr(self, 'embeddings'):
                 await self.embeddings.cleanup()
             
+            # Conserver le tokenizer chargé
             if hasattr(self, 'model'):
                 try:
-                    self.model.cpu()
+                    if torch.cuda.is_available():
+                        self.model.cpu()
                     del self.model
+                    self.model = None
                 except Exception as e:
                     logger.warning(f"Erreur nettoyage modèle: {e}")
-            
-            if hasattr(self, 'tokenizer'):
-                try:
-                    del self.tokenizer
-                except Exception as e:
-                    logger.warning(f"Erreur nettoyage tokenizer: {e}")
             
             # Nettoyage mémoire
             gc.collect()
