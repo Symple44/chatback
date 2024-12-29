@@ -1,12 +1,13 @@
 # core/llm/model.py
 from typing import List, Dict, Optional, Any, AsyncIterator, Union
-from transformers import BitsAndBytesConfig
 import torch
 from transformers import (
     AutoTokenizer, 
     AutoModelForCausalLM,
+    AutoConfig, 
     TextIteratorStreamer,
-    GenerationConfig
+    GenerationConfig,
+    BitsAndBytesConfig
 )
 import asyncio
 from datetime import datetime
