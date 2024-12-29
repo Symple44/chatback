@@ -627,34 +627,55 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur vérification tokenizer: {e}")
             return False
+            
+    def _verify_tokenizer_state(self) -> bool:
+        """Vérifie l'état complet du tokenizer avant utilisation."""
+        if not hasattr(self, 'tokenizer') or self.tokenizer is None:
+            logger.error("Tokenizer non initialisé")
+            return False
+            
+        if not self._tokenizer_loaded:
+            logger.error("Tokenizer non chargé correctement")
+            return False
+            
+        if not hasattr(self.tokenizer, 'encode') or not hasattr(self.tokenizer, 'decode'):
+            logger.error("Méthodes du tokenizer manquantes")
+            return False
+            
+        return True
     
     def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
         """Tokenise le texte avec gestion des erreurs."""
         try:
-            # Vérification du tokenizer
-            if not self._verify_tokenizer():
+            # Vérification de l'état
+            if not self._verify_tokenizer_state():
                 raise RuntimeError("Tokenizer non fonctionnel")
                 
+            # Vérification de l'entrée
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("Texte d'entrée invalide")
+                
+            # Tokenisation avec paramètres de sécurité
             inputs = self.tokenizer(
                 text,
                 return_tensors="pt",
                 truncation=True,
                 max_length=settings.MAX_INPUT_LENGTH,
-                padding=True
-            ).to(self.device)
-    
-            # Log de debug pour la taille des inputs
-            input_length = inputs["input_ids"].shape[-1]
-            logger.debug(f"Longueur des tokens d'entrée: {input_length}")
+                padding=True,
+                return_attention_mask=True,
+                add_special_tokens=True
+            )
             
-            if input_length >= settings.MAX_INPUT_LENGTH:
-                logger.warning("Entrée tronquée à la longueur maximale")
-            
-            return inputs
+            # Vérification de la sortie
+            if "input_ids" not in inputs or "attention_mask" not in inputs:
+                raise RuntimeError("Sortie du tokenizer invalide")
+                
+            # Déplacement sur le bon device
+            return {k: v.to(self.device) for k, v in inputs.items()}
             
         except Exception as e:
             logger.error(f"Erreur lors de la tokenisation: {e}")
-            raise
+            raise RuntimeError("Erreur de tokenisation")
 
     def _post_process_response(self, response: str) -> str:
         """Post-traite la réponse générée."""
