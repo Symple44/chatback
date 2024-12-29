@@ -117,7 +117,8 @@ class Settings(BaseSettings):
     }
 
     # Server Configuration
-    WORKERS: int = int(os.getenv("WORKERS", "16"))
+    WORKERS: int = int(os.getenv("WORKERS", "24"))
+    MAX_CONCURRENT_REQUESTS: int = int(os.getenv("MAX_CONCURRENT_REQUESTS", "32"))
     TIMEOUT: int = int(os.getenv("TIMEOUT", "120"))
     KEEPALIVE: int = int(os.getenv("KEEPALIVE", "5"))
     MAX_REQUESTS: int = int(os.getenv("MAX_REQUESTS", "20000"))
