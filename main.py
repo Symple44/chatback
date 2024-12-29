@@ -193,24 +193,42 @@ components = ComponentManager()
 async def lifespan(app: FastAPI):
     """Gestion du cycle de vie de l'application."""
     try:
+        # Activation du tracemalloc en dev
+        if settings.DEBUG:
+            import tracemalloc
+            tracemalloc.start()
+            
         # Initialisation
         await logger_manager.initialize()
         await metrics.initialize()
-        await components.initialize()
+        try:
+            await components.initialize()
+        except Exception as e:
+            logger.critical(f"Erreur critique lors de l'initialisation des composants: {e}")
+            # Nettoyage explicite en cas d'erreur
+            await components.cleanup()
+            raise
 
         # Import et ajout des routes
         from api.routes.router import router as api_router
         app.include_router(api_router)
         
-        # Démarrage des tâches de fond si nécessaire
         if settings.GOOGLE_DRIVE_SYNC_INTERVAL:
             asyncio.create_task(periodic_sync())
 
         yield
 
+    except Exception as e:
+        logger.critical(f"Erreur fatale pendant le démarrage: {e}")
+        raise
     finally:
         # Nettoyage
-        await components.cleanup()
+        try:
+            await components.cleanup()
+            if settings.DEBUG and tracemalloc.is_tracing():
+                tracemalloc.stop()
+        except Exception as e:
+            logger.error(f"Erreur pendant le nettoyage final: {e}")
         logger.info("Application arrêtée")
 
 async def periodic_sync():
