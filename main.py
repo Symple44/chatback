@@ -5,51 +5,26 @@ from pathlib import Path
 
 def setup_environment():
     """Configure l'environnement avant l'import des dépendances."""
-    # Configuration CUDA à partir des variables d'environnement
-    os.environ["CUDA_DEVICE_ORDER"] = os.getenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
-    os.environ["CUDA_VISIBLE_DEVICES"] = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    os.environ["CUDA_AUTO_TUNE"] = os.getenv("CUDA_AUTO_TUNE", "1")
-    os.environ["TORCH_USE_CUDA_DSA"] = os.getenv("TORCH_USE_CUDA_DSA", "1")
+    # Optimisation CPU
+    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")         # Adapté pour AMD 8845HS
+    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16") # Adapté pour AMD 8845HS
+    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")         # Adapté pour AMD 8845HS
+    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16") # Adapté pour AMD 8845HS
     
-    # Configuration PyTorch
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = os.getenv("PYTORCH_CUDA_ALLOC_CONF", 
-        "max_split_size_mb:1024,garbage_collection_threshold:0.8,expandable_segments:True")
-    
-    # Optimisation CPU 
-    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "12")
-    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "12")
-    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "12")
-    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "12")
-    
-    # Configuration TensorFlow (désactivé pour PyTorch)
+    # Configuration TensorFlow minimale
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-    # Création du dossier pour le offloading si nécessaire
-    os.makedirs("offload_folder", exist_ok=True)
+    # Création des répertoires nécessaires
+    REQUIRED_DIRS = ["offload_folder", "static", "documents", "model_cache", "logs", "data", "temp"]
+    for dir_name in REQUIRED_DIRS:
+        path = Path(dir_name)
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o755)  # Permissions sécurisées
 
 # Setup initial
 setup_environment()
 
-# Import PyTorch et configuration après setup_environment
-import torch
-import torch.backends.cuda
-import torch.backends.cudnn
-
-# Configuration PyTorch si CUDA est disponible
-if torch.cuda.is_available():
-    # Récupération de la fraction de mémoire depuis l'environnement
-    memory_fraction = float(os.getenv("CUDA_MEMORY_FRACTION", "0.95"))
-    torch.cuda.empty_cache()
-    torch.cuda.set_per_process_memory_fraction(memory_fraction)
-    
-    # Optimisations CUDA
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.allow_tf32 = True
-
-# Import des autres dépendances
+# Import des dépendances
 import asyncio
 import uvicorn
 from datetime import datetime
@@ -76,13 +51,6 @@ from core.storage.google_drive import GoogleDriveManager
 
 # Configuration du logger
 logger = get_logger("main")
-
-# Création des répertoires nécessaires
-REQUIRED_DIRS = ["static", "documents", "model_cache", "logs", "data", "temp"]
-for dir_name in REQUIRED_DIRS:
-    path = Path(dir_name)
-    path.mkdir(parents=True, exist_ok=True)
-    path.chmod(0o755)  # Permissions sécurisées
 
 class CustomJSONEncoder(json.JSONEncoder):
     """Encodeur JSON personnalisé."""
@@ -115,11 +83,6 @@ class ComponentManager:
         self._components = {}
         self._init_lock = asyncio.Lock()
         self.system_optimizer = SystemOptimizer()
-        
-        # Configuration GPU si disponible
-        if torch.cuda.is_available():
-            memory_fraction = float(os.getenv("GPU_MEMORY_FRACTION", "0.9"))
-            torch.cuda.set_per_process_memory_fraction(memory_fraction)
 
     async def initialize(self):
         """Initialise tous les composants."""
@@ -207,9 +170,6 @@ class ComponentManager:
 
     async def cleanup(self):
         """Nettoie les ressources."""
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            
         for name, component in self._components.items():
             try:
                 if hasattr(component, 'cleanup'):
@@ -261,7 +221,6 @@ async def periodic_sync():
             await components.sync_drive_documents()
         except Exception as e:
             logger.error(f"Erreur sync périodique: {e}")
-        await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
 
 # Configuration FastAPI
 app = FastAPI(
@@ -282,8 +241,9 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Fichiers statiques
-if Path("static").exists():
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+static_path = Path("static")
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
