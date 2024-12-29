@@ -270,54 +270,111 @@ class ModelInference:
         try:
             logger.info(f"Initialisation du tokenizer pour {settings.MODEL_NAME}")
             
-            # Vérification du cache des modèles
-            cache_dir = Path(settings.MODEL_DIR)
-            cache_dir.mkdir(parents=True, exist_ok=True)
+            # Configuration du cache
+            cache_dir = os.path.join(settings.MODEL_DIR, "tokenizer_cache")
+            os.makedirs(cache_dir, exist_ok=True)
             
-            # Configuration du tokenizer avec gestion du cache
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                settings.MODEL_NAME,
-                use_fast=True,
-                model_max_length=settings.MAX_INPUT_LENGTH,
-                padding_side="left",
-                truncation_side="left",
-                revision=settings.MODEL_REVISION,
-                cache_dir=str(cache_dir),
-                local_files_only=False  # Permet le téléchargement si nécessaire
-            )
+            # Configuration du tokenizer avec options détaillées
+            tokenizer_kwargs = {
+                "pretrained_model_name_or_path": settings.MODEL_NAME,
+                "use_fast": True,
+                "model_max_length": settings.MAX_INPUT_LENGTH,
+                "padding_side": "left",
+                "truncation_side": "left",
+                "cache_dir": cache_dir,
+                "revision": settings.MODEL_REVISION,
+                "trust_remote_code": True,
+                "local_files_only": False
+            }
+
+            logger.debug(f"Paramètres tokenizer: {tokenizer_kwargs}")
+            self.tokenizer = AutoTokenizer.from_pretrained(**tokenizer_kwargs)
             
             # Configuration des tokens spéciaux
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            if self.tokenizer.eos_token is None:
-                self.tokenizer.eos_token = self.tokenizer.pad_token
+            special_tokens = {
+                "pad_token": "<pad>",
+                "eos_token": "</s>",
+                "bos_token": "<s>",
+                "unk_token": "<unk>"
+            }
+
+            # S'assurer que tous les tokens spéciaux sont définis
+            for token_name, token_value in special_tokens.items():
+                if getattr(self.tokenizer, token_name) is None:
+                    setattr(self.tokenizer, token_name, token_value)
+                    logger.debug(f"Token spécial défini: {token_name}={token_value}")
+
+            # Test complet du tokenizer
+            self._test_tokenizer()
+            
+            logger.info("Tokenizer configuré avec succès")
+            
+        except Exception as e:
+            logger.error(f"Erreur configuration tokenizer: {str(e)}")
+            self.tokenizer = None
+            raise ValueError(f"Échec configuration tokenizer: {str(e)}")
+
+    def _test_tokenizer(self):
+        """Test complet du tokenizer avec diagnostics détaillés."""
+        test_inputs = [
+            "Test simple du tokenizer",
+            "Un test plus long avec des phrases complètes.",
+            "Test avec des caractères spéciaux: é à ç ! ? .",
+        ]
+
+        def log_token_info(tokens, decoded):
+            logger.debug(f"Tokens: {tokens['input_ids'].tolist()}")
+            logger.debug(f"Attention mask: {tokens['attention_mask'].tolist()}")
+            logger.debug(f"Décodage: {decoded}")
+            logger.debug(f"Longueur originale: {len(tokens['input_ids'][0])}")
+
+        try:
+            for test_input in test_inputs:
+                logger.debug(f"\nTest tokenization pour: '{test_input}'")
                 
-            # Test du tokenizer
-            test_text = "Test tokenizer initialization"
-            try:
-                test_tokens = self.tokenizer(
-                    test_text, 
+                # Test de base
+                tokens = self.tokenizer(
+                    test_input,
                     return_tensors="pt",
                     padding=True,
                     truncation=True
                 )
-                if not isinstance(test_tokens, dict) or "input_ids" not in test_tokens:
-                    raise ValueError("Test de tokenization échoué")
-                    
-                # Test de decode
-                decoded = self.tokenizer.decode(test_tokens["input_ids"][0])
+
+                if not isinstance(tokens, dict) or "input_ids" not in tokens:
+                    raise ValueError(f"Format de tokens invalide pour: '{test_input}'")
+
+                # Test decode/encode
+                decoded = self.tokenizer.decode(tokens["input_ids"][0])
                 if not decoded:
-                    raise ValueError("Test de décodage échoué")
-                    
-            except Exception as e:
-                logger.error(f"Test du tokenizer échoué: {e}")
-                raise ValueError(f"Test du tokenizer échoué: {e}")
-                
-            logger.info("Tokenizer configuré avec succès")
-            
+                    raise ValueError(f"Décodage échoué pour: '{test_input}'")
+
+                # Test de la cohérence decode/encode
+                re_encoded = self.tokenizer(
+                    decoded,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True
+                )
+
+                log_token_info(tokens, decoded)
+
+                # Vérifier les dimensions
+                if tokens["input_ids"].dim() != 2:
+                    raise ValueError(f"Dimension incorrecte des tokens pour: '{test_input}'")
+
+            # Test des tokens spéciaux
+            special_tokens = ["<pad>", "</s>", "<s>", "<unk>"]
+            for token in special_tokens:
+                token_id = self.tokenizer.convert_tokens_to_ids(token)
+                if token_id == self.tokenizer.unk_token_id and token != "<unk>":
+                    logger.warning(f"Token spécial non reconnu: {token}")
+
+            logger.info("Tests du tokenizer réussis")
+            return True
+
         except Exception as e:
-            logger.error(f"Erreur configuration tokenizer: {e}")
-            self.tokenizer = None
+            logger.error(f"Test du tokenizer échoué: {str(e)}")
+            raise ValueError(f"Test du tokenizer échoué: {str(e)}")
 
     def _setup_generation_config(self):
         """Configure les paramètres de génération."""
