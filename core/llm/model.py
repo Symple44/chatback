@@ -200,26 +200,30 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration CUDA optimisée
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+            # Configuration de la distribution GPU/CPU
+            max_memory = {
+                0: "20GiB",  # Réserver 20GB pour le GPU
+                "cpu": "24GB"  # Autoriser l'utilisation de la RAM
+            }
             
-            # Configuration du modèle
+            # Configuration du modèle de base
             model_kwargs = {
-                "device_map": "sequential",  # Distribution séquentielle sur GPU
-                "torch_dtype": torch.float16,  # Utiliser float16 au lieu de bfloat16
-                "low_cpu_mem_usage": True
+                "device_map": "auto",  # Permet la distribution automatique
+                "torch_dtype": torch.float16,
+                "low_cpu_mem_usage": True,
+                "max_memory": max_memory
             }
     
-            # Configuration de quantification 4-bit
+            # Configuration BitsAndBytes pour 4-bit
             if settings.USE_4BIT:
                 model_kwargs["quantization_config"] = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,  # Utiliser float16
+                    bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
-                    llm_int8_skip_modules=["lm_head", "embed_tokens"],
-                    llm_int8_enable_fp32_cpu_offload=False
+                    llm_int8_enable_fp32_cpu_offload=True,  # Permet l'offload CPU
+                    llm_int8_threshold=6.0,
+                    llm_int8_skip_modules=None
                 )
     
             # Configuration du modèle
@@ -228,23 +232,32 @@ class ModelInference:
                 trust_remote_code=True
             )
             
-            # Désactiver le gradient checkpointing
+            # Optimisations de configuration
             config.use_cache = True
             config.pretraining_tp = 1
-    
-            # Charger le modèle
+            
+            # Nettoyage préventif de la mémoire
+            self._cleanup_memory()
+            torch.cuda.empty_cache()
+            
+            logger.info("Début du chargement du modèle avec configuration 4-bit...")
+            
+            # Chargement du modèle
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
                 **model_kwargs
             )
             
-            # Optimisations post-chargement
-            self.model.eval()  # Mode évaluation
-            if torch.cuda.is_available():
-                self.model = self.model.cuda()
-                
             logger.info("Modèle chargé avec succès")
+            
+            # Post-configuration
+            if torch.cuda.is_available():
+                self.model.eval()
+                # Activer l'optimisation de mémoire si nécessaire
+                if hasattr(self.model, "enable_input_require_grads"):
+                    self.model.enable_input_require_grads()
+            
             self._cleanup_memory()
             
         except Exception as e:
