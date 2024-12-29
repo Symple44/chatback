@@ -608,9 +608,43 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur streaming tokens: {e}")
 
-    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
-        """Tokenise le texte avec gestion de la troncature."""
+    def _verify_tokenizer(self) -> bool:
+        """Vérifie que le tokenizer est correctement initialisé et fonctionnel."""
         try:
+            if not hasattr(self, 'tokenizer') or self.tokenizer is None:
+                logger.error("Tokenizer non initialisé")
+                return False
+                
+            # Test basique
+            test_text = "Test du tokenizer"
+            tokens = self.tokenizer(test_text, return_tensors="pt")
+            
+            # Vérifications
+            required_keys = ["input_ids", "attention_mask"]
+            for key in required_keys:
+                if key not in tokens:
+                    logger.error(f"Tokenizer mal configuré: {key} manquant")
+                    return False
+            
+            # Test encode/decode
+            decoded = self.tokenizer.decode(tokens["input_ids"][0])
+            if not decoded or len(decoded.strip()) == 0:
+                logger.error("Erreur decode tokenizer")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur vérification tokenizer: {e}")
+            return False
+    
+    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
+        """Tokenise le texte avec gestion des erreurs."""
+        try:
+            # Vérification du tokenizer
+            if not self._verify_tokenizer():
+                raise RuntimeError("Tokenizer non fonctionnel")
+                
             inputs = self.tokenizer(
                 text,
                 return_tensors="pt",
@@ -618,7 +652,7 @@ class ModelInference:
                 max_length=settings.MAX_INPUT_LENGTH,
                 padding=True
             ).to(self.device)
-
+    
             # Log de debug pour la taille des inputs
             input_length = inputs["input_ids"].shape[-1]
             logger.debug(f"Longueur des tokens d'entrée: {input_length}")
