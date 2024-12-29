@@ -224,7 +224,7 @@ class ModelInference:
                 "low_cpu_mem_usage": True,
                 "max_memory": {
                     0: f"{int(settings.MEMORY_LIMIT)}MB",
-                    "cpu": "24GB"
+                    "cpu": "22GB"
                 }
             }
 
