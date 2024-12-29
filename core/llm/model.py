@@ -160,19 +160,6 @@ class ModelInference:
                 logger.error(f"Erreur vérification CUDA: {e}")
                 return False
         return False
-    
-    def _get_optimal_device(self) -> str:
-        """Détermine le meilleur device disponible avec vérification détaillée."""
-        if settings.USE_CPU_ONLY:
-            return "cpu"
-    
-        try:
-            if torch.cuda.is_available() and self._verify_cuda_setup():
-                return f"cuda:{torch.cuda.current_device()}"
-        except Exception as e:
-            logger.warning(f"Erreur détection CUDA: {e}")
-        
-        return "cpu"
 
     def _log_gpu_info(self):
         """Log les informations sur les GPUs disponibles."""
@@ -226,6 +213,10 @@ class ModelInference:
         """Configure le modèle avec conservation du tokenizer."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
+
+            # Vérification de la mémoire disponible
+            if not self._check_available_memory():
+                raise RuntimeError("Mémoire insuffisante pour charger le modèle")
             
             # Configuration mémoire optimisée pour RTX 3090
             max_memory = {
@@ -358,6 +349,9 @@ class ModelInference:
         """Configure les paramètres de génération."""
         if not self.tokenizer:
             raise RuntimeError("Tokenizer non initialisé")
+
+        if hasattr(self.tokenizer, "padding_side"):
+            self.tokenizer.padding_side = "left"
             
         try:
             self.generation_config = GenerationConfig(
@@ -493,20 +487,48 @@ class ModelInference:
             logger.error(f"Erreur génération streaming: {e}")
             yield "Désolé, une erreur est survenue."
 
-    def _get_optimal_device(self) -> str:
-        """Détermine le meilleur device disponible."""
-        if settings.USE_CPU_ONLY:
-            return "cpu"
-
+    def _check_available_memory(self) -> bool:
+        """Vérifie la mémoire disponible avant le chargement du modèle."""
         try:
             if torch.cuda.is_available():
+                # Vérification GPU
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory
+                gpu_memory_allocated = torch.cuda.memory_allocated()
+                gpu_memory_available = gpu_memory - gpu_memory_allocated
+                
+                required_gpu_memory = 20 * (1024 ** 3)  # 20GB en bytes
+                if gpu_memory_available < required_gpu_memory:
+                    logger.warning(f"Mémoire GPU disponible insuffisante : {gpu_memory_available / 1e9:.2f}GB < {required_gpu_memory / 1e9:.2f}GB")
+                    return False
+                    
+            # Vérification RAM
+            ram = psutil.virtual_memory()
+            required_ram = 24 * (1024 ** 3)  # 24GB en bytes
+            if ram.available < required_ram:
+                logger.warning(f"Mémoire RAM disponible insuffisante : {ram.available / 1e9:.2f}GB < {required_ram / 1e9:.2f}GB")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur vérification mémoire : {e}")
+            return False
+            
+    def _get_optimal_device(self) -> str:
+        """Détermine le meilleur device disponible avec vérification détaillée."""
+        if settings.USE_CPU_ONLY:
+            return "cpu"
+    
+        try:
+            if torch.cuda.is_available() and self._verify_cuda_setup():
                 gpu_memory = torch.cuda.get_device_properties(0).total_memory
                 logger.info(f"Mémoire GPU totale détectée: {gpu_memory / 1e9:.2f} GB")
-                
+                    
+                # Test simple pour vérifier l'accès GPU
                 test_tensor = torch.tensor([1.0], device="cuda")
                 del test_tensor
                 
-                return "cuda"
+                return f"cuda:{torch.cuda.current_device()}"
         except Exception as e:
             logger.warning(f"Erreur détection CUDA: {e}")
         
