@@ -305,12 +305,14 @@ class ModelInference:
             logger.info(f"Tokens générés pour '{test_input}' : {tokens}")
     
             # Vérification du type de sortie
-            if not isinstance(tokens, dict):
+            if not isinstance(tokens, (dict, BatchEncoding)):
                 logger.error(f"Type inattendu pour les tokens : {type(tokens)}")
-                raise ValueError("Le tokenizer n'a pas retourné un dictionnaire.")
+                raise ValueError("Le tokenizer n'a pas retourné un dictionnaire ou un BatchEncoding.")
     
             # Vérification des clés nécessaires
             required_keys = {"input_ids", "attention_mask"}
+            if isinstance(tokens, BatchEncoding):
+                tokens = tokens.data  # Conversion explicite en dictionnaire
             missing_keys = required_keys - tokens.keys()
             if missing_keys:
                 logger.error(f"Clés manquantes dans les tokens : {missing_keys}")
