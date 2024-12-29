@@ -27,43 +27,45 @@ logger = get_logger("model")
 
 class ModelInference:
     def __init__(self):
-        """Initialise le modèle d'inférence avec des optimisations matérielles."""
-        try:
-            # Configuration des chemins CUDA
-            self._setup_cuda_paths()
-            
-            # Nettoyage initial
-            self._cleanup_memory()
-            
-            # Configuration CUDA si activée
-            if not settings.USE_CPU_ONLY:
-                self._setup_cuda_environment()
+    """Initialise le modèle d'inférence avec des optimisations matérielles."""
+    try:
+        # Initialisation des flags de contrôle
+        self._cuda_initialized = False
+        self._model_loaded = False
+        
+        # Nettoyage initial
+        self._cleanup_memory()
+        
+        # Configuration CUDA si activée
+        if not settings.USE_CPU_ONLY:
+            self._setup_cuda_environment()
 
-            self.device = self._get_optimal_device()
-            logger.info(f"Utilisation du device: {self.device}")
+        # Détermination du device optimal
+        self.device = self._get_optimal_device()
+        logger.info(f"Utilisation du device: {self.device}")
 
-            # Logging des informations GPU si disponible
-            if torch.cuda.is_available():
-                self._log_gpu_info()
+        # Log des informations GPU uniquement si nécessaire
+        if "cuda" in self.device and not self._cuda_initialized:
+            self._log_gpu_info()
 
-            # Configuration BitsAndBytes
-            self._setup_quantization()
-            
-            # Initialisation des composants principaux
-            self.executor = ThreadPoolExecutor(max_workers=2)
-            self.embeddings = EmbeddingsManager()
-            
-            # Initialisation séquentielle
-            self._setup_model()
+        # Configuration de la quantification après vérification CUDA
+        self._setup_quantization()
+        
+        # Initialisation des composants
+        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.embeddings = EmbeddingsManager()
+        
+        # Initialisation séquentielle avec vérifications
+        if self._setup_model():
             self._setup_tokenizer()
             self._setup_generation_config()
-            
+            self._model_loaded = True
             logger.info("Modèle initialisé avec succès")
-            
-        except Exception as e:
-            logger.error(f"Erreur initialisation modèle: {e}")
-            self._cleanup_memory()
-            raise
+        
+    except Exception as e:
+        logger.error(f"Erreur initialisation modèle: {e}")
+        self._cleanup_memory()
+        raise
 
     def _setup_cuda_paths(self):
         """Configure les chemins CUDA."""
