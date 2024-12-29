@@ -29,41 +29,27 @@ class ModelInference:
     def __init__(self):
         """Initialise le modèle d'inférence avec des optimisations matérielles."""
         try:
-            # Force CUDA path et env vars avant tout
-            os.environ["CUDA_HOME"] = "/usr/local/cuda"
-            os.environ["PATH"] = f"{os.environ['PATH']}:/usr/local/cuda/bin"
+            # Configuration des chemins CUDA
+            self._setup_cuda_paths()
             
-            # Nettoyage initial agressif
+            # Nettoyage initial
             self._cleanup_memory()
             
-            # Configuration CUDA optimisée pour RTX 3090
+            # Configuration CUDA si activée
             if not settings.USE_CPU_ONLY:
                 self._setup_cuda_environment()
 
             self.device = self._get_optimal_device()
             logger.info(f"Utilisation du device: {self.device}")
 
+            # Logging des informations GPU si disponible
             if torch.cuda.is_available():
-                for i in range(torch.cuda.device_count()):
-                    logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
-                    logger.info(f"Mémoire GPU {i}: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB")
+                self._log_gpu_info()
 
-            if settings.USE_4BIT or settings.USE_8BIT:
-                if not self._verify_bnb_installation():
-                    logger.warning("Désactivation de la quantification")
-                    settings.USE_4BIT = False
-                    settings.USE_8BIT = False
-                    
-            # Configuration BitsAndBytes pour quantification 4-bit
-            self.quantization_config = None
-            if settings.USE_4BIT:
-                self.quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
-                )
+            # Configuration BitsAndBytes
+            self._setup_quantization()
             
+            # Initialisation des composants principaux
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
             
@@ -79,95 +65,32 @@ class ModelInference:
             self._cleanup_memory()
             raise
 
-    def _cleanup_memory(self):
-        """Nettoyage et monitoring de la mémoire."""
-        try:
-            import gc
-            gc.collect()
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                
-                # Obtenir les statistiques de mémoire correctes
-                total_memory = torch.cuda.get_device_properties(0).total_memory
-                allocated = torch.cuda.memory_allocated(0)
-                reserved = torch.cuda.memory_reserved(0)
-                free_memory = total_memory - allocated
-                
-                logger.info(f"Mémoire GPU totale    : {total_memory / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU allouée   : {allocated / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU réservée  : {reserved / 1e9:.2f} GB")
-                logger.info(f"Mémoire GPU libre     : {free_memory / 1e9:.2f} GB")
-                
-                # Vérifier la fragmentation
-                if hasattr(torch.cuda, 'memory_stats'):
-                    stats = torch.cuda.memory_stats()
-                    fragmentation = stats.get('allocated_bytes.all.current', 0) / (stats.get('reserved_bytes.all.current', 1) or 1)
-                    logger.info(f"Fragmentation mémoire : {fragmentation:.2%}")
-    
-        except Exception as e:
-            logger.error(f"Erreur monitoring mémoire: {e}")
-            
-    def _verify_bnb_installation(self):
-        """Vérifie l'installation de BitsAndBytes."""
-        try:
-            import bitsandbytes as bnb
-            
-            if not torch.cuda.is_available():
-                logger.warning("CUDA n'est pas disponible, désactivation de BitsAndBytes")
-                return False
-            
-            # Test des fonctionnalités CUDA de BnB
-            try:
-                # Création d'une couche 8-bit pour tester
-                test_input = torch.zeros(1, 1, device='cuda')
-                test_layer = bnb.nn.Linear8bitLt(1, 1).cuda()
-                _ = test_layer(test_input)
-                
-                # Vérification de la capacité de calcul
-                cc_major, cc_minor = torch.cuda.get_device_capability()
-                compute_capability = f"{cc_major}.{cc_minor}"
-                logger.info(f"Test BnB réussi - Capacité CUDA: {compute_capability}")
-                
-                # Vérification pour RTX 3090 (8.6)
-                if float(compute_capability) < 8.0:
-                    logger.warning(f"Capacité de calcul {compute_capability} insuffisante pour 4-bit")
-                    return False
-                    
-                return True
-                
-            except Exception as e:
-                logger.error(f"Erreur test BnB CUDA: {e}")
-                return False
-                
-        except ImportError as e:
-            logger.error(f"Erreur import BitsAndBytes: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Erreur vérification BnB: {e}")
-            return False
-            
+    def _setup_cuda_paths(self):
+        """Configure les chemins CUDA."""
+        os.environ["CUDA_HOME"] = "/usr/local/cuda"
+        os.environ["PATH"] = f"{os.environ['PATH']}:/usr/local/cuda/bin"
+
     def _setup_cuda_environment(self):
-        if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
+        """Configure l'environnement CUDA."""
+        if torch.cuda.is_available():
             try:
                 # Vérification de la version CUDA
                 cuda_version = torch.version.cuda
                 logger.info(f"Version CUDA détectée: {cuda_version}")
                 
-                # Configuration pour RTX 3090
-                torch.cuda.set_device(0)  # Force l'utilisation de la première GPU
+                # Configuration GPU
+                torch.cuda.set_device(int(settings.CUDA_VISIBLE_DEVICES))
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.enabled = True
                 torch.backends.cudnn.benchmark = True
                 torch.backends.cudnn.allow_tf32 = True
                 
-                # Flash Attention si disponible
+                # Configuration Flash Attention si disponible
                 if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
                     torch.backends.cuda.enable_flash_sdp(True)
                 
-                # Configuration mémoire optimisée pour RTX 3090
-                memory_fraction = float(settings.GPU_MEMORY_FRACTION)
+                # Configuration mémoire GPU
+                memory_fraction = float(settings.CUDA_MEMORY_FRACTION)
                 torch.cuda.set_per_process_memory_fraction(memory_fraction)
                 
                 logger.info(f"Environnement CUDA configuré avec succès")
@@ -175,72 +98,86 @@ class ModelInference:
             except Exception as e:
                 logger.error(f"Erreur configuration CUDA: {e}")
 
-    def _get_optimal_device(self) -> str:
-        """Détermine le meilleur device disponible avec vérification détaillée."""
-        if settings.USE_CPU_ONLY:
-            return "cpu"
+    def _log_gpu_info(self):
+        """Log les informations sur les GPUs disponibles."""
+        for i in range(torch.cuda.device_count()):
+            logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            logger.info(f"Mémoire GPU {i}: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB")
 
+    def _setup_quantization(self):
+        """Configure les paramètres de quantification."""
+        self.quantization_config = None
         try:
-            if torch.cuda.is_available():
-                # Vérification détaillée de la GPU
-                gpu_memory = torch.cuda.get_device_properties(0).total_memory
-                logger.info(f"Mémoire GPU totale détectée: {gpu_memory / 1e9:.2f} GB")
+            if settings.USE_4BIT:
+                if not self._verify_bnb_installation():
+                    logger.warning("Désactivation de la quantification 4-bit")
+                    return
                 
-                # Vérifie si CUDA est réellement utilisable
-                test_tensor = torch.tensor([1.0], device="cuda")
-                del test_tensor
-                
-                return "cuda"
+                self.quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4"
+                )
         except Exception as e:
-            logger.warning(f"Erreur détection CUDA: {e}")
-        
-        return "cpu"
+            logger.error(f"Erreur configuration quantification: {e}")
+
+    def _verify_bnb_installation(self):
+        """Vérifie l'installation de BitsAndBytes."""
+        try:
+            import bitsandbytes as bnb
+            if not torch.cuda.is_available():
+                return False
+            try:
+                test_input = torch.zeros(1, 1, device='cuda')
+                test_layer = bnb.nn.Linear8bitLt(1, 1).cuda()
+                _ = test_layer(test_input)
+                
+                cc_major, cc_minor = torch.cuda.get_device_capability()
+                compute_capability = f"{cc_major}.{cc_minor}"
+                logger.info(f"Test BnB réussi - Capacité CUDA: {compute_capability}")
+                
+                return float(compute_capability) >= 8.0
+                
+            except Exception as e:
+                logger.error(f"Erreur test BnB CUDA: {e}")
+                return False
+                
+        except ImportError:
+            return False
 
     def _setup_model(self):
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
             
-            # Configuration de la distribution GPU/CPU
-            max_memory = {
-                0: "20GiB",  # Réserver 20GB pour le GPU
-                "cpu": "24GB"  # Autoriser l'utilisation de la RAM
-            }
-            
-            # Configuration du modèle de base
+            # Configuration de base du modèle
             model_kwargs = {
-                "device_map": "auto",  # Permet la distribution automatique
+                "device_map": "auto",
                 "torch_dtype": torch.float16,
                 "low_cpu_mem_usage": True,
-                "max_memory": max_memory
+                "max_memory": {
+                    0: f"{int(settings.MEMORY_LIMIT)}MB",
+                    "cpu": "24GB"
+                }
             }
-    
-            # Configuration BitsAndBytes pour 4-bit
-            if settings.USE_4BIT:
-                model_kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4",
-                    llm_int8_enable_fp32_cpu_offload=True,  # Permet l'offload CPU
-                    llm_int8_threshold=6.0,
-                    llm_int8_skip_modules=None
-                )
-    
+
+            # Ajout de la configuration de quantification si activée
+            if self.quantization_config:
+                model_kwargs["quantization_config"] = self.quantization_config
+            
             # Configuration du modèle
             config = AutoConfig.from_pretrained(
                 settings.MODEL_NAME,
-                trust_remote_code=True
+                trust_remote_code=True,
+                revision=settings.MODEL_REVISION
             )
             
-            # Optimisations de configuration
+            # Optimisations
             config.use_cache = True
-            config.pretraining_tp = 1
+            config.pretraining_tp = settings.MODEL_PARALLEL_SIZE
             
-            # Nettoyage préventif de la mémoire
+            # Nettoyage préventif
             self._cleanup_memory()
-            torch.cuda.empty_cache()
-            
-            logger.info("Début du chargement du modèle avec configuration 4-bit...")
             
             # Chargement du modèle
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -249,38 +186,19 @@ class ModelInference:
                 **model_kwargs
             )
             
-            logger.info("Modèle chargé avec succès")
-            
             # Post-configuration
             if torch.cuda.is_available():
                 self.model.eval()
-                # Activer l'optimisation de mémoire si nécessaire
                 if hasattr(self.model, "enable_input_require_grads"):
                     self.model.enable_input_require_grads()
             
+            logger.info("Modèle chargé avec succès")
             self._cleanup_memory()
             
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             self._cleanup_memory()
             raise
-            
-    def _setup_generation_config(self):
-        """Configure les paramètres de génération optimisés."""
-        self.generation_config = GenerationConfig(
-            max_new_tokens=int(settings.MAX_NEW_TOKENS),
-            min_new_tokens=int(settings.MIN_NEW_TOKENS),
-            do_sample=settings.DO_SAMPLE,
-            temperature = max(float(settings.TEMPERATURE), 1e-6),
-            top_p=max(float(settings.TOP_P), 0.0),
-            top_k=max(int(settings.TOP_K), 1),
-            num_beams=1,  # Optimisé pour la performance
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-            repetition_penalty=max(float(settings.REPETITION_PENALTY), 1.0),
-            length_penalty=float(settings.LENGTH_PENALTY)
-            #early_stopping=True
-        )
 
     def _setup_tokenizer(self):
         """Configure le tokenizer."""
@@ -288,7 +206,8 @@ class ModelInference:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 use_fast=True,
-                model_max_length=settings.MAX_INPUT_LENGTH
+                model_max_length=settings.MAX_INPUT_LENGTH,
+                revision=settings.MODEL_REVISION
             )
             
             if self.tokenizer.pad_token is None:
@@ -300,6 +219,22 @@ class ModelInference:
             logger.error(f"Erreur configuration tokenizer: {e}")
             raise
 
+    def _setup_generation_config(self):
+        """Configure les paramètres de génération."""
+        self.generation_config = GenerationConfig(
+            max_new_tokens=int(settings.MAX_NEW_TOKENS),
+            min_new_tokens=int(settings.MIN_NEW_TOKENS),
+            do_sample=settings.DO_SAMPLE.lower() == 'true',
+            temperature=float(settings.TEMPERATURE),
+            top_p=float(settings.TOP_P),
+            top_k=int(settings.TOP_K),
+            num_beams=int(settings.NUM_BEAMS),
+            repetition_penalty=float(settings.REPETITION_PENALTY),
+            length_penalty=float(settings.LENGTH_PENALTY),
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id
+        )
+
     async def generate_response(
         self,
         query: str,
@@ -308,11 +243,8 @@ class ModelInference:
         language: str = "fr",
         generation_config: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """
-        Génère une réponse complète.
-        """
+        """Génère une réponse."""
         try:
-            # Préparation du prompt
             prompt = self._prepare_prompt(
                 query=query,
                 context_docs=context_docs,
@@ -320,10 +252,8 @@ class ModelInference:
                 language=language
             )
             
-            # Tokenisation
             inputs = self._tokenize(prompt)
             
-            # Configuration de génération
             gen_config = self.generation_config
             if generation_config:
                 gen_config = GenerationConfig(**{
@@ -331,7 +261,6 @@ class ModelInference:
                     **generation_config
                 })
             
-            # Génération
             with metrics.timer("model_inference"):
                 with torch.inference_mode():
                     outputs = self.model.generate(
@@ -341,7 +270,6 @@ class ModelInference:
                         output_scores=True
                     )
             
-            # Décodage et post-traitement
             response = self.tokenizer.decode(
                 outputs.sequences[0],
                 skip_special_tokens=True,
@@ -350,14 +278,13 @@ class ModelInference:
             
             response = self._post_process_response(response)
             
-            # Métriques
             metrics.increment_counter("model_generations")
             
             return {
                 "response": response, 
                 "tokens_used": len(outputs.sequences[0]), 
-                "source": "model",  
-                "confidence": 1.0,  
+                "source": "model",
+                "confidence": 1.0,
                 "generation_time": metrics.timers.get("model_inference", 0.0)
             }
             
@@ -372,25 +299,20 @@ class ModelInference:
         context_docs: List[Dict],
         language: str = "fr"
     ) -> AsyncIterator[str]:
-        """
-        Génère une réponse en streaming.
-        """
+        """Génère une réponse en streaming."""
         try:
-            # Préparation du prompt
             prompt = self._prepare_prompt(
                 query=query,
                 context_docs=context_docs,
                 language=language
             )
             
-            # Configuration du streaming
             streamer = TextIteratorStreamer(
                 self.tokenizer,
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=True
             )
             
-            # Génération dans un thread séparé
             inputs = self._tokenize(prompt)
             generation_kwargs = {
                 **inputs,
@@ -401,35 +323,85 @@ class ModelInference:
             thread = Thread(target=self._generate_in_thread, kwargs=generation_kwargs)
             thread.start()
             
-            # Streaming des tokens
             buffer = ""
+            chunk_size = int(os.getenv("STREAM_CHUNK_SIZE", "50"))
+            stream_delay = float(os.getenv("STREAM_DELAY", "0.02"))
+            
             async for token in self._async_tokens(streamer):
                 buffer += token
-                if len(buffer) >= settings.STREAM_CHUNK_SIZE:
+                if len(buffer) >= chunk_size:
                     yield buffer
                     buffer = ""
-                await asyncio.sleep(settings.STREAM_DELAY)
+                await asyncio.sleep(stream_delay)
             
             if buffer:
                 yield buffer
                 
         except Exception as e:
             logger.error(f"Erreur génération streaming: {e}")
-            yield settings.ERROR_MESSAGE
+            yield "Désolé, une erreur est survenue."
 
-    def _generate_in_thread(self, **kwargs):
-        """Génère la réponse dans un thread séparé."""
+    def _get_optimal_device(self) -> str:
+        """Détermine le meilleur device disponible."""
+        if settings.USE_CPU_ONLY:
+            return "cpu"
+
         try:
-            with torch.inference_mode():
-                _ = self.model.generate(**kwargs)
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory
+                logger.info(f"Mémoire GPU totale détectée: {gpu_memory / 1e9:.2f} GB")
+                
+                test_tensor = torch.tensor([1.0], device="cuda")
+                del test_tensor
+                
+                return "cuda"
         except Exception as e:
-            logger.error(f"Erreur génération thread: {e}")
+            logger.warning(f"Erreur détection CUDA: {e}")
+        
+        return "cpu"
 
-    async def _async_tokens(self, streamer) -> AsyncIterator[str]:
-        """Convertit le streamer en générateur asynchrone."""
-        loop = asyncio.get_event_loop()
-        for token in streamer:
-            yield await loop.run_in_executor(None, lambda: token)
+    def _cleanup_memory(self):
+        """Nettoie la mémoire."""
+        try:
+            gc.collect()
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                allocated = torch.cuda.memory_allocated(0)
+                reserved = torch.cuda.memory_reserved(0)
+                free_memory = total_memory - allocated
+                
+                logger.info(f"Mémoire GPU totale    : {total_memory / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU allouée   : {allocated / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU réservée  : {reserved / 1e9:.2f} GB")
+                logger.info(f"Mémoire GPU libre     : {free_memory / 1e9:.2f} GB")
+                
+                if hasattr(torch.cuda, 'memory_stats'):
+                    stats = torch.cuda.memory_stats()
+                    fragmentation = stats.get('allocated_bytes.all.current', 0) / (stats.get('reserved_bytes.all.current', 1) or 1)
+                    logger.info(f"Fragmentation mémoire : {fragmentation:.2%}")
+    
+        except Exception as e:
+            logger.error(f"Erreur monitoring mémoire: {e}")
+
+    async def cleanup(self):
+        """Nettoie les ressources."""
+        try:
+            self.executor.shutdown(wait=True)
+            await self.embeddings.cleanup()
+            
+            self.model.cpu()
+            del self.model
+            del self.tokenizer
+            
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            logger.info("Ressources modèle nettoyées")
 
     def _prepare_prompt(
         self,
@@ -452,16 +424,17 @@ class ModelInference:
         
         # Formatage de l'historique
         history = ""
+        history_limit = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
         if conversation_history:
             history_parts = []
-            for msg in conversation_history[-5:]:  # Limité aux 5 derniers messages
+            for msg in conversation_history[-history_limit:]:
                 history_parts.append(
                     f"Human: {msg.get('user')}\n"
                     f"Assistant: {msg.get('assistant')}"
                 )
             history = "\n".join(history_parts)
         
-        # Construction du prompt final
+        # Construction du prompt final en utilisant le template de settings
         return settings.CHAT_TEMPLATE.format(
             system=settings.SYSTEM_PROMPT,
             query=query,
@@ -470,55 +443,83 @@ class ModelInference:
             language=language
         )
 
-    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
-        """Tokenise le texte."""
-        inputs = self.tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=settings.MAX_INPUT_LENGTH,
-            padding=True
-        ).to(self.device)
+    def _generate_in_thread(self, **kwargs):
+        """Génère la réponse dans un thread séparé."""
+        try:
+            with torch.inference_mode():
+                _ = self.model.generate(**kwargs)
+        except Exception as e:
+            logger.error(f"Erreur génération thread: {e}")
+
+    async def _async_tokens(self, streamer) -> AsyncIterator[str]:
+        """Convertit le streamer en générateur asynchrone."""
+        loop = asyncio.get_event_loop()
+        stream_buffer_size = int(os.getenv("STREAM_BUFFER_SIZE", "10"))
+        buffer = []
         
-        return inputs
+        try:
+            for token in streamer:
+                buffer.append(token)
+                if len(buffer) >= stream_buffer_size:
+                    combined = "".join(buffer)
+                    yield await loop.run_in_executor(None, lambda: combined)
+                    buffer = []
+            
+            if buffer:  # Vider le buffer restant
+                combined = "".join(buffer)
+                yield await loop.run_in_executor(None, lambda: combined)
+        except Exception as e:
+            logger.error(f"Erreur streaming tokens: {e}")
+
+    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
+        """Tokenise le texte avec gestion de la troncature."""
+        try:
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=settings.MAX_INPUT_LENGTH,
+                padding=True
+            ).to(self.device)
+
+            # Log de debug pour la taille des inputs
+            input_length = inputs["input_ids"].shape[-1]
+            logger.debug(f"Longueur des tokens d'entrée: {input_length}")
+            
+            if input_length >= settings.MAX_INPUT_LENGTH:
+                logger.warning("Entrée tronquée à la longueur maximale")
+            
+            return inputs
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la tokenisation: {e}")
+            raise
 
     def _post_process_response(self, response: str) -> str:
         """Post-traite la réponse générée."""
-        # Extraction de la réponse
-        if "<|assistant|>" in response:
-            response = response.split("<|assistant|>")[-1].strip()
+        # Nettoyage des balises spéciales
+        response = response.replace("<|assistant|>", "").replace("<|human|>", "")
+        response = response.replace("<|system|>", "").replace("<|endoftext|>", "")
         
-        # Nettoyage
-        response = response.replace("<|endoftext|>", "").strip()
+        # Nettoyage des espaces superflus
+        response = "\n".join(line.strip() for line in response.split("\n"))
+        response = "\n".join(filter(None, response.split("\n")))
         
-        return response
+        # Autres nettoyages basés sur les paramètres
+        max_length = int(os.getenv("MAX_RESPONSE_LENGTH", "4096"))
+        if len(response) > max_length:
+            response = response[:max_length] + "..."
+        
+        return response.strip()
 
     async def create_embedding(self, text: str) -> List[float]:
         """Crée un embedding pour un texte."""
         return await self.embeddings.generate_embedding(text)
 
-    async def cleanup(self):
-        """Nettoie les ressources."""
-        try:
-            self.executor.shutdown(wait=True)
-            await self.embeddings.cleanup()
-            
-            self.model.cpu()
-            del self.model
-            del self.tokenizer
-            
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                
-            logger.info("Ressources modèle nettoyées")
-            
-        except Exception as e:
-            logger.error(f"Erreur nettoyage modèle: {e}")
-
     def __del__(self):
         """Destructeur de la classe."""
         try:
+            logger.info("Nettoyage des ressources du modèle...")
             asyncio.run(self.cleanup())
         except:
             pass
