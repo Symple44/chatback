@@ -156,6 +156,9 @@ class ModelInference:
         **kwargs
     ) -> Dict:
         """Génère une réponse basée sur une requête et son contexte."""
+        import asyncio
+        from concurrent.futures import TimeoutError
+
         if not self._initialized:
             raise RuntimeError("Le modèle n'est pas initialisé. Appelez initialize() d'abord.")
 
@@ -220,12 +223,21 @@ class ModelInference:
             # Décodage et post-traitement
             response = self.tokenizer_manager.decode_and_clean(outputs[0])
 
-            return {
-                "response": response,
-                "prompt_tokens": len(inputs.input_ids[0]),
-                "completion_tokens": len(outputs[0]) - len(inputs.input_ids[0]),
-                "total_tokens": len(outputs[0])
-            }
+                return {
+                    "response": response,
+                    "prompt_tokens": len(inputs.input_ids[0]),
+                    "completion_tokens": len(outputs[0]) - len(inputs.input_ids[0]),
+                    "total_tokens": len(outputs[0])
+                }
+
+            except asyncio.TimeoutError:
+                logger.error("Timeout pendant la génération (60s)")
+                raise RuntimeError("La génération a pris trop de temps")
+                
+            except Exception as e:
+                logger.error(f"Erreur pendant la génération: {e}")
+                metrics.increment_counter("generation_errors")
+                raise
 
         except Exception as e:
             logger.error(f"Erreur génération réponse: {e}")
