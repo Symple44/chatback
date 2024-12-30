@@ -196,15 +196,21 @@ class ModelInference:
             # Fonction de génération interne
             async def _generate():
                 with torch.no_grad():
-                    outputs = self.model.generate(
-                        **inputs,
-                        generation_config=generation_config,
-                        max_new_tokens=settings.MAX_OUTPUT_LENGTH,
-                        use_cache=True,
-                        **kwargs
-                    )
-                    logger.info("Génération terminée avec succès")
-                    return outputs
+                    logger.info("Début de la génération avec torch.no_grad()")
+                    try:
+                        logger.info("Appel de model.generate")
+                        outputs = self.model.generate(
+                            **inputs,
+                            generation_config=generation_config,
+                            max_new_tokens=settings.MAX_OUTPUT_LENGTH,
+                            use_cache=True,
+                            **kwargs
+                        )
+                        logger.info(f"Génération terminée, shape: {outputs.shape}")
+                        return outputs
+                    except Exception as e:
+                        logger.error(f"Erreur pendant model.generate: {e}")
+                        raise
 
             # Exécution de la génération avec timeout
             try:
