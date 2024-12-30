@@ -144,18 +144,33 @@ class Settings(BaseSettings):
     MAX_CHUNKS_PER_DOC: int = int(os.getenv("MAX_CHUNKS_PER_DOC", "100"))
 
     # Templates
-    CHAT_TEMPLATE: str = """System: {system}\nQuestion: {query}\nContexte: {context}\n\nRéponse:"""
-    SYSTEM_PROMPT: ClassVar[str] = (
-        "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires et concises, "
-        "en m'appuyant sur les documents disponibles. Posez-moi une question pour commencer."
-    ).format(app_name=APP_NAME)
+    CHAT_TEMPLATE: str = """<|system|>
+{system}
+</|system|>
 
-    SYSTEM_MESSAGES: ClassVar[Dict[str, str]] = {
-        "welcome": "Bienvenue ! Comment puis-je vous aider ?",
-        "error": "Désolé, une erreur est survenue.",
-        "rate_limit": "Vous avez atteint la limite de requêtes.", 
-        "maintenance": "Le système est en maintenance."
-    }
+<|context|>
+{context}
+</|context|>
+
+<|user|>
+{query}
+</|user|>
+
+<|assistant|>
+Je vais répondre en me basant sur le contexte fourni et en respectant les contraintes demandées.
+
+{context_summary}
+
+Réponse: {response}
+</|assistant|>"""
+
+    SYSTEM_PROMPT: ClassVar[str] = (
+        "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires, "
+        "concises et précises. Je m'appuie sur les documents fournis pour donner des "
+        "informations vérifiées et pertinentes. Mon objectif est de comprendre exactement "
+        "vos besoins et d'y répondre de la manière la plus utile possible. Je peux "
+        "adapter mon style de réponse selon vos préférences."
+    ).format(app_name=APP_NAME)
 
     # Server Configuration
     WORKERS: int = int(os.getenv("WORKERS", "24"))
