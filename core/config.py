@@ -18,7 +18,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     # Base - Paramètres fondamentaux
-    APP_NAME: str = os.getenv("APP_NAME", "Gustave")
+    APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
     VERSION: str = os.getenv("VERSION", "1.0.0") 
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     ENV: str = os.getenv("ENV", "production")
