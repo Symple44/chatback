@@ -187,24 +187,36 @@ class ComponentManager:
                 await self.cleanup()
                 raise
 
-    async def sync_drive_documents(self):
+    async def sync_drive_documents():
         """Synchronise les documents depuis Google Drive."""
-        if "drive_manager" not in self._components:
+        if "drive_manager" not in components._components:
             return
-
+    
         try:
-            downloaded_files = await self._components["drive_manager"].sync_drive_folder(
+            downloaded_files = await components.drive_manager.sync_drive_folder(
                 settings.GOOGLE_DRIVE_FOLDER_ID,
                 save_path="documents"
             )
             
-            for file_path in downloaded_files:
-                await self._components["pdf_processor"].index_pdf(file_path)
+            if not downloaded_files:
+                logger.info("Aucun nouveau fichier à indexer")
+                return
                 
-            logger.info(f"{len(downloaded_files)} documents synchronisés")
+            # Index les fichiers téléchargés
+            for file_path in downloaded_files:
+                app_name = Path(file_path).parent.name
+                await components.pdf_processor.index_pdf(
+                    file_path,
+                    metadata={
+                        "application": app_name,
+                        "sync_date": datetime.utcnow().isoformat()
+                    }
+                )
+                
+            logger.info(f"{len(downloaded_files)} documents synchronisés et indexés")
             
         except Exception as e:
-            logger.error(f"Erreur synchronisation Drive: {e}")
+            logger.error(f"Erreur synchronisation Drive: {e}", exc_info=True)
 
     async def cleanup(self):
         """Nettoie les ressources."""
