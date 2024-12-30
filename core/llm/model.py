@@ -14,7 +14,7 @@ from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager
 from .memory_manager import MemoryManager
-from .prompt_builder import PromptBuilder
+from .prompt_system import PromptBuilder
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 
