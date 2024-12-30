@@ -245,11 +245,29 @@ class ModelInference:
         """Configure la gestion mémoire en utilisant les paramètres du .env."""
         try:
             # Récupération des paramètres de config depuis settings
-            max_memory_config = json.loads(settings.MAX_MEMORY)  # {"0":"22GiB","cpu":"26GB"}
-            memory_limit = int(settings.MEMORY_LIMIT)  # 26624
-            offload_folder = settings.OFFLOAD_FOLDER  # "offload_folder"
+            max_memory_config = {}
+            
+            # Parse de la config mémoire
+            try:
+                config_str = json.loads(settings.MAX_MEMORY)
+                # Conversion des clés numériques en int
+                for key, value in config_str.items():
+                    try:
+                        # Pour les GPU, convertir en int
+                        if key.isdigit():
+                            max_memory_config[int(key)] = value
+                        else:
+                            max_memory_config[key] = value
+                    except ValueError:
+                        max_memory_config[key] = value
+            except json.JSONDecodeError as e:
+                logger.error(f"Erreur parsing MAX_MEMORY: {e}")
+                max_memory_config = {"cpu": "24GB", "disk": "24GB"}
     
-            # Vérification que les valeurs sont correctes
+            memory_limit = int(settings.MEMORY_LIMIT)
+            offload_folder = settings.OFFLOAD_FOLDER
+    
+            # Log de la configuration
             logger.info(f"Configuration mémoire depuis .env:")
             logger.info(f"MAX_MEMORY: {max_memory_config}")
             logger.info(f"MEMORY_LIMIT: {memory_limit}")
@@ -269,7 +287,7 @@ class ModelInference:
             model_kwargs = {
                 "quantization_config": quantization_config,
                 "device_map": "auto",
-                "max_memory": max_memory_config,  # Utilise directement la config du .env
+                "max_memory": max_memory_config,
                 "torch_dtype": torch.float16 if settings.USE_FP16 else torch.float32,
                 "low_cpu_mem_usage": True,
                 "offload_folder": offload_folder,
