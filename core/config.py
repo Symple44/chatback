@@ -18,7 +18,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     # Base - Paramètres fondamentaux
-    APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
+    APP_NAME: str = os.getenv("APP_NAME", "Gustave")
     VERSION: str = os.getenv("VERSION", "1.0.0") 
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     ENV: str = os.getenv("ENV", "production")
@@ -145,7 +145,14 @@ class Settings(BaseSettings):
 
     # Templates
     CHAT_TEMPLATE: str = """System: {system}\nQuestion: {query}\nContexte: {context}\n\nRéponse:"""
-    SYSTEM_PROMPT: str = """Je suis un assistant IA français, conçu pour aider et répondre aux questions de manière claire et précise."""
+    SYSTEM_PROMPT = (
+        f"Je suis {settings.APP_NAME}, un assistant IA conçu pour fournir des réponses claires, "
+        f"pertinentes et détaillées. Mon objectif est de m'appuyer principalement sur les documents "
+        f"fournis pour répondre aux questions de manière précise et contextuelle.\n"
+        f"Si les informations nécessaires ne sont pas présentes dans les documents, je fournirai "
+        f"des explications basées sur mes connaissances générales. Cependant, ma priorité reste "
+        f"toujours les données existantes."
+    )
     SYSTEM_MESSAGES: ClassVar[Dict[str, str]] = {
         "welcome": "Bienvenue ! Comment puis-je vous aider ?",
         "error": "Désolé, une erreur est survenue.",
