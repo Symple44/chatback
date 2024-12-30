@@ -12,47 +12,71 @@ class PromptBuilder:
         context_docs: Optional[List[Dict]] = None,
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr"
-    ) -> str:
-        """Construit le prompt pour la génération."""
-        prompt_parts = []
+    ) -> List[Dict[str, str]]:
+        """
+        Construit le prompt au format messages avec rôles (system, user, assistant).
+        """
+        messages = []
 
-        # Ajout du système prompt avec une directive explicite
-        prompt_parts.append(f"Système: {settings.SYSTEM_PROMPT}")
-        prompt_parts.append("Répondez de manière concise et pertinente en vous basant principalement sur les documents fournis.")
+        # Ajout du rôle système
+        messages.append({
+            "role": "system",
+            "content": settings.SYSTEM_PROMPT
+        })
 
-        # Contexte des documents
+        # Ajout du contexte documentaire
         if context_docs:
-            prompt_parts.append(f"Contexte documentaire:\n{self._build_context(context_docs)}")
+            context = self._build_context(context_docs)
+            messages.append({
+                "role": "system",
+                "content": f"Contexte documentaire pertinent : {context}"
+            })
         else:
-            prompt_parts.append("Aucun contexte documentaire pertinent n'a été fourni.")
+            messages.append({
+                "role": "system",
+                "content": "Aucun contexte documentaire pertinent n'a été fourni."
+            })
 
-        # Historique de la conversation
+        # Ajout de l'historique de la conversation via une méthode séparée
         if conversation_history:
-            prompt_parts.append(f"Historique de la conversation (5 derniers échanges):\n{self._build_history(conversation_history)}")
+            history_messages = self._build_history(conversation_history)
+            messages.extend(history_messages)
 
-        # Question utilisateur
-        prompt_parts.append(f"Question utilisateur: {query}")
+        # Ajout de la question de l'utilisateur
+        messages.append({
+            "role": "user",
+            "content": query
+        })
 
-        # Préfixe de réponse
-        prompt_parts.append("Réponse (maximum 3 paragraphes) :")
-
-        return "\n\n".join(prompt_parts)
+        return messages
 
     def _build_context(self, context_docs: List[Dict]) -> str:
-        """Construit la section contexte du prompt."""
+        """
+        Construit une description textuelle concise des documents.
+        """
         context_parts = []
         for doc in context_docs:
             content = doc.get('content', '').strip()
             source = doc.get('title', 'Document')
             page = doc.get('metadata', {}).get('page', '?')
             if content:
-                context_parts.append(f"[Source: {source} (p.{page})]\n{content}")
-        return "\n\n".join(context_parts)
+                context_parts.append(f"[{source} (p.{page})] {content}")
+        return " ".join(context_parts)
 
-    def _build_history(self, conversation_history: List[Dict]) -> str:
-        """Construit la section historique du prompt."""
-        history_parts = []
-        for entry in conversation_history[-5:]:  # Limite aux 5 derniers échanges
+    def _build_history(self, conversation_history: List[Dict]) -> List[Dict[str, str]]:
+        """
+        Construit l'historique des conversations sous forme de messages.
+        """
+        history_messages = []
+        for entry in conversation_history[-5:]:  # Limiter aux 5 derniers échanges
             if 'query' in entry and 'response' in entry:
-                history_parts.append(f"Q: {entry['query']}\nR: {entry['response']}")
-        return "\n\n".join(history_parts)
+                history_messages.append({
+                    "role": "user",
+                    "content": entry['query']
+                })
+                history_messages.append({
+                    "role": "assistant",
+                    "content": entry['response']
+                })
+        return history_messages
+
