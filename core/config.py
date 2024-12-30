@@ -66,19 +66,29 @@ class Settings(BaseSettings):
     # GPU Configuration
     USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
     CUDA_VISIBLE_DEVICES: str = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    
+    CUDA_MEMORY_FRACTION: float = float(os.getenv("CUDA_MEMORY_FRACTION", "0.85"))
     GPU_MEMORY_FRACTION: float = float(os.getenv("GPU_MEMORY_FRACTION", "0.9"))
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
     USE_8BIT: bool = os.getenv("USE_8BIT", "false").lower() == "true"
     USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
-    MODEL_PARALLEL_SIZE: int = int(os.getenv("MODEL_PARALLEL_SIZE", "2"))
+    MODEL_PARALLEL_SIZE: int = int(os.getenv("MODEL_PARALLEL_SIZE", "1"))
     DEVICE: str = "cuda" if not USE_CPU_ONLY and torch.cuda.is_available() else "cpu"
+    PYTORCH_CUDA_ALLOC_CONF: str = os.getenv(
+        "PYTORCH_CUDA_ALLOC_CONF", 
+        "max_split_size_mb:2048,garbage_collection_threshold:0.8"
+    )
+    PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD: bool = os.getenv(
+        "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD", 
+        "true"
+    ).lower() == "true"
 
     # Performance
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "16"))
     MAX_PARALLEL_PROCESSES: int = int(os.getenv("MAX_PARALLEL_PROCESSES", "8"))
+    MAX_MEMORY: str = os.getenv("MAX_MEMORY", '{"0":"20GiB","cpu":"24GB"}')
     MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "51200"))
+    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
 
     # Paths - Structure du projet
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
@@ -155,6 +165,17 @@ class Settings(BaseSettings):
             "repetition_penalty": float(os.getenv("REPETITION_PENALTY", "1.1")),
             "length_penalty": float(os.getenv("LENGTH_PENALTY", "1.0"))
         }
+        
+    @validator('MAX_MEMORY')
+    def validate_max_memory(cls, v):
+        """Valide la configuration mémoire."""
+        try:
+            config = json.loads(v)
+            if not isinstance(config, dict):
+                raise ValueError("MAX_MEMORY doit être un dictionnaire JSON")
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("MAX_MEMORY doit être un JSON valide")
 
 settings = Settings()
 
