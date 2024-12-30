@@ -130,42 +130,55 @@ class PDFProcessor:
             logger.error(f"Erreur extraction métadonnées: {e}")
             return {}
 
-    async def index_pdf(
-        self,
-        file_path: str,
-        metadata: Optional[Dict] = None
-    ) -> bool:
-        """
-        Indexe un PDF dans Elasticsearch.
-        
-        Args:
-            file_path: Chemin du fichier PDF
-            metadata: Métadonnées additionnelles
-            
-        Returns:
-            Succès de l'indexation
-        """
+    async def index_pdf(self, file_path: str, metadata: Optional[Dict] = None) -> bool:
         try:
+            logger.info(f"Indexation du PDF: {file_path}")
+            path = Path(file_path)
+            application = path.parent.name
+            filename = path.name
+    
             # Extraction du contenu
             content = await self.extract_text(file_path)
-            
-            # Métadonnées du document
+            if not content.strip():
+                logger.warning(f"Aucun contenu extrait de {file_path}")
+                return False
+    
+            # Extraction des métadonnées PDF
             doc_metadata = await self._extract_metadata(file_path)
-            if metadata:
-                doc_metadata.update(metadata)
             
+            # Construction du document
+            document = {
+                "title": filename,
+                "content": content,
+                "application": application,  # Stocké au niveau racine
+                "file_path": str(file_path),
+                "metadata": {
+                    "page_count": doc_metadata.get("pages", 0),
+                    "author": doc_metadata.get("author", ""),
+                    "creation_date": doc_metadata.get("creation_date", ""),
+                    "indexed_at": datetime.utcnow().isoformat(),
+                    "sync_date": metadata.get("sync_date") if metadata else None,
+                    **doc_metadata  # Autres métadonnées
+                }
+            }
+    
+            # Génération du vecteur si le modèle est disponible
+            if self.embedding_model:
+                try:
+                    document["embedding"] = await self.embedding_model.generate_embedding(content)
+                except Exception as e:
+                    logger.error(f"Erreur génération embedding pour {filename}: {e}")
+    
             # Indexation
-            await self.es_client.index_document(
-                title=Path(file_path).name,
-                content=content,
-                metadata=doc_metadata
-            )
+            success = await self.es_client.index_document(**document)
             
-            logger.info(f"PDF indexé avec succès: {file_path}")
-            return True
+            if success:
+                logger.info(f"PDF {filename} indexé avec succès pour l'application {application}")
             
+            return success
+    
         except Exception as e:
-            logger.error(f"Erreur indexation PDF {file_path}: {e}")
+            logger.error(f"Erreur indexation PDF {file_path}: {e}", exc_info=True)
             return False
 
     async def index_directory(
