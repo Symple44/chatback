@@ -20,38 +20,37 @@ logger = get_logger("model")
 
 class ModelInference:
     def __init__(self):
-        """Initialise le modèle d'inférence."""
-        try:
-            self.auth_manager = HuggingFaceAuthManager()
-            self.cuda_manager = CUDAManager()
-            self.memory_manager = MemoryManager()
-            self.tokenizer_manager = TokenizerManager()
-            self.prompt_builder = PromptBuilder()
-            
-            self._setup_model()
-            
-        except Exception as e:
-            logger.error(f"Erreur initialisation modèle: {e}")
-            raise
+        """Initialise les composants de base du modèle d'inférence."""
+        self.auth_manager = HuggingFaceAuthManager()
+        self.cuda_manager = CUDAManager()
+        self.memory_manager = MemoryManager()
+        self.tokenizer_manager = TokenizerManager()
+        self.prompt_builder = PromptBuilder()
+        self.model = None
+        self._initialized = False
 
-    async def _setup_model(self):
-        """Configure et initialise le modèle."""
-        try:
-            # Authentification Hugging Face
-            if not await self.auth_manager.setup_auth():
-                raise ValueError("Échec de l'authentification Hugging Face")
+    async def initialize(self):
+        """Initialise le modèle de manière asynchrone."""
+        if not self._initialized:
+            try:
+                # Authentification Hugging Face
+                if not await self.auth_manager.setup_auth():
+                    raise ValueError("Échec de l'authentification Hugging Face")
 
-            # Vérification de l'accès au modèle
-            if not self.auth_manager.get_model_access(settings.MODEL_NAME):
-                raise ValueError(f"Accès non autorisé au modèle {settings.MODEL_NAME}")
+                # Vérification de l'accès au modèle
+                if not self.auth_manager.get_model_access(settings.MODEL_NAME):
+                    raise ValueError(f"Accès non autorisé au modèle {settings.MODEL_NAME}")
 
-            # Initialisation du modèle
-            self._initialize_model()
-        except Exception as e:
-            logger.error(f"Erreur lors de la configuration du modèle: {e}")
-            raise
+                # Initialisation du modèle
+                await self._initialize_model()
+                self._initialized = True
+                logger.info(f"Modèle {settings.MODEL_NAME} initialisé avec succès")
 
-    def _initialize_model(self):
+            except Exception as e:
+                logger.error(f"Erreur lors de l'initialisation du modèle: {e}")
+                raise
+
+    async def _initialize_model(self):
         """Configure et charge le modèle."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
@@ -65,8 +64,8 @@ class ModelInference:
                 max_memory=max_memory
             )
 
-            # Chargement du modèle
-            self.model = AutoModelForCausalLM.from_pretrained(**load_params)
+            # Chargement du modèle dans un thread séparé pour ne pas bloquer
+            self.model = await torch.cuda.amp.autocast()(lambda: AutoModelForCausalLM.from_pretrained(**load_params))()
             
             # Post-initialisation
             model_device = next(self.model.parameters()).device
@@ -87,6 +86,9 @@ class ModelInference:
         **kwargs
     ) -> Dict:
         """Génère une réponse basée sur une requête et son contexte."""
+        if not self._initialized:
+            raise RuntimeError("Le modèle n'est pas initialisé. Appelez initialize() d'abord.")
+
         try:
             # Construction du prompt
             prompt = self.prompt_builder.build_prompt(
@@ -133,12 +135,15 @@ class ModelInference:
             await self.cuda_manager.cleanup()
             await self.tokenizer_manager.cleanup()
             
-            if hasattr(self, 'model'):
+            if self.model is not None:
                 try:
                     self.model.cpu()
                     del self.model
+                    self.model = None
                 except Exception as e:
                     logger.warning(f"Erreur nettoyage modèle: {e}")
+
+            self._initialized = False
 
         except Exception as e:
             logger.error(f"Erreur nettoyage ressources: {e}")
