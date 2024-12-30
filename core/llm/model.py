@@ -54,25 +54,41 @@ class ModelInference:
         """Configure et charge le modèle."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
-
-            # Récupération de la configuration mémoire optimisée
+    
+            # Récupération de la configuration mémoire depuis settings via memory_manager
             max_memory = self.memory_manager.get_optimal_memory_config()
             
-            # Paramètres de chargement
-            load_params = self.cuda_manager.get_model_load_parameters(
-                model_name=settings.MODEL_NAME,
-                max_memory=max_memory
-            )
-
-            # Chargement du modèle dans un thread séparé pour ne pas bloquer
-            self.model = await torch.cuda.amp.autocast()(lambda: AutoModelForCausalLM.from_pretrained(**load_params))()
-            
+            # Paramètres de chargement en utilisant les settings
+            load_params = {
+                "pretrained_model_name_or_path": settings.MODEL_NAME,
+                "revision": settings.MODEL_REVISION,
+                "device_map": "auto",
+                "max_memory": max_memory,
+                "trust_remote_code": True
+            }
+    
+            # Configuration du type de données en fonction des settings
+            if settings.USE_FP16:
+                load_params["torch_dtype"] = torch.float16
+            elif settings.USE_8BIT:
+                load_params["load_in_8bit"] = True
+            elif settings.USE_4BIT:
+                load_params["load_in_4bit"] = True
+                if hasattr(settings, "BNB_4BIT_COMPUTE_DTYPE"):
+                    load_params["bnb_4bit_compute_dtype"] = getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE)
+    
+            logger.info(f"Configuration de chargement: {load_params}")
+    
+            # Chargement du modèle avec autocast si FP16 est activé
+            with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
+                self.model = AutoModelForCausalLM.from_pretrained(**load_params)
+    
             # Post-initialisation
             model_device = next(self.model.parameters()).device
             logger.info(f"Modèle chargé sur {model_device}")
             logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
             metrics.increment_counter("model_loads")
-
+    
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             raise
