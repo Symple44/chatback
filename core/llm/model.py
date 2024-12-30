@@ -240,6 +240,62 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur configuration quantification: {e}")
 
+    def _setup_memory_config(self):
+        """Configure la gestion mémoire en utilisant les paramètres du .env."""
+        try:
+            # Récupération des paramètres de config depuis settings
+            max_memory_config = json.loads(settings.MAX_MEMORY)  # {"0":"22GiB","cpu":"26GB"}
+            memory_limit = int(settings.MEMORY_LIMIT)  # 26624
+            offload_folder = settings.OFFLOAD_FOLDER  # "offload_folder"
+    
+            # Vérification que les valeurs sont correctes
+            logger.info(f"Configuration mémoire depuis .env:")
+            logger.info(f"MAX_MEMORY: {max_memory_config}")
+            logger.info(f"MEMORY_LIMIT: {memory_limit}")
+            logger.info(f"OFFLOAD_FOLDER: {offload_folder}")
+    
+            # Configuration quantification depuis settings
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=settings.USE_4BIT,
+                bnb_4bit_compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                llm_int8_enable_fp32_cpu_offload=True,
+                llm_int8_threshold=6.0
+            )
+    
+            # Configuration du device_map et de la mémoire
+            model_kwargs = {
+                "quantization_config": quantization_config,
+                "device_map": "auto",
+                "max_memory": max_memory_config,  # Utilise directement la config du .env
+                "torch_dtype": torch.float16 if settings.USE_FP16 else torch.float32,
+                "low_cpu_mem_usage": True,
+                "offload_folder": offload_folder,
+                "offload_state_dict": True
+            }
+    
+            # Vérification des ressources disponibles
+            if torch.cuda.is_available():
+                cuda_memory = torch.cuda.get_device_properties(0).total_memory
+                if settings.CUDA_MEMORY_FRACTION:
+                    cuda_limit = int(cuda_memory * float(settings.CUDA_MEMORY_FRACTION))
+                    torch.cuda.set_per_process_memory_fraction(float(settings.CUDA_MEMORY_FRACTION))
+                    logger.info(f"Limite mémoire CUDA configurée: {cuda_limit / 1e9:.2f}GB")
+    
+            # Log de la configuration finale
+            logger.info("Configuration mémoire finalisée:")
+            logger.info(f"Device map: {model_kwargs['device_map']}")
+            logger.info(f"Max memory: {model_kwargs['max_memory']}")
+            logger.info(f"Using FP16: {settings.USE_FP16}")
+            logger.info(f"Using 4-bit: {settings.USE_4BIT}")
+    
+            return model_kwargs
+    
+        except Exception as e:
+            logger.error(f"Erreur configuration mémoire: {e}")
+            raise
+
     def _verify_bnb_installation(self):
         """Vérifie l'installation de BitsAndBytes."""
         try:
@@ -265,75 +321,56 @@ class ModelInference:
             return False
 
     def _setup_model(self):
-        """Configure le modèle avec gestion optimisée de la mémoire."""
+        """Configure le modèle avec la nouvelle gestion mémoire."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
                 
-            # Configuration mémoire optimisée
-            memory_config = {
-                0: "20GiB",  # Allouer 20GB pour le GPU
-                "cpu": "24GB"  # Utilisation RAM
-            }
-                
-            # Configuration quantification 4-bit optimisée
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-                llm_int8_enable_fp32_cpu_offload=True,
-                llm_int8_threshold=6.0,
-                llm_int8_skip_modules=None
-            )
+            # Obtention de la configuration mémoire depuis le .env
+            model_kwargs = self._setup_memory_config()
+            if not model_kwargs:
+                raise RuntimeError("Échec de la configuration mémoire")
                 
             # Configuration du modèle
             config = AutoConfig.from_pretrained(
                 settings.MODEL_NAME,
-                trust_remote_code=True,
-                revision=settings.MODEL_REVISION
+                trust_remote_code=True
             )
-                
-            # Optimisations de configuration
+            
             config.use_cache = True
             config.pretraining_tp = 1
-                
-            # Nettoyage préventif
-            self._cleanup_memory()
-                
-            logger.info("Début du chargement du modèle avec configuration 4-bit...")
-                
-            # Chargement du modèle avec gestion optimisée de la mémoire
+            
+            logger.info("Début du chargement du modèle...")
+            
+            # Chargement du modèle avec la configuration optimisée
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
-                device_map="auto",
-                max_memory=memory_config,
-                quantization_config=quantization_config,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
                 trust_remote_code=True,
-                offload_folder="offload_folder"
+                **model_kwargs
             )
-                
-            # Activation du mode évaluation
-            if hasattr(self.model, "eval"):
-                self.model.eval()
             
-            # Vérification du chargement
             if self.model is None:
                 raise RuntimeError("Échec du chargement du modèle")
-                
-            # Nettoyage post-chargement
-            self._cleanup_memory()
-            
-            # Configuration du modèle pour inference mode
-            if hasattr(self.model, "to"):
-                self.model = torch.compile(self.model)
-                
+    
+            # Optimisation post-chargement
+            if torch.cuda.is_available():
+                self.model.eval()
+                # Activation de torch.compile() pour les performances
+                if hasattr(torch, 'compile') and not settings.DEBUG:
+                    self.model = torch.compile(
+                        self.model,
+                        mode="reduce-overhead",
+                        fullgraph=False
+                    )
+    
             self._model_loaded = True
             logger.info("Modèle chargé avec succès")
+            
+            # Nettoyage final
+            self._cleanup_memory()
+            
             return True
-                
+    
         except Exception as e:
             self._model_loaded = False
             logger.error(f"Erreur chargement modèle: {e}")
@@ -802,43 +839,40 @@ class ModelInference:
                     raise RuntimeError("Échec de l'initialisation du modèle")
 
     def _cleanup_memory(self):
-        """Nettoie les ressources de manière sécurisée."""
-        logger.info("Début du nettoyage des ressources...")
+        """Nettoie la mémoire de manière optimisée."""
+        logger.info("Nettoyage mémoire...")
         try:
-            # Ne pas supprimer le tokenizer s'il est déjà initialisé
-            if hasattr(self, '_tokenizer_loaded') and not self._tokenizer_loaded:
-                if hasattr(self, 'tokenizer'):
-                    delattr(self, 'tokenizer')
-                    logger.info("Tokenizer supprimé de la mémoire.")
+            gc.collect()
+            
+            if torch.cuda.is_available():
+                # Synchronisation GPU
+                torch.cuda.synchronize()
                 
-            # Nettoyage du modèle si nécessaire
-            if hasattr(self, 'model') and self.model is not None:
-                try:
-                    if torch.cuda.is_available():
-                        self.model.cpu()
+                # Vider le cache CUDA
+                torch.cuda.empty_cache()
+                
+                # Obtenir les statistiques mémoire
+                allocated = torch.cuda.memory_allocated(0)
+                max_allocated = torch.cuda.max_memory_allocated(0)
+                
+                logger.info(f"Mémoire GPU allouée: {allocated / 1e9:.2f}GB")
+                logger.info(f"Pic mémoire GPU: {max_allocated / 1e9:.2f}GB")
+                
+                # Forcer la libération mémoire si nécessaire
+                if allocated > 0.9 * torch.cuda.get_device_properties(0).total_memory:
+                    torch.cuda.synchronize()
                     del self.model
                     self.model = None
-                    logger.info("Modèle supprimé de la mémoire.")
-                except Exception as e:
-                    logger.warning(f"Erreur lors de la suppression du modèle: {e}")
-            
-            # Libération de la mémoire GPU
-            if torch.cuda.is_available():
-                try:
-                    logger.info("Libération de la mémoire GPU.")
                     torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                except Exception as e:
-                    logger.warning(f"Erreur libération mémoire GPU: {e}")
-    
-            # Collecte des ordures
-            gc.collect()
-            logger.info("Collecte des ordures (Garbage Collection).")
+                    logger.info("Libération forcée de la mémoire GPU")
+                    
+            # Obtenir les statistiques RAM
+            memory = psutil.virtual_memory()
+            logger.info(f"RAM disponible: {memory.available / 1e9:.2f}GB")
+            logger.info(f"Utilisation RAM: {memory.percent}%")
             
         except Exception as e:
-            logger.error(f"Erreur lors du nettoyage: {e}")
-        finally:
-            logger.info("Nettoyage des ressources terminé.")
+            logger.error(f"Erreur nettoyage mémoire: {e}")
             
     async def cleanup(self):
         """Nettoie les ressources de manière asynchrone."""
