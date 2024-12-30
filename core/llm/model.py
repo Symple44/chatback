@@ -244,36 +244,21 @@ class ModelInference:
     def _setup_memory_config(self):
         """Configure la gestion mémoire en utilisant les paramètres du .env."""
         try:
-            # Récupération des paramètres de config depuis settings
+            # Configuration des devices reconnus par PyTorch
             max_memory_config = {}
+            config_str = json.loads(settings.MAX_MEMORY)
             
-            # Parse de la config mémoire
-            try:
-                config_str = json.loads(settings.MAX_MEMORY)
-                # Conversion des clés numériques en int
-                for key, value in config_str.items():
-                    try:
-                        # Pour les GPU, convertir en int
-                        if key.isdigit():
-                            max_memory_config[int(key)] = value
-                        else:
-                            max_memory_config[key] = value
-                    except ValueError:
-                        max_memory_config[key] = value
-            except json.JSONDecodeError as e:
-                logger.error(f"Erreur parsing MAX_MEMORY: {e}")
-                max_memory_config = {"cpu": "24GB", "disk": "24GB"}
+            # Parse uniquement les devices valides (GPU et CPU)
+            for key, value in config_str.items():
+                if key.isdigit():  # GPU devices
+                    max_memory_config[int(key)] = value
+                elif key == 'cpu':
+                    max_memory_config['cpu'] = value
     
-            memory_limit = int(settings.MEMORY_LIMIT)
-            offload_folder = settings.OFFLOAD_FOLDER
-    
-            # Log de la configuration
             logger.info(f"Configuration mémoire depuis .env:")
             logger.info(f"MAX_MEMORY: {max_memory_config}")
-            logger.info(f"MEMORY_LIMIT: {memory_limit}")
-            logger.info(f"OFFLOAD_FOLDER: {offload_folder}")
     
-            # Configuration quantification depuis settings
+            # Configuration quantification
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=settings.USE_4BIT,
                 bnb_4bit_compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
@@ -283,18 +268,18 @@ class ModelInference:
                 llm_int8_threshold=6.0
             )
     
-            # Configuration du device_map et de la mémoire
+            # Configuration du modèle
             model_kwargs = {
                 "quantization_config": quantization_config,
                 "device_map": "auto",
                 "max_memory": max_memory_config,
                 "torch_dtype": torch.float16 if settings.USE_FP16 else torch.float32,
                 "low_cpu_mem_usage": True,
-                "offload_folder": offload_folder,
+                "offload_folder": settings.OFFLOAD_FOLDER,
                 "offload_state_dict": True
             }
     
-            # Vérification des ressources disponibles
+            # Configuration CUDA si disponible
             if torch.cuda.is_available():
                 cuda_memory = torch.cuda.get_device_properties(0).total_memory
                 if settings.CUDA_MEMORY_FRACTION:
@@ -314,30 +299,30 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur configuration mémoire: {e}")
             raise
-
-    def _verify_bnb_installation(self):
-        """Vérifie l'installation de BitsAndBytes."""
-        try:
-            import bitsandbytes as bnb
-            if not torch.cuda.is_available():
-                return False
+    
+        def _verify_bnb_installation(self):
+            """Vérifie l'installation de BitsAndBytes."""
             try:
-                test_input = torch.zeros(1, 1, device='cuda')
-                test_layer = bnb.nn.Linear8bitLt(1, 1).cuda()
-                _ = test_layer(test_input)
-                
-                cc_major, cc_minor = torch.cuda.get_device_capability()
-                compute_capability = f"{cc_major}.{cc_minor}"
-                logger.info(f"Test BnB réussi - Capacité CUDA: {compute_capability}")
-                
-                return float(compute_capability) >= 8.0
-                
-            except Exception as e:
-                logger.error(f"Erreur test BnB CUDA: {e}")
+                import bitsandbytes as bnb
+                if not torch.cuda.is_available():
+                    return False
+                try:
+                    test_input = torch.zeros(1, 1, device='cuda')
+                    test_layer = bnb.nn.Linear8bitLt(1, 1).cuda()
+                    _ = test_layer(test_input)
+                    
+                    cc_major, cc_minor = torch.cuda.get_device_capability()
+                    compute_capability = f"{cc_major}.{cc_minor}"
+                    logger.info(f"Test BnB réussi - Capacité CUDA: {compute_capability}")
+                    
+                    return float(compute_capability) >= 8.0
+                    
+                except Exception as e:
+                    logger.error(f"Erreur test BnB CUDA: {e}")
+                    return False
+                    
+            except ImportError:
                 return False
-                
-        except ImportError:
-            return False
 
     def _setup_model(self):
         """Configure le modèle avec la nouvelle gestion mémoire."""
