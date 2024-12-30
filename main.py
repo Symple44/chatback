@@ -187,13 +187,13 @@ class ComponentManager:
                 await self.cleanup()
                 raise
 
-    async def sync_drive_documents():
+    async def sync_drive_documents(self):
         """Synchronise les documents depuis Google Drive."""
-        if "drive_manager" not in components._components:
+        if "drive_manager" not in self._components:
             return
     
         try:
-            downloaded_files = await components.drive_manager.sync_drive_folder(
+            downloaded_files = await self._components["drive_manager"].sync_drive_folder(
                 settings.GOOGLE_DRIVE_FOLDER_ID,
                 save_path="documents"
             )
@@ -202,10 +202,9 @@ class ComponentManager:
                 logger.info("Aucun nouveau fichier à indexer")
                 return
                 
-            # Index les fichiers téléchargés
             for file_path in downloaded_files:
                 app_name = Path(file_path).parent.name
-                await components.pdf_processor.index_pdf(
+                await self._components["pdf_processor"].index_pdf(
                     file_path,
                     metadata={
                         "application": app_name,
