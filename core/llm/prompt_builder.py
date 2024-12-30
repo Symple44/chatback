@@ -13,50 +13,46 @@ class PromptBuilder:
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr"
     ) -> str:
-        """Construit le prompt complet."""
-        try:
-            # Contexte des documents
-            context = self._build_context(context_docs) if context_docs else ""
-            
-            # Historique de conversation
-            history = self._build_history(conversation_history) if conversation_history else ""
-            
-            # Construction du prompt final
-            prompt_parts = []
-            
-            if settings.SYSTEM_PROMPT:
-                prompt_parts.append(f"Système: {settings.SYSTEM_PROMPT}")
+        """Construit le prompt pour la génération."""
+        prompt_parts = []
 
-            if context:
-                prompt_parts.append(f"Contexte:\n{context}")
+        # Ajout du système prompt avec une directive explicite
+        prompt_parts.append(f"Système: {settings.SYSTEM_PROMPT}")
+        prompt_parts.append("Répondez de manière concise et pertinente en vous basant principalement sur les documents fournis.")
 
-            if history:
-                prompt_parts.append(f"Historique:\n{history}")
+        # Contexte des documents
+        if context_docs:
+            prompt_parts.append(f"Contexte documentaire:\n{self._build_context(context_docs)}")
+        else:
+            prompt_parts.append("Aucun contexte documentaire pertinent n'a été fourni.")
 
-            prompt_parts.append(f"Question: {query}")
-            prompt_parts.append("Réponse:")
+        # Historique de la conversation
+        if conversation_history:
+            prompt_parts.append(f"Historique de la conversation (5 derniers échanges):\n{self._build_history(conversation_history)}")
 
-            return "\n\n".join(prompt_parts)
+        # Question utilisateur
+        prompt_parts.append(f"Question utilisateur: {query}")
 
-        except Exception as e:
-            logger.error(f"Erreur construction prompt: {e}")
-            return query
+        # Préfixe de réponse
+        prompt_parts.append("Réponse (maximum 3 paragraphes) :")
+
+        return "\n\n".join(prompt_parts)
 
     def _build_context(self, context_docs: List[Dict]) -> str:
         """Construit la section contexte du prompt."""
         context_parts = []
         for doc in context_docs:
             content = doc.get('content', '').strip()
+            source = doc.get('title', 'Document')
+            page = doc.get('metadata', {}).get('page', '?')
             if content:
-                source = doc.get('title', 'Document')
-                page = doc.get('metadata', {}).get('page', '?')
-                context_parts.append(f"[{source} (p.{page})]\n{content}")
+                context_parts.append(f"[Source: {source} (p.{page})]\n{content}")
         return "\n\n".join(context_parts)
 
     def _build_history(self, conversation_history: List[Dict]) -> str:
         """Construit la section historique du prompt."""
         history_parts = []
-        for entry in conversation_history[-5:]:
-            if isinstance(entry, dict) and 'query' in entry and 'response' in entry:
+        for entry in conversation_history[-5:]:  # Limite aux 5 derniers échanges
+            if 'query' in entry and 'response' in entry:
                 history_parts.append(f"Q: {entry['query']}\nR: {entry['response']}")
         return "\n\n".join(history_parts)
