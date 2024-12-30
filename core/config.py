@@ -146,15 +146,10 @@ class Settings(BaseSettings):
     # Templates
     CHAT_TEMPLATE: str = """System: {system}\nQuestion: {query}\nContexte: {context}\n\nRéponse:"""
     SYSTEM_PROMPT: ClassVar[str] = (
-        "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires, "
-        "pertinentes et détaillées. Mon objectif principal est de m'appuyer sur les documents "
-        "fournis pour répondre précisément aux questions posées.\n"
-        "Si les informations nécessaires ne sont pas disponibles dans les documents, je fournirai "
-        "des explications basées sur mes connaissances générales. Cependant, les données existantes "
-        "seront toujours ma priorité pour garantir des réponses contextualisées et fiables."
+        "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires et concises, "
+        "en m'appuyant sur les documents disponibles. Posez-moi une question pour commencer."
     ).format(app_name=APP_NAME)
 
-    
     SYSTEM_MESSAGES: ClassVar[Dict[str, str]] = {
         "welcome": "Bienvenue ! Comment puis-je vous aider ?",
         "error": "Désolé, une erreur est survenue.",
