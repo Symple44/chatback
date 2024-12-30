@@ -154,51 +154,54 @@ class ModelInference:
         context_docs: Optional[List[Dict]] = None,
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr",
+        role: str = "user",
         **kwargs
     ) -> Dict:
         """Génère une réponse basée sur une requête et son contexte."""
         if not self._initialized:
-            raise RuntimeError("Le modèle n'est pas initialisé. Appelez initialize() d'abord.")
-
+            raise ValueError(self.prompt_system.get_system_message("error"))
+    
         try:
             logger.info("Début de la génération de réponse")
             
+            # Création des messages
+            messages = [self.prompt_system.format_system_prompt(language)]
+            
+            if conversation_history:
+                for entry in conversation_history[-5:]:
+                    messages.append(self.prompt_system.create_message("user", entry["query"]))
+                    messages.append(self.prompt_system.create_message("assistant", entry["response"]))
+            
+            messages.append(self.prompt_system.create_message(role, query))
+            
             # Construction du prompt
-            logger.info("Construction du prompt")
-            prompt = self.prompt_builder.build_prompt(
-                query=query,
+            prompt = self.prompt_system.build_chat_prompt(
+                messages=messages,
                 context_docs=context_docs,
-                conversation_history=conversation_history,
-                language=language
+                lang=language
             )
             logger.info(f"Longueur du prompt: {len(prompt)} caractères")
-
+    
             # Tokenisation
-            logger.info("Tokenisation du prompt")
             inputs = self.tokenizer_manager.encode(
                 prompt,
                 max_length=settings.MAX_INPUT_LENGTH
             ).to(self.model.device)
             logger.info(f"Nombre de tokens en entrée: {len(inputs.input_ids[0])}")
-
-            # Vérification de la mémoire GPU disponible
+    
+            # Vérification mémoire GPU
             if torch.cuda.is_available():
                 memory_allocated = torch.cuda.memory_allocated() / 1024**3
                 memory_reserved = torch.cuda.memory_reserved() / 1024**3
                 logger.info(f"Mémoire GPU allouée: {memory_allocated:.2f}GB")
                 logger.info(f"Mémoire GPU réservée: {memory_reserved:.2f}GB")
-
-            # Préparation de la génération
-            logger.info("Début de la génération")
+    
             generation_config = self.tokenizer_manager.generation_config
             logger.info(f"Configuration de génération: {generation_config}")
-
-            # Fonction de génération interne
+    
             async def _generate():
                 with torch.no_grad():
-                    logger.info("Début de la génération avec torch.no_grad()")
                     try:
-                        logger.info("Appel de model.generate")
                         outputs = self.model.generate(
                             **inputs,
                             generation_config=generation_config,
@@ -211,31 +214,28 @@ class ModelInference:
                     except Exception as e:
                         logger.error(f"Erreur pendant model.generate: {e}")
                         raise
-
-            # Exécution de la génération avec timeout
+    
             try:
                 outputs = await asyncio.wait_for(_generate(), timeout=60.0)
-                logger.info(f"Taille de la sortie: {outputs.shape}")
                 
                 # Décodage de la réponse
                 response = self.tokenizer_manager.decode_and_clean(outputs[0])
                 logger.info("Décodage terminé")
-
-                # Construction de la réponse finale
+    
                 return {
                     "response": response,
                     "prompt_tokens": len(inputs.input_ids[0]),
                     "completion_tokens": len(outputs[0]) - len(inputs.input_ids[0]),
                     "total_tokens": len(outputs[0])
                 }
-
+    
             except asyncio.TimeoutError:
                 logger.error("Timeout de la génération (60s)")
                 raise RuntimeError("La génération a pris trop de temps")
             except Exception as e:
                 logger.error(f"Erreur pendant la génération: {e}")
                 raise
-
+    
         except Exception as e:
             logger.error(f"Erreur lors du traitement de la requête: {e}")
             metrics.increment_counter("generation_errors")
