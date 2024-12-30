@@ -219,7 +219,8 @@ class ElasticsearchClient:
         vector: Optional[List[float]] = None,
         application: Optional[str] = None,
         size: int = 5,
-        min_score: float = 0.1
+        min_score: float = 0.1,
+        metadata_filter: Optional[Dict] = None  # Ajout du paramètre
     ) -> List[Dict]:
         try:
             search_query = {
@@ -235,15 +236,22 @@ class ElasticsearchClient:
                             }
                         }
                     ],
-                    "filter": []
+                    "filter": []  # Ajout des filtres
                 }
             }
-
+    
             if application:
                 search_query["bool"]["filter"].append({
                     "term": {"application": application}
                 })
-
+    
+            if metadata_filter:
+                # Ajout des métadonnées comme filtres
+                for key, value in metadata_filter.items():
+                    search_query["bool"]["filter"].append({
+                        "term": {key: value}
+                    })
+    
             if vector:
                 search_query["bool"]["should"] = [{
                     "script_score": {
@@ -255,7 +263,7 @@ class ElasticsearchClient:
                     }
                 }]
                 search_query["bool"]["minimum_should_match"] = 1
-
+    
             response = await self.es.search(
                 index=self.index_name,
                 body={
@@ -275,9 +283,9 @@ class ElasticsearchClient:
                     }
                 }
             )
-
+    
             return [self._format_search_result(hit) for hit in response["hits"]["hits"]]
-
+    
         except Exception as e:
             logger.error(f"Erreur recherche documents: {e}")
             return []
