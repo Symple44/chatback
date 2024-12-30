@@ -227,19 +227,28 @@ class ModelInference:
         """Configure les paramètres de quantification."""
         self.quantization_config = None
         try:
-            if settings.USE_4BIT:
-                if not self._verify_bnb_installation():
-                    logger.warning("Désactivation de la quantification 4-bit")
-                    return
-                
+            if settings.USE_4BIT and self._verify_bnb_installation():
+                logger.info("Configuration quantification 4-bit")
                 self.quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
                     bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
+                    bnb_4bit_quant_type="nf4",
+                    llm_int8_enable_fp32_cpu_offload=True
                 )
+            elif settings.USE_8BIT and self._verify_bnb_installation():
+                logger.info("Configuration quantification 8-bit")
+                self.quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True
+                )
+            else:
+                logger.info("Utilisation du format FP16 standard")
+                self.quantization_config = None
+                
         except Exception as e:
             logger.error(f"Erreur configuration quantification: {e}")
+            self.quantization_config = None
 
     def _setup_memory_config(self):
         """Configure la gestion mémoire en utilisant les paramètres du .env."""
@@ -329,7 +338,7 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
                 
-            # Obtention de la configuration mémoire depuis le .env
+            # Obtention de la configuration mémoire
             model_kwargs = self._setup_memory_config()
             if not model_kwargs:
                 raise RuntimeError("Échec de la configuration mémoire")
@@ -345,11 +354,17 @@ class ModelInference:
             
             logger.info("Début du chargement du modèle...")
             
-            # Chargement du modèle avec la configuration optimisée
+            # Type de données pour le modèle
+            torch_dtype = torch.float16 if settings.USE_FP16 else torch.float32
+            
+            # Chargement du modèle
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
                 trust_remote_code=True,
+                torch_dtype=torch_dtype,
+                quantization_config=self.quantization_config,
+                device_map="auto",
                 **model_kwargs
             )
             
