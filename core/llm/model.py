@@ -275,6 +275,7 @@ class ModelInference:
             
             # Configuration mémoire optimisée pour RTX 3090
             max_memory = {
+                "device_map": "auto",
                 0: "20GiB",  # Réserve 20GB pour le GPU
                 "cpu": "24GB"  # Autorise l'utilisation de la RAM
             }
