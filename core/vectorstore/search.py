@@ -72,14 +72,14 @@ class ElasticsearchClient:
 
    async def _setup_templates(self):
       document_template = {
-         "template": {  # Wrapper requis
+         "template": {
             "settings": {
                "number_of_shards": 2,
                "number_of_replicas": 1,
                "refresh_interval": "1s",
                "analysis": {
-                  "analyzer": {
-                     "content_analyzer": {
+                   "analyzer": {
+                       "content_analyzer": {
                            "type": "custom",
                            "tokenizer": "standard",
                            "filter": ["lowercase", "stop", "snowball"]
@@ -89,27 +89,41 @@ class ElasticsearchClient:
            },
            "mappings": {
                "properties": {
-                  "title": {
-                     "type": "text", 
-                     "analyzer": "content_analyzer",
-                     "fields": {"keyword": {"type": "keyword"}}
-                  },
-                  "content": {"type": "text", "analyzer": "content_analyzer"},
-                  "metadata": {"type": "object"},
-                  "embedding": {
-                     
-                     "type": "dense_vector",
-                     "dims": self.embedding_dim,
-                     "index": True,  
-                     "similarity": "cosine"
-                  },
-                  "timestamp": {"type": "date"}
+                   "title": {
+                       "type": "text", 
+                       "analyzer": "content_analyzer",
+                       "fields": {"keyword": {"type": "keyword"}}
+                   },
+                   "content": {
+                       "type": "text", 
+                       "analyzer": "content_analyzer"
+                   },
+                   "application": {  # Ajout d'un champ spécifique pour l'application
+                       "type": "keyword"
+                   },
+                   "file_path": {
+                       "type": "keyword"
+                   },
+                   "metadata": {
+                       "type": "object",
+                       "properties": {
+                           "page_count": {"type": "integer"},
+                           "indexed_at": {"type": "date"},
+                           "sync_date": {"type": "date"}
+                       }
+                   },
+                   "embedding": {
+                       "type": "dense_vector",
+                       "dims": self.embedding_dim,
+                       "index": True,
+                       "similarity": "cosine"
+                   },
+                   "timestamp": {"type": "date"}
                }
-            }
-         },
-         "index_patterns": [f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents*"]
-      }
-
+           }
+       },
+       "index_patterns": [f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents*"]
+   }
       await self.es.indices.put_index_template(
          name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
          body=document_template
