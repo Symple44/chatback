@@ -7,6 +7,7 @@ from transformers import (
     TextIteratorStreamer,
     GenerationConfig
 )
+from sentence_transformers import SentenceTransformer
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
@@ -27,6 +28,7 @@ class ModelInference:
         self.tokenizer_manager = TokenizerManager()
         self.prompt_builder = PromptBuilder()
         self.model = None
+        self.embedding_model = None
         self._initialized = False
 
     async def initialize(self):
@@ -41,8 +43,10 @@ class ModelInference:
                 if not self.auth_manager.get_model_access(settings.MODEL_NAME):
                     raise ValueError(f"Accès non autorisé au modèle {settings.MODEL_NAME}")
 
-                # Initialisation du modèle
+                # Initialisation des modèles
                 await self._initialize_model()
+                await self._initialize_embedding_model()
+                
                 self._initialized = True
                 logger.info(f"Modèle {settings.MODEL_NAME} initialisé avec succès")
 
@@ -94,6 +98,53 @@ class ModelInference:
 
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
+            raise
+
+    async def _initialize_embedding_model(self):
+        """Initialise le modèle d'embeddings."""
+        try:
+            logger.info(f"Chargement du modèle d'embeddings {settings.EMBEDDING_MODEL}")
+            
+            # Configuration du device
+            device = "cuda" if torch.cuda.is_available() and not settings.USE_CPU_ONLY else "cpu"
+            
+            # Chargement du modèle d'embeddings
+            self.embedding_model = SentenceTransformer(
+                settings.EMBEDDING_MODEL,
+                device=device,
+                cache_folder=str(settings.CACHE_DIR)
+            )
+            
+            logger.info(f"Modèle d'embeddings chargé sur {device}")
+            
+        except Exception as e:
+            logger.error(f"Erreur chargement modèle d'embeddings: {e}")
+            raise
+
+    async def create_embedding(self, text: str) -> List[float]:
+        """Crée un embedding pour un texte donné."""
+        if not self._initialized:
+            raise RuntimeError("Le modèle n'est pas initialisé")
+            
+        try:
+            # Normalisation du texte
+            if not isinstance(text, str):
+                text = str(text)
+            
+            # Génération de l'embedding
+            with torch.no_grad():
+                embedding = self.embedding_model.encode(
+                    text,
+                    convert_to_tensor=True,
+                    normalize_embeddings=True
+                )
+                
+            # Conversion en liste
+            return embedding.cpu().tolist()
+            
+        except Exception as e:
+            logger.error(f"Erreur création embedding: {e}")
+            metrics.increment_counter("embedding_errors")
             raise
 
     async def generate_response(
@@ -160,7 +211,15 @@ class ModelInference:
                     del self.model
                     self.model = None
                 except Exception as e:
-                    logger.warning(f"Erreur nettoyage modèle: {e}")
+                    logger.warning(f"Erreur nettoyage modèle génératif: {e}")
+                    
+            if self.embedding_model is not None:
+                try:
+                    self.embedding_model.cpu()
+                    del self.embedding_model
+                    self.embedding_model = None
+                except Exception as e:
+                    logger.warning(f"Erreur nettoyage modèle d'embeddings: {e}")
 
             self._initialized = False
 
