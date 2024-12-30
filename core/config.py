@@ -82,6 +82,14 @@ class Settings(BaseSettings):
         "true"
     ).lower() == "true"
 
+    # Performance
+    MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "16"))
+    MAX_PARALLEL_PROCESSES: int = int(os.getenv("MAX_PARALLEL_PROCESSES", "8"))
+    MAX_MEMORY: str = os.getenv("MAX_MEMORY", '{"0":"20GiB","cpu":"24GB"}')
+    MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "51200"))
+    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
+
     @validator('MAX_MEMORY')
     def validate_max_memory(cls, v):
         """Valide la configuration mémoire."""
@@ -92,14 +100,6 @@ class Settings(BaseSettings):
             return v
         except json.JSONDecodeError:
             raise ValueError("MAX_MEMORY doit être un JSON valide")
-
-    # Performance
-    MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "16"))
-    MAX_PARALLEL_PROCESSES: int = int(os.getenv("MAX_PARALLEL_PROCESSES", "8"))
-    MAX_MEMORY: str = os.getenv("MAX_MEMORY", '{"0":"20GiB","cpu":"24GB"}')
-    MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "51200"))
-    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
 
     # Paths - Structure du projet
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
