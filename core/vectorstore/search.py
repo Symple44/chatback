@@ -297,6 +297,18 @@ class ElasticsearchClient:
 			"metadata": source.get("metadata", {})
 		}
 
+	def _format_search_result(self, hit: Dict) -> Dict:
+		"""Formate un résultat de recherche."""
+		source = hit["_source"]
+		return {
+			"title": source["title"],
+			"content": source["content"],
+			"application": source["application"],
+			"score": hit["_score"],
+			"highlights": hit.get("highlight", {}).get("content", []),
+			"metadata": source.get("metadata", {})
+		}
+
    async def get_document(self, doc_id: str) -> Optional[Dict]:
        """Récupère un document par ID."""
        try:
