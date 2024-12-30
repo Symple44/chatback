@@ -47,6 +47,9 @@ class ModelInference:
 
             # Initialisation du modèle
             self._initialize_model()
+        except Exception as e:
+            logger.error(f"Erreur lors de la configuration du modèle: {e}")
+            raise
 
     def _initialize_model(self):
         """Configure et charge le modèle."""
