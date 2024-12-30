@@ -93,15 +93,29 @@ class Settings(BaseSettings):
     OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
 
     @validator('MAX_MEMORY')
-    def validate_max_memory(cls, v):
+    def validate_max_memory(cls, v: str) -> str:
         """Valide la configuration mémoire."""
         try:
             config = json.loads(v)
             if not isinstance(config, dict):
                 raise ValueError("MAX_MEMORY doit être un dictionnaire JSON")
+            
+            # Vérification des clés et valeurs
+            valid_keys = set(['cpu', 'disk']) | {str(i) for i in range(8)}  # Accepte 'cpu', 'disk' et '0'-'7'
+            for key in config.keys():
+                if key not in valid_keys:
+                    raise ValueError(f"Clé invalide dans MAX_MEMORY: {key}")
+                
+                # Vérification du format des valeurs (ex: "22GiB", "24GB")
+                value = config[key]
+                if not isinstance(value, str) or not any(value.endswith(unit) for unit in ['GB', 'GiB']):
+                    raise ValueError(f"Format de mémoire invalide pour {key}: {value}")
+            
             return v
         except json.JSONDecodeError:
             raise ValueError("MAX_MEMORY doit être un JSON valide")
+        except Exception as e:
+            raise ValueError(f"Configuration mémoire invalide: {e}")
 
     # Paths - Structure du projet
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
