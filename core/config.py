@@ -82,6 +82,17 @@ class Settings(BaseSettings):
         "true"
     ).lower() == "true"
 
+    @validator('MAX_MEMORY')
+    def validate_max_memory(cls, v):
+        """Valide la configuration mémoire."""
+        try:
+            config = json.loads(v)
+            if not isinstance(config, dict):
+                raise ValueError("MAX_MEMORY doit être un dictionnaire JSON")
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("MAX_MEMORY doit être un JSON valide")
+
     # Performance
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "16"))
@@ -166,17 +177,6 @@ class Settings(BaseSettings):
             "length_penalty": float(os.getenv("LENGTH_PENALTY", "1.0"))
         }
         
-    @validator('MAX_MEMORY')
-    def validate_max_memory(cls, v):
-        """Valide la configuration mémoire."""
-        try:
-            config = json.loads(v)
-            if not isinstance(config, dict):
-                raise ValueError("MAX_MEMORY doit être un dictionnaire JSON")
-            return v
-        except json.JSONDecodeError:
-            raise ValueError("MAX_MEMORY doit être un JSON valide")
-
 settings = Settings()
 
 # Création des répertoires requis
