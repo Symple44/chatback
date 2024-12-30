@@ -219,7 +219,7 @@ class ElasticsearchClient:
                               "query": query,
                               "fields": ["title^2", "content"],
                               "type": "best_fields",
-                              "operator": "and",
+                              "operator": "or",
                               "minimum_should_match": "75%"
                           }
                       }],
