@@ -12,71 +12,47 @@ class PromptBuilder:
         context_docs: Optional[List[Dict]] = None,
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr"
-    ) -> List[Dict[str, str]]:
-        """
-        Construit le prompt au format messages avec rôles (system, user, assistant).
-        """
-        messages = []
+    ) -> str:
+        """Construit le prompt pour la génération."""
+        prompt_parts = []
 
-        # Ajout du rôle système
-        messages.append({
-            "role": "system",
-            "content": settings.SYSTEM_PROMPT
-        })
+        # Ajout du système prompt avec une directive explicite
+        prompt_parts.append(f"Système: {settings.SYSTEM_PROMPT}")
+        prompt_parts.append("Répondez de manière concise et pertinente en vous basant principalement sur les documents fournis.")
 
-        # Ajout du contexte documentaire
+        # Contexte des documents
         if context_docs:
-            context = self._build_context(context_docs)
-            messages.append({
-                "role": "system",
-                "content": f"Contexte documentaire pertinent : {context}"
-            })
+            prompt_parts.append(f"Contexte documentaire:\n{self._build_context(context_docs)}")
         else:
-            messages.append({
-                "role": "system",
-                "content": "Aucun contexte documentaire pertinent n'a été fourni."
-            })
+            prompt_parts.append("Aucun contexte documentaire pertinent n'a été fourni.")
 
-        # Ajout de l'historique de la conversation via une méthode séparée
+        # Historique de la conversation
         if conversation_history:
-            history_messages = self._build_history(conversation_history)
-            messages.extend(history_messages)
+            prompt_parts.append(f"Historique de la conversation (5 derniers échanges):\n{self._build_history(conversation_history)}")
 
-        # Ajout de la question de l'utilisateur
-        messages.append({
-            "role": "user",
-            "content": query
-        })
+        # Question utilisateur
+        prompt_parts.append(f"Question utilisateur: {query}")
 
-        return messages
+        # Préfixe de réponse
+        prompt_parts.append("Réponse (maximum 3 paragraphes) :")
+
+        return "\n\n".join(prompt_parts)
 
     def _build_context(self, context_docs: List[Dict]) -> str:
-        """
-        Construit une description textuelle concise des documents.
-        """
+        """Construit la section contexte du prompt."""
         context_parts = []
         for doc in context_docs:
             content = doc.get('content', '').strip()
             source = doc.get('title', 'Document')
             page = doc.get('metadata', {}).get('page', '?')
             if content:
-                context_parts.append(f"[{source} (p.{page})] {content}")
-        return " ".join(context_parts)
+                context_parts.append(f"[Source: {source} (p.{page})]\n{content}")
+        return "\n\n".join(context_parts)
 
-    def _build_history(self, conversation_history: List[Dict]) -> List[Dict[str, str]]:
-        """
-        Construit l'historique des conversations sous forme de messages.
-        """
-        history_messages = []
-        for entry in conversation_history[-5:]:  # Limiter aux 5 derniers échanges
+    def _build_history(self, conversation_history: List[Dict]) -> str:
+        """Construit la section historique du prompt."""
+        history_parts = []
+        for entry in conversation_history[-5:]:  # Limite aux 5 derniers échanges
             if 'query' in entry and 'response' in entry:
-                history_messages.append({
-                    "role": "user",
-                    "content": entry['query']
-                })
-                history_messages.append({
-                    "role": "assistant",
-                    "content": entry['response']
-                })
-        return history_messages
-
+                history_parts.append(f"Q: {entry['query']}\nR: {entry['response']}")
+        return "\n\n".join(history_parts)
