@@ -27,10 +27,10 @@ class ModelInference:
         self.cuda_manager = CUDAManager()
         self.memory_manager = MemoryManager()
         self.tokenizer_manager = TokenizerManager()
-        self.prompt_builder = PromptSystem()
         self.model = None
         self.embedding_model = None
         self._initialized = False
+        self.prompt_system = PromptSystem()
 
     async def initialize(self):
         """Initialise le modèle de manière asynchrone."""
