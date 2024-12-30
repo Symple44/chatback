@@ -158,6 +158,7 @@ class ComponentManager:
                 # Modèle LLM
                 from core.llm.model import ModelInference
                 model = ModelInference()
+                await model.initialize()  
                 self._components["model"] = model
                 logger.info("Modèle LLM initialisé")
 
