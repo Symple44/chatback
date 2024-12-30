@@ -192,14 +192,30 @@ class ModelInference:
             generation_config = self.tokenizer_manager.generation_config
             logger.info(f"Configuration de génération: {generation_config}")
             
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    generation_config=self.tokenizer_manager.generation_config,
-                    max_new_tokens=settings.MAX_OUTPUT_LENGTH,
-                    **kwargs
-                )
-            logger.info("Génération terminée")
+            import asyncio
+            from concurrent.futures import TimeoutError
+            
+            async def generate():
+                with torch.no_grad():
+                    try:
+                        logger.info("Démarrage du modèle.generate()")
+                        outputs = self.model.generate(
+                            **inputs,
+                            generation_config=generation_config,
+                            max_new_tokens=settings.MAX_OUTPUT_LENGTH,
+                            use_cache=True,
+                            **kwargs
+                        )
+                        logger.info("Génération terminée avec succès")
+                        return outputs
+                    except Exception as e:
+                        logger.error(f"Erreur pendant la génération: {e}")
+                        raise
+
+            try:
+                # Utilisation d'un timeout de 60 secondes pour la génération
+                outputs = await asyncio.wait_for(generate(), timeout=60)
+                logger.info(f"Génération réussie, taille de la sortie: {outputs.shape}")
 
             # Décodage et post-traitement
             response = self.tokenizer_manager.decode_and_clean(outputs[0])
