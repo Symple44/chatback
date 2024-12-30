@@ -96,31 +96,19 @@ class GoogleDriveManager:
             return False
 
     async def sync_drive_folder(self, folder_id: str, save_path: str = "documents") -> Set[str]:
-        """
-        Synchronise un dossier Google Drive avec le système de fichiers local.
-        Maintient la structure des dossiers d'applications.
-        """
-        logger.info(f"Démarrage de la synchronisation du dossier {folder_id}")
-        logger.info(f"Chemin de sauvegarde: {save_path}")
-        
         downloaded_files = set()
         
         try:
-            # 1. Récupérer tous les sous-dossiers (applications)
             app_folders = await self.list_folders(folder_id)
-            logger.info(f"Nombre de dossiers d'applications trouvés: {len(app_folders)}")
+            total_files = 0
             
             for app_folder in app_folders:
                 app_name = app_folder['name']
                 app_id = app_folder['id']
-                
-                logger.info(f"Traitement de l'application: {app_name}")
-                
-                # Créer le dossier de l'application en local
                 app_path = os.path.join(save_path, app_name)
                 os.makedirs(app_path, exist_ok=True)
                 
-                # 2. Récupérer les fichiers PDF dans le dossier de l'application
+                # Liste les fichiers PDF
                 query = f"'{app_id}' in parents and mimeType='application/pdf'"
                 results = await self._execute_with_retry(
                     lambda: self.service.files().list(
@@ -131,47 +119,38 @@ class GoogleDriveManager:
                 )
                 
                 files = results.get('files', [])
-                logger.info(f"Nombre de fichiers PDF trouvés dans {app_name}: {len(files)}")
+                total_files += len(files)
                 
-                # 3. Télécharger les fichiers
                 for file in files:
                     file_path = os.path.join(app_path, file['name'])
-                    should_download = False
-                    
-                    # Vérifier si le fichier existe localement
-                    if not os.path.exists(file_path):
-                        logger.info(f"Nouveau fichier à télécharger: {file['name']}")
-                        should_download = True
-                    else:
-                        # Vérifier le MD5 si disponible
-                        if 'md5Checksum' in file:
-                            local_md5 = await self._calculate_local_md5(file_path)
-                            if local_md5 != file['md5Checksum']:
-                                logger.info(f"Le fichier {file['name']} a été modifié (MD5 différent)")
-                                should_download = True
-                        else:
-                            # Si pas de MD5, vérifier la date de modification
-                            remote_time = datetime.fromisoformat(file['modifiedTime'].replace('Z', '+00:00'))
-                            local_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                            if remote_time > local_time:
-                                logger.info(f"Le fichier {file['name']} a été modifié (date plus récente)")
-                                should_download = True
-                    
-                    if should_download:
+                    if await self._should_download_file(file, file_path):
                         success = await self._download_file_with_retries(file['id'], file_path)
                         if success:
                             downloaded_files.add(file_path)
-
-            logger.info(f"Nombre de fichiers PDF trouvés: {len(downloaded_files)}")
-            if not downloaded_files:
-                logger.info("Aucun fichier PDF trouvé dans le dossier")
+                            logger.info(f"Fichier téléchargé: {file['name']}")
             
+            logger.info(f"Total des fichiers PDF trouvés: {total_files}")
+            logger.info(f"Nombre de fichiers téléchargés: {len(downloaded_files)}")
             return downloaded_files
-
+                
         except Exception as e:
-            logger.error(f"Erreur lors de la synchronisation: {e}")
+            logger.error(f"Erreur synchronisation: {e}", exc_info=True)
             return downloaded_files
 
+    async def _should_download_file(self, file: Dict, file_path: str) -> bool:
+        """Vérifie si un fichier doit être téléchargé."""
+        if not os.path.exists(file_path):
+            return True
+            
+        if 'md5Checksum' in file:
+            local_md5 = await self._calculate_local_md5(file_path)
+            return local_md5 != file['md5Checksum']
+            
+        # Vérification par date si pas de MD5
+        remote_time = datetime.fromisoformat(file['modifiedTime'].replace('Z', '+00:00'))
+        local_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+        return remote_time > local_time
+    
     async def _execute_with_retry(self, func, max_retries: int = 3):
         """Execute a function with retry logic."""
         last_error = None
