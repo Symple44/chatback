@@ -357,14 +357,17 @@ class ModelInference:
             # Type de données pour le modèle
             torch_dtype = torch.float16 if settings.USE_FP16 else torch.float32
             
+            # Supprimer quantization_config des model_kwargs s'il existe
+            if 'quantization_config' in model_kwargs:
+                del model_kwargs['quantization_config']
+            
             # Chargement du modèle
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
                 trust_remote_code=True,
                 torch_dtype=torch_dtype,
-                quantization_config=self.quantization_config,
-                device_map="auto",
+                quantization_config=self.quantization_config if hasattr(self, 'quantization_config') else None,
                 **model_kwargs
             )
             
@@ -374,7 +377,6 @@ class ModelInference:
             # Optimisation post-chargement
             if torch.cuda.is_available():
                 self.model.eval()
-                # Activation de torch.compile() pour les performances
                 if hasattr(torch, 'compile') and not settings.DEBUG:
                     self.model = torch.compile(
                         self.model,
