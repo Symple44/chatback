@@ -265,80 +265,79 @@ class ModelInference:
             return False
 
     def _setup_model(self):
-        """Configure le modèle avec conservation du tokenizer."""
+        """Configure le modèle avec gestion optimisée de la mémoire."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
-
-            # Vérification de la mémoire disponible
-            if not self._check_available_memory():
-                raise RuntimeError("Mémoire insuffisante pour charger le modèle")
-            
-            # Configuration mémoire optimisée pour RTX 3090
-            max_memory = {
-                "device_map": "auto",
-                0: "20GiB",  # Réserve 20GB pour le GPU
-                "cpu": "24GB"  # Autorise l'utilisation de la RAM
+                
+            # Configuration mémoire optimisée
+            memory_config = {
+                0: "20GiB",  # Allouer 20GB pour le GPU
+                "cpu": "24GB"  # Utilisation RAM
             }
-            
-            # Configuration de quantification 4-bit améliorée
+                
+            # Configuration quantification 4-bit optimisée
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
                 llm_int8_enable_fp32_cpu_offload=True,
+                llm_int8_threshold=6.0,
                 llm_int8_skip_modules=None
             )
-    
-            # Configuration du device map automatique
-            device_map = "auto"
-            
+                
             # Configuration du modèle
             config = AutoConfig.from_pretrained(
                 settings.MODEL_NAME,
                 trust_remote_code=True,
                 revision=settings.MODEL_REVISION
             )
-            
-            # Optimisations
+                
+            # Optimisations de configuration
             config.use_cache = True
             config.pretraining_tp = 1
-            
-            # Nettoyage préventif sans affecter le tokenizer
-            if hasattr(self, 'model'):
-                try:
-                    if torch.cuda.is_available():
-                        self.model.cpu()
-                    del self.model
-                except Exception:
-                    pass
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            # Chargement du modèle avec tous les paramètres optimisés
+                
+            # Nettoyage préventif
+            self._cleanup_memory()
+                
+            logger.info("Début du chargement du modèle avec configuration 4-bit...")
+                
+            # Chargement du modèle avec gestion optimisée de la mémoire
             self.model = AutoModelForCausalLM.from_pretrained(
                 settings.MODEL_NAME,
                 config=config,
-                device_map=device_map,
-                max_memory=max_memory,
+                device_map="auto",
+                max_memory=memory_config,
                 quantization_config=quantization_config,
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
                 offload_folder="offload_folder"
             )
-            
-            # Post-configuration
-            if torch.cuda.is_available():
+                
+            # Activation du mode évaluation
+            if hasattr(self.model, "eval"):
                 self.model.eval()
             
+            # Vérification du chargement
+            if self.model is None:
+                raise RuntimeError("Échec du chargement du modèle")
+                
+            # Nettoyage post-chargement
+            self._cleanup_memory()
+            
+            # Configuration du modèle pour inference mode
+            if hasattr(self.model, "to"):
+                self.model = torch.compile(self.model)
+                
+            self._model_loaded = True
             logger.info("Modèle chargé avec succès")
             return True
-            
+                
         except Exception as e:
+            self._model_loaded = False
             logger.error(f"Erreur chargement modèle: {e}")
-            return False
+            raise
 
     def _setup_tokenizer(self):
         """Configure le tokenizer avec gestion des erreurs."""
@@ -445,11 +444,12 @@ class ModelInference:
         language: str = "fr",
         generation_config: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """Génère une réponse."""
+        """Génère une réponse avec meilleure gestion des erreurs."""
         try:
-            # Vérification de l'état du modèle
-            self._ensure_model_ready()
-            
+            # Vérification plus stricte de l'état
+            if not self.is_model_ready():
+                raise RuntimeError("Modèle non initialisé ou non fonctionnel")
+                
             # Préparation du prompt
             prompt = self._prepare_prompt(
                 query=query,
@@ -457,10 +457,14 @@ class ModelInference:
                 conversation_history=conversation_history,
                 language=language
             )
-            
-            # Tokenisation
-            inputs = self._tokenize(prompt)
-            
+                
+            # Tokenisation avec gestion d'erreur
+            try:
+                inputs = self._tokenize(prompt)
+            except Exception as e:
+                logger.error(f"Erreur tokenisation: {e}")
+                raise RuntimeError("Erreur lors de la tokenisation") from e
+                
             # Configuration de génération
             gen_config = self.generation_config
             if generation_config:
@@ -468,37 +472,41 @@ class ModelInference:
                     **gen_config.to_dict(),
                     **generation_config
                 })
-            
-            # Génération avec mesure du temps
+                
+            # Génération avec mesure du temps et gestion d'erreur
             with metrics.timer("model_inference"):
                 with torch.inference_mode():
-                    outputs = self.model.generate(
-                        **inputs,
-                        generation_config=gen_config,
-                        return_dict_in_generate=True,
-                        output_scores=True
-                    )
-            
+                    try:
+                        outputs = self.model.generate(
+                            **inputs,
+                            generation_config=gen_config,
+                            return_dict_in_generate=True,
+                            output_scores=True
+                        )
+                    except Exception as e:
+                        logger.error(f"Erreur génération: {e}")
+                        raise RuntimeError("Erreur lors de la génération") from e
+                
             # Décodage et post-traitement
             response = self.tokenizer.decode(
                 outputs.sequences[0],
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=True
             )
-            
+                
             response = self._post_process_response(response)
-            
+                
             # Métriques
             metrics.increment_counter("model_generations")
-            
+                
             return {
-                "response": response, 
-                "tokens_used": len(outputs.sequences[0]), 
+                "response": response,
+                "tokens_used": len(outputs.sequences[0]),
                 "source": "model",
                 "confidence": 1.0,
                 "generation_time": metrics.timers.get("model_inference", 0.0)
             }
-            
+                
         except Exception as e:
             logger.error(f"Erreur génération réponse: {e}")
             metrics.increment_counter("model_generation_errors")
@@ -767,24 +775,31 @@ class ModelInference:
         """Crée un embedding pour un texte."""
         return await self.embeddings.generate_embedding(text)
 
-    def _is_model_ready(self) -> bool:
+    def is_model_ready(self) -> bool:
         """Vérifie si le modèle est prêt à être utilisé."""
         return (
             hasattr(self, 'model') and 
             self.model is not None and 
             hasattr(self, 'tokenizer') and 
             self.tokenizer is not None and 
-            self._tokenizer_loaded
+            self._tokenizer_loaded and
+            self._model_loaded
         )
     
     def _ensure_model_ready(self):
-        """S'assure que le modèle est prêt, sinon lève une exception."""
+        """S'assure que le modèle est prêt, sinon tente de le réinitialiser."""
         if not self._is_model_ready():
             if not hasattr(self, 'tokenizer') or self.tokenizer is None:
                 raise RuntimeError("Tokenizer non initialisé")
-            if not hasattr(self, 'model') or self.model is None:
-                raise RuntimeError("Modèle non initialisé")
-            raise RuntimeError("Modèle non prêt")
+                
+            # Si le tokenizer est ok mais pas le modèle, on tente de recharger
+            if hasattr(self, 'model') and self.model is None:
+                try:
+                    logger.warning("Tentative de rechargement du modèle...")
+                    self._setup_model()
+                except Exception as e:
+                    logger.error(f"Échec du rechargement du modèle: {e}")
+                    raise RuntimeError("Échec de l'initialisation du modèle")
 
     def _cleanup_memory(self):
         """Nettoie les ressources de manière sécurisée."""
