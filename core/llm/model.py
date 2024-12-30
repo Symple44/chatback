@@ -1,6 +1,7 @@
 # core/llm/model.py
 from typing import Dict, List, Optional, Union, Generator
 import torch
+import asyncio
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -156,9 +157,6 @@ class ModelInference:
         **kwargs
     ) -> Dict:
         """Génère une réponse basée sur une requête et son contexte."""
-        import asyncio
-        from concurrent.futures import TimeoutError
-
         if not self._initialized:
             raise RuntimeError("Le modèle n'est pas initialisé. Appelez initialize() d'abord.")
 
@@ -190,39 +188,34 @@ class ModelInference:
                 logger.info(f"Mémoire GPU allouée: {memory_allocated:.2f}GB")
                 logger.info(f"Mémoire GPU réservée: {memory_reserved:.2f}GB")
 
-            # Génération
+            # Préparation de la génération
             logger.info("Début de la génération")
             generation_config = self.tokenizer_manager.generation_config
             logger.info(f"Configuration de génération: {generation_config}")
-            
-            import asyncio
-            from concurrent.futures import TimeoutError
-            
-            async def generate():
+
+            # Fonction de génération interne
+            async def _generate():
                 with torch.no_grad():
-                    try:
-                        logger.info("Démarrage du modèle.generate()")
-                        outputs = self.model.generate(
-                            **inputs,
-                            generation_config=generation_config,
-                            max_new_tokens=settings.MAX_OUTPUT_LENGTH,
-                            use_cache=True,
-                            **kwargs
-                        )
-                        logger.info("Génération terminée avec succès")
-                        return outputs
-                    except Exception as e:
-                        logger.error(f"Erreur pendant la génération: {e}")
-                        raise
+                    outputs = self.model.generate(
+                        **inputs,
+                        generation_config=generation_config,
+                        max_new_tokens=settings.MAX_OUTPUT_LENGTH,
+                        use_cache=True,
+                        **kwargs
+                    )
+                    logger.info("Génération terminée avec succès")
+                    return outputs
 
+            # Exécution de la génération avec timeout
             try:
-                # Utilisation d'un timeout de 60 secondes pour la génération
-                outputs = await asyncio.wait_for(generate(), timeout=60)
-                logger.info(f"Génération réussie, taille de la sortie: {outputs.shape}")
+                outputs = await asyncio.wait_for(_generate(), timeout=60.0)
+                logger.info(f"Taille de la sortie: {outputs.shape}")
+                
+                # Décodage de la réponse
+                response = self.tokenizer_manager.decode_and_clean(outputs[0])
+                logger.info("Décodage terminé")
 
-            # Décodage et post-traitement
-            response = self.tokenizer_manager.decode_and_clean(outputs[0])
-
+                # Construction de la réponse finale
                 return {
                     "response": response,
                     "prompt_tokens": len(inputs.input_ids[0]),
@@ -231,16 +224,14 @@ class ModelInference:
                 }
 
             except asyncio.TimeoutError:
-                logger.error("Timeout pendant la génération (60s)")
+                logger.error("Timeout de la génération (60s)")
                 raise RuntimeError("La génération a pris trop de temps")
-                
             except Exception as e:
                 logger.error(f"Erreur pendant la génération: {e}")
-                metrics.increment_counter("generation_errors")
                 raise
 
         except Exception as e:
-            logger.error(f"Erreur génération réponse: {e}")
+            logger.error(f"Erreur lors du traitement de la requête: {e}")
             metrics.increment_counter("generation_errors")
             raise
 
