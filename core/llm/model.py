@@ -54,7 +54,7 @@ class ModelInference:
         """Configure et charge le modèle."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
-    
+
             # Récupération de la configuration mémoire depuis settings via memory_manager
             max_memory = self.memory_manager.get_optimal_memory_config()
             
@@ -66,7 +66,7 @@ class ModelInference:
                 "max_memory": max_memory,
                 "trust_remote_code": True
             }
-    
+
             # Configuration du type de données en fonction des settings
             if settings.USE_FP16:
                 load_params["torch_dtype"] = torch.float16
@@ -76,19 +76,22 @@ class ModelInference:
                 load_params["load_in_4bit"] = True
                 if hasattr(settings, "BNB_4BIT_COMPUTE_DTYPE"):
                     load_params["bnb_4bit_compute_dtype"] = getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE)
-    
+
             logger.info(f"Configuration de chargement: {load_params}")
-    
+
             # Chargement du modèle avec autocast si FP16 est activé
-            with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
+            if settings.USE_FP16:
+                with torch.amp.autocast('cuda'):
+                    self.model = AutoModelForCausalLM.from_pretrained(**load_params)
+            else:
                 self.model = AutoModelForCausalLM.from_pretrained(**load_params)
-    
+
             # Post-initialisation
             model_device = next(self.model.parameters()).device
             logger.info(f"Modèle chargé sur {model_device}")
             logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
             metrics.increment_counter("model_loads")
-    
+
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             raise
