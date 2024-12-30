@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 from typing import Dict, Optional, List, Tuple, ClassVar, Union
 from pathlib import Path
 import os
+import json
 from dotenv import load_dotenv
 
 # Ajout de l'import de torch avec gestion d'erreur
