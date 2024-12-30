@@ -32,6 +32,9 @@ class ModelInference:
     def __init__(self):
         """Initialise le modèle d'inférence avec des optimisations matérielles."""
         try:
+            # Vérification et configuration de l'authentification HF
+            self._setup_huggingface_auth()
+            
             # Initialisation des flags de contrôle
             self._cuda_initialized = False
             self._model_loaded = False
@@ -63,6 +66,11 @@ class ModelInference:
             self.executor = ThreadPoolExecutor(max_workers=2)
             self.embeddings = EmbeddingsManager()
             
+            # Fallback sur un modèle open source si besoin
+            if not self._verify_model_access():
+                logger.warning(f"Accès impossible à {settings.MODEL_NAME}, utilisation du modèle de fallback")
+                self._use_fallback_model()
+            
             # Initialiser d'abord le tokenizer
             self._setup_tokenizer()
             if not self.tokenizer:
@@ -81,6 +89,53 @@ class ModelInference:
             logger.error(f"Erreur initialisation modèle: {e}")
             asyncio.create_task(self.cleanup())  # Nettoyage asynchrone
             raise
+
+    def _setup_huggingface_auth(self):
+        """Configure l'authentification Hugging Face."""
+        hf_token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if not hf_token:
+            logger.warning("Token Hugging Face non trouvé dans les variables d'environnement")
+            return False
+            
+        try:
+            from huggingface_hub import login
+            login(token=hf_token)
+            logger.info("Authentification Hugging Face réussie")
+            return True
+        except Exception as e:
+            logger.error(f"Erreur authentification Hugging Face: {e}")
+            return False
+
+    def _verify_model_access(self):
+        """Vérifie l'accès au modèle configuré."""
+        try:
+            from huggingface_hub import model_info
+            info = model_info(settings.MODEL_NAME)
+            return not info.private
+        except Exception as e:
+            logger.error(f"Erreur vérification accès modèle: {e}")
+            return False
+
+    def _use_fallback_model(self):
+        """Configure un modèle de fallback open source."""
+        FALLBACK_MODELS = [
+            "mistralai/Mistral-7B-v0.2",
+            "mistralai/Mistral-7B-Instruct-v0.2",
+            "HuggingFaceH4/zephyr-7b-beta"
+        ]
+        
+        for model_name in FALLBACK_MODELS:
+            try:
+                from huggingface_hub import model_info
+                info = model_info(model_name)
+                if not info.private:
+                    settings.MODEL_NAME = model_name
+                    logger.info(f"Utilisation du modèle de fallback: {model_name}")
+                    return True
+            except Exception:
+                continue
+                
+        raise RuntimeError("Aucun modèle de fallback disponible")
 
     def _setup_cuda_paths(self):
         """Configure les chemins CUDA."""
@@ -285,34 +340,43 @@ class ModelInference:
             return False
 
     def _setup_tokenizer(self):
+        """Configure le tokenizer avec gestion des erreurs."""
         logger.info("Initialisation du tokenizer...")
-        try:
-            # Charger le tokenizer
-            self._tokenizer_loaded = False  # Ajout du flag initial
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                settings.MODEL_NAME,
-                use_fast=True,
-                model_max_length=settings.MAX_INPUT_LENGTH
-            )
-            logger.info(f"Tokenizer chargé avec succès : {settings.MODEL_NAME}")
-    
-            # Configurer le token de padding si nécessaire
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-                logger.info("Token de padding défini sur le token de fin (EOS).")
-    
-            # Tester le tokenizer
-            self._test_tokenizer()
-
-            self._tokenizer_loaded = True  
-            logger.info("Configuration du tokenizer terminée avec succès.")
-        except ValueError as ve:
-            logger.error(f"Erreur de configuration : {ve}")
-            raise ValueError(f"Configuration du tokenizer échouée : {ve}")
-        except Exception as e:
-            self._tokenizer_loaded = False
-            logger.error(f"Erreur imprévue lors de la configuration du tokenizer : {e}")
-            raise RuntimeError(f"Erreur imprévue dans le tokenizer : {e}")
+        max_retries = 3
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                self._tokenizer_loaded = False
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    settings.MODEL_NAME,
+                    use_fast=True,
+                    model_max_length=settings.MAX_INPUT_LENGTH,
+                    trust_remote_code=True,
+                    token=os.getenv("HUGGING_FACE_HUB_TOKEN")
+                )
+                
+                if self.tokenizer is None:
+                    raise ValueError("Tokenizer non initialisé")
+                    
+                logger.info(f"Tokenizer chargé avec succès: {settings.MODEL_NAME}")
+                
+                # Configuration du token de padding
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                    logger.info("Token de padding configuré")
+                
+                # Test du tokenizer
+                self._test_tokenizer()
+                self._tokenizer_loaded = True
+                return
+                
+            except Exception as e:
+                logger.warning(f"Tentative {attempt + 1} échouée: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                else:
+                    raise RuntimeError(f"Échec initialisation tokenizer après {max_retries} tentatives") from e
 
     def _test_tokenizer(self):
         """
