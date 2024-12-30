@@ -160,21 +160,38 @@ class ModelInference:
             raise RuntimeError("Le modèle n'est pas initialisé. Appelez initialize() d'abord.")
 
         try:
+            logger.info("Début de la génération de réponse")
+            
             # Construction du prompt
+            logger.info("Construction du prompt")
             prompt = self.prompt_builder.build_prompt(
                 query=query,
                 context_docs=context_docs,
                 conversation_history=conversation_history,
                 language=language
             )
+            logger.info(f"Longueur du prompt: {len(prompt)} caractères")
 
             # Tokenisation
+            logger.info("Tokenisation du prompt")
             inputs = self.tokenizer_manager.encode(
                 prompt,
                 max_length=settings.MAX_INPUT_LENGTH
             ).to(self.model.device)
+            logger.info(f"Nombre de tokens en entrée: {len(inputs.input_ids[0])}")
+
+            # Vérification de la mémoire GPU disponible
+            if torch.cuda.is_available():
+                memory_allocated = torch.cuda.memory_allocated() / 1024**3
+                memory_reserved = torch.cuda.memory_reserved() / 1024**3
+                logger.info(f"Mémoire GPU allouée: {memory_allocated:.2f}GB")
+                logger.info(f"Mémoire GPU réservée: {memory_reserved:.2f}GB")
 
             # Génération
+            logger.info("Début de la génération")
+            generation_config = self.tokenizer_manager.generation_config
+            logger.info(f"Configuration de génération: {generation_config}")
+            
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
@@ -182,6 +199,7 @@ class ModelInference:
                     max_new_tokens=settings.MAX_OUTPUT_LENGTH,
                     **kwargs
                 )
+            logger.info("Génération terminée")
 
             # Décodage et post-traitement
             response = self.tokenizer_manager.decode_and_clean(outputs[0])
