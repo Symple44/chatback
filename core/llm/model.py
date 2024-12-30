@@ -14,7 +14,7 @@ from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager
 from .memory_manager import MemoryManager
-from .prompt_system import PromptBuilder
+from .prompt_system import PromptSystem
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 
@@ -27,7 +27,7 @@ class ModelInference:
         self.cuda_manager = CUDAManager()
         self.memory_manager = MemoryManager()
         self.tokenizer_manager = TokenizerManager()
-        self.prompt_builder = PromptBuilder()
+        self.prompt_builder = PromptSystem()
         self.model = None
         self.embedding_model = None
         self._initialized = False
