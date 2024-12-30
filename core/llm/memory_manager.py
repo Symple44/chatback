@@ -2,6 +2,7 @@
 import gc
 import psutil
 import torch
+import json
 from typing import Dict
 from core.utils.logger import get_logger
 from core.config import settings
@@ -32,23 +33,26 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Erreur nettoyage mémoire: {e}")
 
-    def get_optimal_memory_config(self) -> Dict:
-        """Calcule la configuration mémoire optimale."""
+    def get_optimal_memory_config(self) -> Dict[str, str]:
+        """Calcule la configuration mémoire optimale en utilisant les paramètres de settings."""
         try:
-            if not torch.cuda.is_available():
-                return {"cpu": f"{psutil.virtual_memory().available / 1024**3:.0f}GB"}
+            # Charger la configuration MAX_MEMORY depuis settings
+            if isinstance(settings.MAX_MEMORY, str):
+                try:
+                    memory_config = json.loads(settings.MAX_MEMORY)
+                except json.JSONDecodeError:
+                    logger.error("Erreur lors du parsing de MAX_MEMORY")
+                    memory_config = {"0": "20GiB", "cpu": "24GB"}
+            else:
+                memory_config = settings.MAX_MEMORY
 
-            device_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            cuda_limit = min(device_memory * 0.95, float(settings.MAX_MEMORY.get("0", "22").replace("GiB", "")))
-            
-            return {
-                "0": f"{cuda_limit:.0f}GiB",
-                "cpu": f"{psutil.virtual_memory().available / 1024**3:.0f}GB"
-            }
+            logger.info(f"Configuration mémoire: {memory_config}")
+            return memory_config
 
         except Exception as e:
-            logger.error(f"Erreur calcul config mémoire: {e}")
-            return settings.MAX_MEMORY
+            logger.error(f"Erreur lors de la lecture de la configuration mémoire: {e}")
+            # Configuration par défaut en cas d'erreur
+            return {"0": "20GiB", "cpu": "24GB"}
 
     async def cleanup(self):
         """Nettoie les ressources mémoire."""
