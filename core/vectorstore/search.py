@@ -1,403 +1,281 @@
 # core/vectorstore/search.py
-from elasticsearch import AsyncElasticsearch, ConnectionError, RequestError
+from elasticsearch import RequestError
 from elasticsearch.exceptions import ConnectionError as ESConnectionError
-from elasticsearch.helpers import BulkIndexError
 from typing import List, Dict, Optional, Any, Tuple
 import logging
-import ssl
-import os
-from datetime import datetime
 import asyncio
 import json
-import certifi
+from datetime import datetime
 
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from .query_builder import QueryBuilder
+from .response_formatter import ResponseFormatter
 
 logger = get_logger(__name__)
 
-class ElasticsearchClient:
-    def __init__(self):
-        """Initialise le client Elasticsearch."""
-        try:
-            # Configuration SSL
-            ssl_context = {
-                'verify_certs': True if settings.ELASTICSEARCH_CA_CERT else False,
-                'ca_certs': settings.ELASTICSEARCH_CA_CERT or certifi.where(),
-                'client_cert': settings.ELASTICSEARCH_CLIENT_CERT,
-                'client_key': settings.ELASTICSEARCH_CLIENT_KEY
-            }
-
-            # Configuration client
-            self.es = AsyncElasticsearch(
-                hosts=[settings.ELASTICSEARCH_HOST],
-                basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
-                **ssl_context,
-                retry_on_timeout=True,
-                max_retries=3,
-                timeout=30,
-                sniff_on_start=False,
-                sniff_on_node_failure=False
-            )
-
-            self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents"
-            self.vector_index = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_vectors"
-            self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
-
-            logger.info("Client Elasticsearch initialisé")
-
-        except Exception as e:
-            logger.error(f"Erreur initialisation Elasticsearch: {e}")
-            raise
-
-    async def initialize(self):
-        """Configure les indices et templates."""
-        try:
-            if not await self.es.ping():
-                raise ConnectionError("Elasticsearch connection failed")
-            await self._verify_ssl_certs()
-            await self._setup_templates()
-            await self._setup_indices()
-            logger.info("Indices et templates configurés")
-        except Exception as e:
-            logger.error(f"Erreur initialisation: {e}")
-            raise
-
-    async def _verify_ssl_certs(self):
-        """Vérifie les certificats SSL."""
-        if settings.ELASTICSEARCH_CA_CERT:
-            if not os.path.exists(settings.ELASTICSEARCH_CA_CERT):
-                raise FileNotFoundError(f"CA cert non trouvé: {settings.ELASTICSEARCH_CA_CERT}")
-            if settings.ELASTICSEARCH_CLIENT_CERT and not os.path.exists(settings.ELASTICSEARCH_CLIENT_CERT):
-                raise FileNotFoundError(f"Client cert non trouvé: {settings.ELASTICSEARCH_CLIENT_CERT}")
-
-    async def _setup_templates(self):
-        document_template = {
-            "template": {
-                "settings": {
-                    "number_of_shards": 2,
-                    "number_of_replicas": 1,
-                    "refresh_interval": "1s",
-                    "analysis": {
-                        "analyzer": {
-                            "content_analyzer": {
-                                "type": "custom",
-                                "tokenizer": "standard",
-                                "filter": ["lowercase", "stop", "snowball"]
-                            }
-                        }
-                    }
-                },
-                "mappings": {
-                    "properties": {
-                        "title": {
-                            "type": "text",
-                            "analyzer": "content_analyzer",
-                            "fields": {"keyword": {"type": "keyword"}}
-                        },
-                        "content": {
-                            "type": "text",
-                            "analyzer": "content_analyzer"
-                        },
-                        "application": {
-                            "type": "keyword"
-                        },
-                        "file_path": {
-                            "type": "keyword"
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "properties": {
-                                "page_count": {"type": "integer"},
-                                "indexed_at": {"type": "date"},
-                                "sync_date": {"type": "date"}
-                            }
-                        },
-                        "embedding": {
-                            "type": "dense_vector",
-                            "dims": self.embedding_dim,
-                            "index": True,
-                            "similarity": "cosine"
-                        },
-                        "timestamp": {"type": "date"}
-                    }
-                }
-            },
-            "index_patterns": [f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents*"]
-        }
-        await self.es.indices.put_index_template(
-            name=f"{settings.ELASTICSEARCH_INDEX_PREFIX}_documents_template",
-            body=document_template
-        )
-
-    async def _setup_indices(self):
-        """Crée les indices s'ils n'existent pas."""
-        for index in [self.index_name, self.vector_index]:
-            if not await self.es.indices.exists(index=index):
-                await self.es.indices.create(index=index)
-
-    async def index_document(
-        self,
-        title: str,
-        content: str,
-        vector: Optional[List[float]] = None,
-        metadata: Optional[Dict] = None
-    ) -> bool:
-        """Indexe un document."""
-        try:
-            doc = {
-                "title": title,
-                "content": content,
-                "metadata": metadata or {},
-                "timestamp": datetime.utcnow().isoformat()
-            }
-
-            if vector:
-                doc["embedding"] = vector
-
-            response = await self.es.index(
-                index=self.index_name,
-                document=doc,
-                refresh=True
-            )
-
-            metrics.increment_counter("documents_indexed")
-            return True
-
-        except Exception as e:
-            logger.error(f"Erreur indexation document: {e}")
-            metrics.increment_counter("indexing_errors")
-            return False
-
-    async def bulk_index_documents(
-        self,
-        documents: List[Dict],
-        chunk_size: int = 500
-    ) -> Tuple[int, int]:
-        """Indexation en masse avec support des vecteurs."""
-        success = errors = 0
-        try:
-            actions = [
-                {
-                    "_index": self.index_name,
-                    "_source": {
-                        "title": doc["title"],
-                        "content": doc["content"],
-                        "metadata": doc.get("metadata", {}),
-                        "embedding": doc.get("vector"),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                }
-                for doc in documents
-            ]
-
-            for i in range(0, len(actions), chunk_size):
-                chunk = actions[i:i + chunk_size]
-                try:
-                    response = await self.es.bulk(operations=chunk)
-                    if response["errors"]:
-                        errors += sum(1 for item in response["items"] if item["index"].get("error"))
-                        success += len(chunk) - errors
-                    else:
-                        success += len(chunk)
-                except BulkIndexError as e:
-                    errors += len(chunk)
-                    logger.error(f"Erreur bulk indexation chunk {i}: {e}")
-
-            metrics.increment_counter("documents_indexed", success)
-            if errors:
-                metrics.increment_counter("indexing_errors", errors)
-
-            return success, errors
-
-        except Exception as e:
-            logger.error(f"Erreur indexation bulk: {e}")
-            return success, len(documents) - success
+class SearchManager:
+    def __init__(self, es_client):
+        """Initialise le gestionnaire de recherche."""
+        self.es = es_client
+        self.index_prefix = settings.ELASTICSEARCH_INDEX_PREFIX
+        self.query_builder = QueryBuilder()
+        self.response_formatter = ResponseFormatter()
+        self.retry_delay = 1.0
+        self.max_retries = 3
 
     async def search_documents(
         self,
         query: str,
         vector: Optional[List[float]] = None,
+        metadata_filter: Optional[Dict] = None,
+        **kwargs
+    ) -> List[Dict]:
+        """
+        Effectue une recherche dans les documents.
+        
+        Args:
+            query: Requête textuelle
+            vector: Vecteur d'embedding optionnel
+            metadata_filter: Filtres de métadonnées
+            **kwargs: Options supplémentaires de recherche
+            
+        Returns:
+            Liste des résultats formatés
+        """
+        try:
+            # Construction de la requête
+            search_body = self.query_builder.build_search_query(
+                query=query,
+                vector=vector,
+                metadata_filter=metadata_filter,
+                **kwargs
+            )
+
+            # Exécution avec retry
+            response = await self._execute_with_retry(
+                lambda: self.es.search(
+                    index=f"{self.index_prefix}_documents",
+                    body=search_body
+                )
+            )
+
+            # Formatage des résultats
+            results = self.response_formatter.format_search_results(response)
+            
+            # Métriques
+            metrics.increment_counter("successful_searches")
+            metrics.set_gauge("last_search_hits", len(results))
+            
+            return results
+
+        except Exception as e:
+            logger.error(f"Erreur lors de la recherche: {e}")
+            metrics.increment_counter("failed_searches")
+            return []
+
+    async def _execute_with_retry(self, operation, max_retries: Optional[int] = None) -> Any:
+        """
+        Exécute une opération avec retry.
+        
+        Args:
+            operation: Fonction à exécuter
+            max_retries: Nombre maximum de tentatives
+            
+        Returns:
+            Résultat de l'opération
+        """
+        retries = max_retries or self.max_retries
+        last_error = None
+
+        for attempt in range(retries):
+            try:
+                return await operation()
+                
+            except ESConnectionError as e:
+                last_error = e
+                logger.warning(f"Erreur de connexion (tentative {attempt + 1}/{retries}): {e}")
+                if attempt == retries - 1:
+                    raise
+                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                
+            except RequestError as e:
+                # Les erreurs de requête ne nécessitent pas de retry
+                logger.error(f"Erreur de requête: {str(e)}")
+                raise
+                
+            except Exception as e:
+                last_error = e
+                logger.error(f"Erreur inattendue (tentative {attempt + 1}/{retries}): {e}")
+                if attempt == retries - 1:
+                    raise
+                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+
+        raise last_error
+
+    async def vector_search(
+        self,
+        vector: List[float],
         size: int = 5,
-        min_score: float = 0.1,
+        min_score: float = 0.7,
         metadata_filter: Optional[Dict] = None
     ) -> List[Dict]:
-        """Recherche améliorée dans les documents."""
+        """
+        Effectue une recherche par similarité vectorielle.
+        
+        Args:
+            vector: Vecteur de recherche
+            size: Nombre de résultats
+            min_score: Score minimum de similarité
+            metadata_filter: Filtres additionnels
+            
+        Returns:
+            Liste des documents similaires
+        """
         try:
-            # Validation des entrées
-            if not query.strip():
-                logger.warning("Requête vide")
-                return []
-                
-            # Construction de la requête de base
+            script_query = {
+                "script_score": {
+                    "query": {"match_all": {}},
+                    "script": {
+                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                        "params": {"query_vector": vector}
+                    },
+                    "min_score": min_score
+                }
+            }
+
+            # Ajout des filtres si présents
+            if metadata_filter:
+                script_query = {
+                    "bool": {
+                        "must": [script_query],
+                        "filter": self.query_builder._build_filters(metadata_filter)
+                    }
+                }
+
+            response = await self._execute_with_retry(
+                lambda: self.es.search(
+                    index=f"{self.index_prefix}_documents",
+                    body={
+                        "size": size,
+                        "query": script_query,
+                        "_source": ["title", "content", "metadata"],
+                        "timeout": "30s"
+                    }
+                )
+            )
+
+            return self.response_formatter.format_search_results(response)
+
+        except Exception as e:
+            logger.error(f"Erreur recherche vectorielle: {e}")
+            return []
+
+    async def hybrid_search(
+        self,
+        text_query: str,
+        vector: List[float],
+        weights: Tuple[float, float] = (0.3, 0.7),
+        **kwargs
+    ) -> List[Dict]:
+        """
+        Effectue une recherche hybride (texte + vecteur).
+        
+        Args:
+            text_query: Requête textuelle
+            vector: Vecteur d'embedding
+            weights: Poids relatifs (texte, vecteur)
+            **kwargs: Options additionnelles
+            
+        Returns:
+            Liste des résultats combinés
+        """
+        try:
+            text_weight, vector_weight = weights
+            
+            # Construction de la requête hybride
             search_body = {
-                "size": size,
-                "min_score": min_score,
-                "_source": ["title", "content", "application", "metadata"],
-                "timeout": "30s",
                 "query": {
                     "bool": {
-                        "must": [
+                        "should": [
                             {
                                 "multi_match": {
-                                    "query": query,
+                                    "query": text_query,
                                     "fields": ["title^2", "content"],
                                     "type": "best_fields",
-                                    "operator": "or",
-                                    "minimum_should_match": "75%",
-                                    "fuzziness": "AUTO"
+                                    "tie_breaker": 0.3,
+                                    "boost": text_weight
+                                }
+                            },
+                            {
+                                "script_score": {
+                                    "query": {"match_all": {}},
+                                    "script": {
+                                        "source": f"cosineSimilarity(params.query_vector, 'embedding') * {vector_weight}",
+                                        "params": {"query_vector": vector}
+                                    }
                                 }
                             }
                         ],
-                        "should": [],
-                        "filter": []
+                        "minimum_should_match": 1
                     }
-                }
+                },
+                **kwargs
             }
-    
-            # Ajout de la recherche vectorielle si vecteur présent
-            if vector and len(vector) == self.embedding_dim:
-                search_body["query"]["bool"]["should"].append({
-                    "script_score": {
-                        "query": {"match_all": {}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {
-                                "query_vector": vector
-                            }
-                        },
-                        "min_score": 0.5
-                    }
-                })
-    
-            # Ajout des filtres de métadonnées
-            if metadata_filter:
-                for key, value in metadata_filter.items():
-                    if isinstance(value, (list, tuple)):
-                        search_body["query"]["bool"]["filter"].append({
-                            "terms": {f"metadata.{key}.keyword": value}
-                        })
-                    else:
-                        search_body["query"]["bool"]["filter"].append({
-                            "term": {f"metadata.{key}.keyword": value}
-                        })
-    
-            logger.debug(f"Requête Elasticsearch: {json.dumps(search_body, indent=2)}")
-    
-            # Exécution de la recherche avec retry
-            for attempt in range(3):
-                try:
-                    if not await self.check_connection():
-                        raise ESConnectionError("Elasticsearch non disponible")
-    
-                    response = await self.es.search(
-                        index=self.index_name,
-                        body=search_body
-                    )
-    
-                    # Conversion de la réponse en dict
-                    response_dict = response.body if hasattr(response, 'body') else response.raw
-                    logger.debug(f"Réponse Elasticsearch: {json.dumps(response_dict, indent=2)}")
-                    
-                    return self._format_search_results(response_dict)
-    
-                except ESConnectionError as e:
-                    logger.error(f"Erreur de connexion (tentative {attempt + 1}/3): {e}")
-                    if attempt == 2:
-                        raise
-                    await asyncio.sleep(1 * (attempt + 1))
-                except RequestError as e:
-                    logger.error(f"Erreur de requête: {str(e)}")
-                    raise
-                except Exception as e:
-                    logger.error(f"Erreur inattendue: {e}")
-                    if attempt == 2:
-                        raise
-                    await asyncio.sleep(1 * (attempt + 1))
-    
-        except Exception as e:
-            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
-            metrics.increment_counter("search_errors")
-            return []
-    
-    def _format_search_results(self, response: Dict) -> List[Dict]:
-        """Formate les résultats de recherche."""
-        try:
-            results = []
-            hits = response.get("hits", {}).get("hits", [])
-            
-            for hit in hits:
-                source = hit.get("_source", {})
-                result = {
-                    "title": source.get("title", ""),
-                    "content": source.get("content", ""),
-                    "application": source.get("application", ""),
-                    "score": round(hit.get("_score", 0), 4),
-                    "metadata": source.get("metadata", {}),
-                    "highlights": hit.get("highlight", {}).get("content", [])
-                }
-                
-                # Nettoyage du contenu si nécessaire
-                if len(result["content"]) > 1000:
-                    result["content"] = result["content"][:1000] + "..."
-                    
-                results.append(result)
-                
-            return results
-        except Exception as e:
-            logger.error(f"Erreur formatage résultats: {e}")
-            return []
-            
-    async def check_connection(self) -> bool:
-        """Vérifie la connexion à Elasticsearch."""
-        try:
-            return await self.es.ping()
-        except Exception as e:
-            logger.error(f"Erreur vérification connexion Elasticsearch: {e}")
-            return False
-    
-    async def get_document(self, doc_id: str) -> Optional[Dict]:
-        """Récupère un document par ID."""
-        try:
-            doc = await self.es.get(
-                index=self.index_name,
-                id=doc_id
+
+            response = await self._execute_with_retry(
+                lambda: self.es.search(
+                    index=f"{self.index_prefix}_documents",
+                    body=search_body
+                )
             )
-            return doc["_source"]
-        except Exception as e:
-            logger.error(f"Erreur récupération document {doc_id}: {e}")
-            return None
 
-    async def delete_document(self, doc_id: str) -> bool:
-        """Supprime un document."""
+            return self.response_formatter.format_search_results(response)
+
+        except Exception as e:
+            logger.error(f"Erreur recherche hybride: {e}")
+            return []
+
+    async def get_similar_documents(
+        self,
+        doc_id: str,
+        size: int = 5,
+        min_score: float = 0.7
+    ) -> List[Dict]:
+        """
+        Trouve des documents similaires à un document donné.
+        
+        Args:
+            doc_id: ID du document de référence
+            size: Nombre de résultats
+            min_score: Score minimum de similarité
+            
+        Returns:
+            Liste des documents similaires
+        """
         try:
-            await self.es.delete(
-                index=self.index_name,
-                id=doc_id,
-                refresh=True
+            # Récupération du document source
+            source_doc = await self._execute_with_retry(
+                lambda: self.es.get(
+                    index=f"{self.index_prefix}_documents",
+                    id=doc_id,
+                    _source=["embedding"]
+                )
             )
-            return True
-        except Exception as e:
-            logger.error(f"Erreur suppression document {doc_id}: {e}")
-            return False
 
-    async def cleanup(self):
-        """Nettoie les ressources."""
-        if self.es:
-            await self.es.close()
-            logger.info("Elasticsearch fermé")
+            if "embedding" not in source_doc["_source"]:
+                logger.warning(f"Document {doc_id} n'a pas d'embedding")
+                return []
 
-    async def health_check(self) -> Dict[str, Any]:
-        """Vérifie l'état du cluster."""
-        try:
-            health = await self.es.cluster.health()
-            return {
-                "status": health["status"],
-                "nodes": health["number_of_nodes"],
-                "docs": (await self.es.count(index=self.index_name))["count"],
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            # Recherche de documents similaires
+            vector = source_doc["_source"]["embedding"]
+            return await self.vector_search(
+                vector=vector,
+                size=size + 1,  # +1 car le document source sera dans les résultats
+                min_score=min_score
+            )
+
         except Exception as e:
-            logger.error(f"Erreur health check: {e}")
-            return {"status": "error", "error": str(e)}
+            logger.error(f"Erreur recherche documents similaires: {e}")
+            return []
