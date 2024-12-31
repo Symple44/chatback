@@ -222,13 +222,14 @@ class ElasticsearchClient:
         min_score: float = 0.1,
         metadata_filter: Optional[Dict] = None
     ) -> List[Dict]:
+        """Recherche améliorée dans les documents."""
         try:
             # Validation des entrées
             if not query.strip():
                 logger.warning("Requête vide")
                 return []
-    
-            # Construction de la requête
+                
+            # Construction de la requête de base
             search_body = {
                 "size": size,
                 "min_score": min_score,
@@ -242,7 +243,7 @@ class ElasticsearchClient:
                 }
             }
     
-            # Recherche textuelle
+            # Ajout de la recherche textuelle
             search_body["query"]["bool"]["must"].append({
                 "multi_match": {
                     "query": query,
@@ -254,9 +255,9 @@ class ElasticsearchClient:
                 }
             })
     
-            # Recherche vectorielle
+            # Ajout de la recherche vectorielle si vecteur présent
             if vector and len(vector) == self.embedding_dim:
-                search_body["query"]["bool"]["should"].append({
+                vector_query = {
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
@@ -264,10 +265,11 @@ class ElasticsearchClient:
                             "params": {"query_vector": vector}
                         }
                     }
-                })
+                }
+                search_body["query"]["bool"]["should"].append(vector_query)
                 search_body["query"]["bool"]["minimum_should_match"] = 1
     
-            # Filtres de métadonnées
+            # Ajout des filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     if isinstance(value, (list, tuple)):
@@ -293,32 +295,22 @@ class ElasticsearchClient:
             }
     
             # Exécution de la recherche avec retry
-            last_error = None
             for attempt in range(3):
                 try:
+                    # Ajout du timeout dans le corps de la requête plutôt qu'en paramètre
+                    search_body["timeout"] = "30s"
                     response = await self.es.search(
                         index=self.index_name,
-                        body=search_body,
-                        timeout="30s"
+                        body=search_body
                     )
                     return self._format_search_results(response)
                 except Exception as e:
-                    last_error = e
-                    if attempt < 2:  # Si ce n'est pas la dernière tentative
-                        await asyncio.sleep(1 * (attempt + 1))
-                        continue
-                    logger.error(f"Erreur recherche documents: {e}", exc_info=True)
-                    metrics.increment_counter("search_errors")
-                    if isinstance(e, BadRequestError):
-                        logger.error(f"Détails de l'erreur ES: {str(e)}")
-                    return []
-            
-            # Si on arrive ici, toutes les tentatives ont échoué
-            logger.error(f"Échec après 3 tentatives: {last_error}")
-            return []
+                    if attempt == 2:  # Dernière tentative
+                        raise
+                    await asyncio.sleep(1 * (attempt + 1))
     
         except Exception as e:
-            logger.error(f"Erreur inattendue: {e}", exc_info=True)
+            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
             metrics.increment_counter("search_errors")
             return []
     
