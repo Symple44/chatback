@@ -432,7 +432,7 @@ async def save_chat_interaction(
                     page_number=doc.get("page"),
                     relevance_score=float(doc.get("score", 0.0)),
                     content_snippet=doc.get("content"),
-                    metadata=doc.get("metadata", {})
+                    document_metadata=doc.get("metadata", {})
                 )
                 session.add(referenced_doc)
 
