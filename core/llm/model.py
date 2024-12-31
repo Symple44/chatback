@@ -185,8 +185,7 @@ class ModelInference:
             # Tokenisation
             inputs = self.tokenizer_manager.encode(
                 prompt,
-                max_length=settings.MAX_INPUT_LENGTH,
-                return_tensors="pt"
+                max_length=settings.MAX_INPUT_LENGTH
             ).to(self.model.device)
             logger.info(f"Nombre de tokens en entrée: {len(inputs.input_ids[0])}")
     
