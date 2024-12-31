@@ -243,52 +243,50 @@ class ElasticsearchClient:
             if not self.initialized:
                 await self.initialize()
     
-            # Construction de la requête de base
-            search_query = {
-                "bool": {
-                    "must": []
-                }
-            }
+            # Construction de la requête
+            must_clauses = []
     
-            # Ajout de la recherche textuelle
+            # Recherche textuelle
             if query:
-                search_query["bool"]["must"].append({
+                must_clauses.append({
                     "match": {
                         "content": {
                             "query": query,
-                            "operator": "or",  # Plus flexible que "and"
+                            "operator": "or",
                             "minimum_should_match": "50%"
                         }
                     }
                 })
     
-            # Ajout du filtre de métadonnées
+            # Filtre de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
-                    search_query["bool"]["must"].append({
+                    must_clauses.append({
                         "term": {f"metadata.{key}.keyword": value}
                     })
     
-            # Configuration de la requête de similarité vectorielle
-            if vector and len(vector) == self.embedding_dim:
-                search_body = {
-                    "size": size,
-                    "query": {
-                        "script_score": {
-                            "query": search_query,
-                            "script": {
-                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                                "params": {"query_vector": vector},
-                                "lang": "painless"
-                            }
-                        }
+            # Configuration de la requête
+            search_body = {
+                "size": size,
+                "query": {
+                    "bool": {
+                        "must": must_clauses
                     }
                 }
-            else:
-                search_body = {
-                    "size": size,
-                    "query": search_query
-                }
+            }
+    
+            # Ajout de la similarité vectorielle si disponible
+            if vector and len(vector) == self.embedding_dim:
+                search_body["query"]["bool"]["boost_mode"] = "sum"
+                search_body["query"]["bool"]["functions"] = [{
+                    "script_score": {
+                        "script": {
+                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                            "params": {"query_vector": vector},
+                            "lang": "painless"
+                        }
+                    }
+                }]
     
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
@@ -311,7 +309,7 @@ class ElasticsearchClient:
                 # Nouvelle tentative de recherche
                 response = await self.es.search(
                     index=index,
-                    body=search_query
+                    body=search_body
                 )
     
             # Transformation des résultats
