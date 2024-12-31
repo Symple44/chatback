@@ -269,16 +269,20 @@ class ElasticsearchClient:
             search_body = {
                 "size": size,
                 "query": {
-                    "bool": {
-                        "must": must_clauses
+                    "function_score": {
+                        "query": {
+                            "bool": {
+                                "must": must_clauses
+                            }
+                        },
+                        "functions": []
                     }
                 }
             }
     
             # Ajout de la similarité vectorielle si disponible
             if vector and len(vector) == self.embedding_dim:
-                search_body["query"]["bool"]["boost_mode"] = "sum"
-                search_body["query"]["bool"]["functions"] = [{
+                search_body["query"]["function_score"]["functions"].append({
                     "script_score": {
                         "script": {
                             "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
@@ -286,7 +290,7 @@ class ElasticsearchClient:
                             "lang": "painless"
                         }
                     }
-                }]
+                })
     
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
