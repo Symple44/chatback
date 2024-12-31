@@ -48,32 +48,48 @@ class IndexManager:
                     },
                     "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
                     "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
-                    "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL
+                    "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
+                    "index": {
+                        "mapping": {
+                            "total_fields": {
+                                "limit": 2000
+                            }
+                        }
+                    }
                 },
                 "mappings": {
+                    "dynamic": False,
                     "properties": {
                         "title": {
                             "type": "text",
                             "analyzer": "content_analyzer",
-                            "fields": {"keyword": {"type": "keyword"}}
+                            "fields": {
+                                "keyword": {"type": "keyword"},
+                                "suggest": {
+                                    "type": "completion",
+                                    "analyzer": "content_analyzer"
+                                }
+                            }
                         },
                         "content": {
                             "type": "text",
-                            "analyzer": "content_analyzer"
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "dynamic": True
+                            "analyzer": "content_analyzer",
+                            "term_vector": "with_positions_offsets"
                         },
                         "embedding": {
                             "type": "dense_vector",
                             "dims": self.embedding_dim,
                             "index": True,
-                            "similarity": "cosine",
-                            "index_options": {
-                                "type": "hnsw",
-                                "m": 16,
-                                "ef_construction": 100
+                            "similarity": "cosine"
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "dynamic": True,
+                            "properties": {
+                                "application": {"type": "keyword"},
+                                "source": {"type": "keyword"},
+                                "page": {"type": "integer"},
+                                "indexed_at": {"type": "date"}
                             }
                         },
                         "timestamp": {"type": "date"}
@@ -83,6 +99,7 @@ class IndexManager:
         }
 
         try:
+            # Configuration du template
             await self.es.indices.put_index_template(
                 name=self.template_name,
                 body=template
@@ -100,9 +117,13 @@ class IndexManager:
         ]
         
         for index in indices:
-            if not await self.es.indices.exists(index=index):
-                await self.es.indices.create(index=index)
-                logger.info(f"Index {index} créé")
+            try:
+                if not await self.es.indices.exists(index=index):
+                    await self.es.indices.create(index=index)
+                    logger.info(f"Index {index} créé")
+            except Exception as e:
+                logger.error(f"Erreur création index {index}: {e}")
+                raise
 
     async def index_document(
         self,
@@ -122,7 +143,7 @@ class IndexManager:
                 "timestamp": datetime.utcnow().isoformat()
             }
 
-            if vector and len(vector) == self.embedding_dim:
+            if vector is not None and len(vector) == self.embedding_dim:
                 doc["embedding"] = vector
 
             index_params = {
@@ -136,6 +157,7 @@ class IndexManager:
 
             await self.es.index(**index_params)
             metrics.increment_counter("documents_indexed")
+            logger.debug(f"Document indexé: {title}")
             return True
 
         except Exception as e:
@@ -143,71 +165,43 @@ class IndexManager:
             metrics.increment_counter("indexing_errors")
             return False
 
-    async def bulk_index(
-        self,
-        documents: List[Dict],
-        chunk_size: int = 500
-    ) -> Dict[str, int]:
-        """Indexation par lots."""
-        stats = {"success": 0, "errors": 0}
-        
+    async def verify_index_mapping(self) -> bool:
+        """Vérifie et corrige le mapping de l'index si nécessaire."""
         try:
-            actions = []
-            for doc in documents:
-                action = {
-                    "_index": f"{self.index_prefix}_documents",
-                    "_source": {
-                        "title": doc["title"],
-                        "content": doc["content"],
-                        "metadata": doc.get("metadata", {}),
-                        "embedding": doc.get("vector"),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                }
-                if "id" in doc:
-                    action["_id"] = doc["id"]
-                actions.append(action)
-
-            for i in range(0, len(actions), chunk_size):
-                chunk = actions[i:i + chunk_size]
-                try:
-                    response = await self.es.bulk(operations=chunk)
+            index_name = f"{self.index_prefix}_documents"
+            mapping = await self.es.indices.get_mapping(index=index_name)
+            
+            if not mapping.get(index_name, {}).get("mappings", {}).get("properties", {}).get("embedding"):
+                logger.warning("Champ 'embedding' manquant dans le mapping - recréation de l'index")
+                
+                # Sauvegarde des données existantes
+                docs = await self._backup_documents(index_name)
+                
+                # Suppression et recréation de l'index
+                await self.es.indices.delete(index=index_name)
+                await self._ensure_indices_exist()
+                
+                # Restauration des données
+                if docs:
+                    await self.bulk_index(docs)
                     
-                    if response.get("errors", False):
-                        for item in response["items"]:
-                            if "error" in item.get("index", {}):
-                                stats["errors"] += 1
-                            else:
-                                stats["success"] += 1
-                    else:
-                        stats["success"] += len(chunk)
-                        
-                except BulkIndexError as e:
-                    stats["errors"] += len(chunk)
-                    logger.error(f"Erreur bulk chunk {i}: {str(e)}")
-
-            return stats
-
+                return True
+                
+            return True
+            
         except Exception as e:
-            logger.error(f"Erreur indexation bulk: {e}")
-            return stats
+            logger.error(f"Erreur vérification mapping: {e}")
+            return False
 
-    async def cleanup_old_documents(self, days: int = 30) -> int:
-        """Nettoie les anciens documents."""
+    async def _backup_documents(self, index_name: str) -> List[Dict]:
+        """Sauvegarde les documents d'un index."""
         try:
-            response = await self.es.delete_by_query(
-                index=f"{self.index_prefix}_*",
-                body={
-                    "query": {
-                        "range": {
-                            "timestamp": {
-                                "lte": f"now-{days}d"
-                            }
-                        }
-                    }
-                }
+            result = await self.es.search(
+                index=index_name,
+                body={"query": {"match_all": {}}},
+                size=10000  # Ajustez selon vos besoins
             )
-            return response.get("deleted", 0)
+            return [doc["_source"] for doc in result["hits"]["hits"]]
         except Exception as e:
-            logger.error(f"Erreur nettoyage documents: {e}")
-            return 0
+            logger.error(f"Erreur sauvegarde documents: {e}")
+            return []
