@@ -324,14 +324,37 @@ class SessionManager:
             return list(reversed(result.fetchall()))
 
     async def get_chat_history(self, user_id: str, limit: int = 50) -> List[Dict]:
-        """
-        Récupère l'historique des conversations pour un utilisateur.
-        """
+        """Récupère l'historique des conversations pour un utilisateur."""
         async with self.async_session() as session:
             try:
-                query = select(ChatHistory).where(ChatHistory.user_id == user_id).order_by(ChatHistory.created_at.desc()).limit(limit)
-                result = await session.execute(query)
-                return [item.to_dict() for item in result.scalars().all()]
+                # Utiliser text() pour éviter les problèmes de type
+                query = text("""
+                    SELECT id, session_id, query, response, created_at, 
+                           confidence_score, tokens_used, processing_time
+                    FROM chat_history 
+                    WHERE user_id = :user_id 
+                    ORDER BY created_at DESC 
+                    LIMIT :limit
+                """)
+                
+                result = await session.execute(query, {
+                    'user_id': str(user_id), 
+                    'limit': limit
+                })
+                
+                return [
+                    {
+                        'id': str(row.id),
+                        'session_id': row.session_id,
+                        'query': row.query,
+                        'response': row.response,
+                        'created_at': row.created_at,
+                        'confidence_score': row.confidence_score,
+                        'tokens_used': row.tokens_used,
+                        'processing_time': row.processing_time
+                    }
+                    for row in result
+                ]
             except Exception as e:
                 logger.error(f"Erreur récupération historique: {e}")
                 return []
