@@ -1,6 +1,6 @@
 # core/llm/tokenizer_manager.py
 from transformers import AutoTokenizer, GenerationConfig
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import torch
 from core.config import settings
 from core.utils.logger import get_logger
