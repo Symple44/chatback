@@ -2,6 +2,7 @@
 from typing import List, Dict, Optional, Any, Union, Tuple
 from datetime import datetime, timedelta
 import uuid
+import os
 from sqlalchemy import select, and_, or_, func, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
