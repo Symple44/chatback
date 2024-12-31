@@ -217,43 +217,46 @@ class ElasticsearchClient:
         self,
         query: str,
         vector: Optional[List[float]] = None,
-        application: Optional[str] = None,
         size: int = 5,
         min_score: float = 0.1,
-        metadata_filter: Optional[Dict] = None  # Ajout du paramètre
+        metadata_filter: Optional[Dict] = None
     ) -> List[Dict]:
+        """Recherche améliorée dans les documents."""
         try:
-            search_query = {
-                "bool": {
-                    "must": [
-                        {
-                            "multi_match": {
-                                "query": query,
-                                "fields": ["title^2", "content"],
-                                "type": "best_fields",
-                                "operator": "or",
-                                "minimum_should_match": "75%"
-                            }
-                        }
-                    ],
-                    "filter": []  # Ajout des filtres
+            # Validation des entrées
+            if not query.strip():
+                logger.warning("Requête vide")
+                return []
+                
+            # Construction de la requête de base
+            search_body = {
+                "size": size,
+                "min_score": min_score,
+                "_source": ["title", "content", "application", "metadata"],
+                "query": {
+                    "bool": {
+                        "must": [],
+                        "should": [],
+                        "filter": []
+                    }
                 }
             }
     
-            if application:
-                search_query["bool"]["filter"].append({
-                    "term": {"application": application}
-                })
+            # Ajout de la recherche textuelle
+            search_body["query"]["bool"]["must"].append({
+                "multi_match": {
+                    "query": query,
+                    "fields": ["title^2", "content"],
+                    "type": "most_fields",
+                    "operator": "or",
+                    "minimum_should_match": "75%",
+                    "fuzziness": "AUTO"
+                }
+            })
     
-            if metadata_filter:
-                # Ajout des métadonnées comme filtres
-                for key, value in metadata_filter.items():
-                    search_query["bool"]["filter"].append({
-                        "term": {key: value}
-                    })
-    
-            if vector:
-                search_query["bool"]["should"] = [{
+            # Ajout de la recherche vectorielle si vecteur présent
+            if vector and len(vector) == self.embedding_dim:
+                vector_query = {
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
@@ -261,46 +264,79 @@ class ElasticsearchClient:
                             "params": {"query_vector": vector}
                         }
                     }
-                }]
-                search_query["bool"]["minimum_should_match"] = 1
+                }
+                search_body["query"]["bool"]["should"].append(vector_query)
+                search_body["query"]["bool"]["minimum_should_match"] = 1
     
-            response = await self.es.search(
-                index=self.index_name,
-                body={
-                    "query": search_query,
-                    "size": size,
-                    "min_score": min_score,
-                    "_source": ["title", "content", "application", "metadata"],
-                    "highlight": {
-                        "fields": {
-                            "content": {
-                                "fragment_size": 150,
-                                "number_of_fragments": 3
-                            }
-                        },
+            # Ajout des filtres de métadonnées
+            if metadata_filter:
+                for key, value in metadata_filter.items():
+                    if isinstance(value, (list, tuple)):
+                        search_body["query"]["bool"]["filter"].append({
+                            "terms": {f"metadata.{key}": value}
+                        })
+                    else:
+                        search_body["query"]["bool"]["filter"].append({
+                            "term": {f"metadata.{key}": value}
+                        })
+    
+            # Configuration du highlighting
+            search_body["highlight"] = {
+                "fields": {
+                    "content": {
+                        "type": "unified",
+                        "fragment_size": 150,
+                        "number_of_fragments": 3,
                         "pre_tags": ["<mark>"],
                         "post_tags": ["</mark>"]
                     }
                 }
-            )
+            }
     
-            return [self._format_search_result(hit) for hit in response["hits"]["hits"]]
+            # Exécution de la recherche avec retry
+            for attempt in range(3):
+                try:
+                    response = await self.es.search(
+                        index=self.index_name,
+                        body=search_body,
+                        timeout="30s"
+                    )
+                    return self._format_search_results(response)
+                except Exception as e:
+                    if attempt == 2:  # Dernière tentative
+                        raise
+                    await asyncio.sleep(1 * (attempt + 1))
     
         except Exception as e:
-            logger.error(f"Erreur recherche documents: {e}")
+            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
+            metrics.increment_counter("search_errors")
             return []
-
-    def _format_search_result(self, hit: Dict) -> Dict:
-        """Formate un résultat de recherche."""
-        source = hit["_source"]
-        return {
-            "title": source["title"],
-            "content": source["content"],
-            "application": source["application"],
-            "score": hit["_score"],
-            "highlights": hit.get("highlight", {}).get("content", []),
-            "metadata": source.get("metadata", {})
-        }
+    
+    def _format_search_results(self, response: Dict) -> List[Dict]:
+        """Formate les résultats de recherche."""
+        results = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            result = {
+                "title": source["title"],
+                "content": source["content"],
+                "application": source.get("application", ""),
+                "score": round(hit["_score"], 4),
+                "metadata": source.get("metadata", {}),
+                "highlights": []
+            }
+            
+            # Ajout des highlights
+            if "highlight" in hit:
+                result["highlights"] = hit["highlight"].get("content", [])
+                
+            # Nettoyage du contenu si nécessaire
+            if len(result["content"]) > 1000:
+                result["content"] = result["content"][:1000] + "..."
+                
+            results.append(result)
+            
+        return results
 
     async def get_document(self, doc_id: str) -> Optional[Dict]:
         """Récupère un document par ID."""
