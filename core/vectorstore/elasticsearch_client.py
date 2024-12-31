@@ -133,6 +133,33 @@ class ElasticsearchClient:
         except Exception as e:
             logger.error(f"Erreur récupération documents sans embeddings: {e}")
             return []
+            
+    async def create_index(self, name: str, settings: dict = None) -> bool:
+        """Crée un index avec les paramètres spécifiés."""
+        try:
+            if not await self.es.indices.exists(index=name):
+                await self.es.indices.create(
+                    index=name,
+                    body=settings or {}
+                )
+                logger.info(f"Index {name} créé")
+                return True
+            return True
+        except Exception as e:
+            logger.error(f"Erreur création index {name}: {e}")
+            return False
+    
+    async def check_index(self, name: str) -> bool:
+        """Vérifie si un index existe et est valide."""
+        try:
+            exists = await self.es.indices.exists(index=name)
+            if exists:
+                health = await self.es.cluster.health(index=name)
+                return health["status"] in ["green", "yellow"]
+            return False
+        except Exception as e:
+            logger.error(f"Erreur vérification index {name}: {e}")
+            return False
 
     async def index_document(self, **kwargs) -> bool:
         """Interface d'indexation."""
