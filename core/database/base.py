@@ -101,14 +101,14 @@ class DatabaseSessionManager:
                     self._last_health_check = datetime.utcnow()
                     
                     return {
-                        "status": "healthy",
+                        "status": True,
                         "timestamp": self._last_health_check.isoformat(),
                         "pool": pool_status
                     }
             except Exception as e:
                 logger.error(f"Erreur de connexion à la base de données: {e}")
                 return {
-                    "status": "unhealthy",
+                    "status": False,
                     "error": str(e),
                     "timestamp": datetime.utcnow().isoformat()
                 }
