@@ -94,7 +94,7 @@ class DatabaseSessionManager:
                 return {"status": "cached"}
 
             try:
-                async with self.get_session() as session:
+                async with self.session_factory() as session:
                     await session.execute("SELECT 1")
                     pool_status = await self.get_pool_status()
                     
@@ -107,7 +107,6 @@ class DatabaseSessionManager:
                     }
             except Exception as e:
                 logger.error(f"Erreur de connexion à la base de données: {e}")
-                metrics.increment_counter("database_health_check_errors")
                 return {
                     "status": "unhealthy",
                     "error": str(e),
@@ -121,12 +120,16 @@ class DatabaseSessionManager:
         Returns:
             Dict contenant les métriques du pool
         """
-        return {
-            "size": self.engine.pool.size(),
-            "checked_out": self.engine.pool.checkedout(),
-            "overflow": self.engine.pool.overflow(),
-            "checkedin": self.engine.pool.checkedin()
-        }
+        try:
+            return {
+                "size": self.engine.pool.size(),
+                "checked_out": self.engine.pool.checkedout(),
+                "overflow": self.engine.pool.overflow(),
+                "checkedin": self.engine.pool.checkedin()
+            }
+        except Exception as e:
+            logger.error(f"Erreur récupération statut pool: {e}")
+            return {}
 
     async def vacuum_analyze(self):
         """Exécute VACUUM ANALYZE sur la base de données."""
