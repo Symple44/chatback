@@ -51,8 +51,8 @@ async def process_chat_message(
 
             # 2. Gestion de la session - Utilisation du session_manager au lieu de db_manager
             chat_session = await components.session_manager.get_or_create_session(
-                request.session_id,
-                request.user_id,
+                str(request.session_id) if request.session_id else None,
+                str(request.user_id),
                 request.metadata
             )
 
