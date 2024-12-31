@@ -160,42 +160,39 @@ class ModelInference:
         try:
             start_time = datetime.utcnow()
             logger.info("Début de la génération de réponse")
-
+    
+            # Format messages correctly
+            messages = []
+            if conversation_history:
+                for msg in conversation_history[-5:]:
+                    if isinstance(msg, dict):
+                        messages.append(self.prompt_system.create_message(
+                            role=msg.get('role', 'user'),
+                            content=msg.get('content', '')
+                        ))
+    
+            # Add current query
+            messages.append(self.prompt_system.create_message(role="user", content=query))
+    
             # Construction du prompt
             prompt = self.prompt_system.build_chat_prompt(
-                messages=[
-                    *([msg for msg in conversation_history[-5:]] if conversation_history else []),
-                    {"role": "user", "content": query}
-                ],
+                messages=messages,
                 context_docs=context_docs,
                 lang=language
             )
             logger.info(f"Longueur du prompt: {len(prompt)} caractères")
-
-            # Vérification mémoire GPU
-            if not await self.memory_manager.check_memory_usage():
-                await self.memory_manager.cleanup()
-
+    
             # Tokenisation
             inputs = self.tokenizer_manager.encode(
                 prompt,
                 max_length=settings.MAX_INPUT_LENGTH,
                 return_tensors="pt"
-            ).to(self.device)
+            ).to(self.model.device)
             logger.info(f"Nombre de tokens en entrée: {len(inputs.input_ids[0])}")
-
+    
             # Configuration génération
-            generation_config = GenerationConfig(
-                do_sample=settings.DO_SAMPLE,
-                temperature=settings.TEMPERATURE,
-                top_p=settings.TOP_P,
-                top_k=settings.TOP_K,
-                max_new_tokens=settings.MAX_NEW_TOKENS,
-                min_new_tokens=settings.MIN_NEW_TOKENS,
-                repetition_penalty=settings.REPETITION_PENALTY,
-                pad_token_id=self.tokenizer_manager.tokenizer.pad_token_id
-            )
-
+            generation_config = self.tokenizer_manager.generation_config
+    
             # Génération avec FP16 si activé
             with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
                 with torch.no_grad():
@@ -204,18 +201,18 @@ class ModelInference:
                         generation_config=generation_config,
                         use_cache=True
                     )
-
+    
             # Post-traitement et réponse
             response = self.tokenizer_manager.decode_and_clean(outputs[0])
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-
+    
             return {
                 "response": response,
                 "tokens_used": len(outputs[0]) - len(inputs.input_ids[0]),
                 "processing_time": processing_time,
                 "confidence": self._calculate_confidence(context_docs)
             }
-
+    
         except Exception as e:
             logger.error(f"Erreur génération: {e}", exc_info=True)
             metrics.increment_counter("generation_errors")
