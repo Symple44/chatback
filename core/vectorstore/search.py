@@ -1,5 +1,7 @@
 # core/vectorstore/search.py
-from elasticsearch import Elasticsearch, AsyncElasticsearch
+from elasticsearch import AsyncElasticsearch, ConnectionError, RequestError
+from elasticsearch.exceptions import ConnectionError as ESConnectionError
+from elasticsearch.helpers import BulkIndexError
 from typing import List, Dict, Optional, Any, Tuple
 import logging
 import ssl
@@ -7,8 +9,6 @@ import os
 from datetime import datetime
 import asyncio
 import json
-from elasticsearch.helpers import bulk, BulkIndexError
-from elasticsearch.exceptions import ConnectionError, AuthenticationException, BadRequestError
 import certifi
 
 from core.config import settings
@@ -262,13 +262,7 @@ class ElasticsearchClient:
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
-                            "source": """
-                                double score = 0.0;
-                                if (doc['embedding'].size() == params.query_vector.length) {
-                                    score = cosineSimilarity(params.query_vector, 'embedding') + 1.0;
-                                }
-                                return score;
-                            """,
+                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
                             "params": {
                                 "query_vector": vector
                             }
@@ -289,45 +283,32 @@ class ElasticsearchClient:
                             "term": {f"metadata.{key}.keyword": value}
                         })
     
-            # Configuration du highlighting
-            search_body["highlight"] = {
-                "fields": {
-                    "content": {
-                        "type": "unified",
-                        "fragment_size": 150,
-                        "number_of_fragments": 3,
-                        "pre_tags": ["<mark>"],
-                        "post_tags": ["</mark>"]
-                    }
-                },
-                "require_field_match": False
-            }
-    
-            # Log de la requête en mode debug
             logger.debug(f"Requête Elasticsearch: {json.dumps(search_body, indent=2)}")
     
             # Exécution de la recherche avec retry
             for attempt in range(3):
                 try:
-                    # Vérification de la connexion avant la recherche
                     if not await self.check_connection():
-                        raise ConnectionError("Elasticsearch non disponible")
+                        raise ESConnectionError("Elasticsearch non disponible")
     
                     response = await self.es.search(
                         index=self.index_name,
                         body=search_body
                     )
     
-                    logger.debug(f"Réponse Elasticsearch: {json.dumps(response, indent=2)}")
-                    return self._format_search_results(response)
+                    # Conversion de la réponse en dict
+                    response_dict = response.body if hasattr(response, 'body') else response.raw
+                    logger.debug(f"Réponse Elasticsearch: {json.dumps(response_dict, indent=2)}")
+                    
+                    return self._format_search_results(response_dict)
     
-                except elasticsearch.ConnectionError as e:
+                except ESConnectionError as e:
                     logger.error(f"Erreur de connexion (tentative {attempt + 1}/3): {e}")
                     if attempt == 2:
                         raise
                     await asyncio.sleep(1 * (attempt + 1))
-                except elasticsearch.RequestError as e:
-                    logger.error(f"Erreur de requête: {e.info}")
+                except RequestError as e:
+                    logger.error(f"Erreur de requête: {str(e)}")
                     raise
                 except Exception as e:
                     logger.error(f"Erreur inattendue: {e}")
@@ -344,21 +325,19 @@ class ElasticsearchClient:
         """Formate les résultats de recherche."""
         try:
             results = []
-            for hit in response["hits"]["hits"]:
-                source = hit["_source"]
+            hits = response.get("hits", {}).get("hits", [])
+            
+            for hit in hits:
+                source = hit.get("_source", {})
                 result = {
                     "title": source.get("title", ""),
                     "content": source.get("content", ""),
                     "application": source.get("application", ""),
-                    "score": round(hit["_score"], 4),
+                    "score": round(hit.get("_score", 0), 4),
                     "metadata": source.get("metadata", {}),
-                    "highlights": []
+                    "highlights": hit.get("highlight", {}).get("content", [])
                 }
                 
-                # Ajout des highlights
-                if "highlight" in hit:
-                    result["highlights"] = hit["highlight"].get("content", [])
-                    
                 # Nettoyage du contenu si nécessaire
                 if len(result["content"]) > 1000:
                     result["content"] = result["content"][:1000] + "..."
