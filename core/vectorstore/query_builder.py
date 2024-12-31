@@ -25,16 +25,8 @@ class QueryBuilder:
             "timeout": "30s"
         }
 
-        # Construction de la requête bool
-        bool_query = {
-            "must": [],
-            "should": [],
-            "filter": [],
-            "minimum_should_match": 1
-        }
-
-        # Ajout de la recherche textuelle
-        bool_query["must"].append({
+        # Construction de la requête principale
+        main_query = {
             "multi_match": {
                 "query": query,
                 "fields": ["title^2", "content"],
@@ -44,42 +36,40 @@ class QueryBuilder:
                 "fuzziness": "AUTO",
                 "prefix_length": 2
             }
-        })
+        }
 
-        # Ajout de la recherche vectorielle si un vecteur est fourni
+        # Si un vecteur est fourni, utiliser function_score
         if vector and len(vector) == self.embedding_dim:
-            vector_query = {
-                "script_score": {
-                    "query": {
-                        "bool": {
-                            "must": [{
-                                "exists": {
-                                    "field": "embedding"
+            final_query = {
+                "function_score": {
+                    "query": main_query,
+                    "functions": [{
+                        "script_score": {
+                            "script": {
+                                "source": """
+                                if (!doc.containsKey('embedding') || doc['embedding'].empty) { 
+                                    return 1.0; 
                                 }
-                            }]
+                                return 1.0 + cosineSimilarity(params.query_vector, 'embedding');
+                                """,
+                                "params": {
+                                    "query_vector": vector
+                                }
+                            }
                         }
-                    },
-                    "script": {
-                        "lang": "painless",
-                        "source": """
-                        if (doc['embedding'].size() == 0) { return 0; }
-                        return cosineSimilarity(params.query_vector, doc['embedding']) + 1.0;
-                        """,
-                        "params": {
-                            "query_vector": vector
-                        }
-                    },
-                    "boost_mode": "sum"
+                    }]
                 }
             }
-            bool_query["should"].append(vector_query)
+        else:
+            final_query = main_query
 
-        # Ajout des filtres de métadonnées
+        # Ajout des filtres de métadonnées si présents
         if metadata_filter:
+            filter_clauses = []
             for key, value in metadata_filter.items():
                 filter_field = f"metadata.{key}"
                 if isinstance(value, (list, tuple)):
-                    bool_query["filter"].append({
+                    filter_clauses.append({
                         "terms": {f"{filter_field}.keyword": value}
                     })
                 elif isinstance(value, dict):
@@ -89,15 +79,23 @@ class QueryBuilder:
                     if "lte" in value:
                         range_filter["lte"] = value["lte"]
                     if range_filter:
-                        bool_query["filter"].append({
+                        filter_clauses.append({
                             "range": {filter_field: range_filter}
                         })
                 else:
-                    bool_query["filter"].append({
+                    filter_clauses.append({
                         "term": {f"{filter_field}.keyword": str(value)}
                     })
 
-        search_body["query"] = {"bool": bool_query}
+            if filter_clauses:
+                final_query = {
+                    "bool": {
+                        "must": [final_query],
+                        "filter": filter_clauses
+                    }
+                }
+
+        search_body["query"] = final_query
 
         # Configuration du highlighting
         if highlight:
