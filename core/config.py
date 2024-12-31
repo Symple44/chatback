@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     ELASTICSEARCH_INDEX_PREFIX: str = os.getenv("ELASTICSEARCH_INDEX_PREFIX", "chat")
     ELASTICSEARCH_VERIFY_CERTS: bool = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "true").lower() == "true"
     ELASTICSEARCH_EMBEDDING_DIM: int = int(os.getenv("ELASTICSEARCH_EMBEDDING_DIM", "384"))
+    ELASTICSEARCH_NUMBER_OF_SHARDS: int = int(os.getenv("ELASTICSEARCH_NUMBER_OF_SHARDS", "3"))
+    ELASTICSEARCH_NUMBER_OF_REPLICAS: int = int(os.getenv("ELASTICSEARCH_NUMBER_OF_REPLICAS", "1"))
+    ELASTICSEARCH_REFRESH_INTERVAL: str = os.getenv("ELASTICSEARCH_REFRESH_INTERVAL", "5s")
 
     # Machine Learning
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
