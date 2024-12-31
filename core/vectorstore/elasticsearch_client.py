@@ -238,65 +238,96 @@ class ElasticsearchClient:
         metadata_filter: Optional[Dict] = None,
         size: int = 5
     ) -> List[Dict]:
-        """Recherche des documents."""
+        """Recherche des documents avec gestion robuste des erreurs."""
         try:
             if not self.initialized:
                 await self.initialize()
-
+    
+            # Construction de la requête de base
             search_query = {
                 "bool": {
-                    "must": [
-                        {
-                            "match": {
-                                "content": {
-                                    "query": query,
-                                    "operator": "and"
-                                }
-                            }
-                        }
-                    ]
+                    "must": []
                 }
             }
-
+    
+            # Ajout de la recherche textuelle
+            if query:
+                search_query["bool"]["must"].append({
+                    "match": {
+                        "content": {
+                            "query": query,
+                            "operator": "or",  # Plus flexible que "and"
+                            "minimum_should_match": "50%"
+                        }
+                    }
+                })
+    
             # Ajout du filtre de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     search_query["bool"]["must"].append({
-                        "match": {f"metadata.{key}": value}
+                        "term": {f"metadata.{key}.keyword": value}
                     })
-
-            # Ajout de la similarité vectorielle si disponible
+    
+            # Configuration de la requête de similarité vectorielle
             if vector and len(vector) == self.embedding_dim:
-                script_score = {
-                    "script_score": {
-                        "query": search_query,
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {"query_vector": vector}
+                search_body = {
+                    "size": size,
+                    "query": {
+                        "script_score": {
+                            "query": search_query,
+                            "script": {
+                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                                "params": {"query_vector": vector},
+                                "lang": "painless"
+                            }
                         }
                     }
                 }
-                search_query = script_score
-
-            response = await self.es.search(
-                index=f"{self.index_prefix}_documents",
-                query=search_query,
-                size=size
-            )
-
+            else:
+                search_body = {
+                    "size": size,
+                    "query": search_query
+                }
+    
+            # Utilisation de l'index correct
+            index = f"{self.index_prefix}_documents"
+    
+            # Recherche avec gestion des erreurs
+            try:
+                response = await self.es.search(
+                    index=index,
+                    body=search_body
+                )
+            except Exception as search_error:
+                logger.error(f"Erreur recherche Elasticsearch: {search_error}")
+                
+                # Vérification de l'existence de l'index
+                index_exists = await self.es.indices.exists(index=index)
+                if not index_exists:
+                    logger.warning(f"Index {index} n'existe pas. Tentative de réinitialisation.")
+                    await self.setup_indices()
+    
+                # Nouvelle tentative de recherche
+                response = await self.es.search(
+                    index=index,
+                    body=search_query
+                )
+    
+            # Transformation des résultats
             return [
                 {
-                    "title": hit["_source"]["title"],
-                    "content": hit["_source"]["content"],
-                    "score": hit["_score"],
-                    "metadata": hit["_source"].get("metadata", {})
+                    "title": hit.get("_source", {}).get("title", ""),
+                    "content": hit.get("_source", {}).get("content", ""),
+                    "score": hit.get("_score", 0.0),
+                    "metadata": hit.get("_source", {}).get("metadata", {})
                 }
-                for hit in response["hits"]["hits"]
+                for hit in response.get("hits", {}).get("hits", [])
             ]
-
+    
         except Exception as e:
-            logger.error(f"Erreur recherche documents: {e}")
-            metrics.increment_counter("search_errors")
+            logger.error(f"Erreur fatale recherche documents: {e}")
+            metrics.increment_counter("search_critical_errors")
             return []
 
     async def delete_document(self, doc_id: str) -> bool:
