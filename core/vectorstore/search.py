@@ -5,8 +5,9 @@ import logging
 import ssl
 import os
 from datetime import datetime
+import asyncio
 from elasticsearch.helpers import bulk, BulkIndexError
-from elasticsearch.exceptions import ConnectionError, AuthenticationException
+from elasticsearch.exceptions import ConnectionError, AuthenticationException, BadRequestError
 import certifi
 
 from core.config import settings
@@ -221,14 +222,13 @@ class ElasticsearchClient:
         min_score: float = 0.1,
         metadata_filter: Optional[Dict] = None
     ) -> List[Dict]:
-        """Recherche améliorée dans les documents."""
         try:
             # Validation des entrées
             if not query.strip():
                 logger.warning("Requête vide")
                 return []
-                
-            # Construction de la requête de base
+    
+            # Construction de la requête
             search_body = {
                 "size": size,
                 "min_score": min_score,
@@ -242,7 +242,7 @@ class ElasticsearchClient:
                 }
             }
     
-            # Ajout de la recherche textuelle
+            # Recherche textuelle
             search_body["query"]["bool"]["must"].append({
                 "multi_match": {
                     "query": query,
@@ -254,9 +254,9 @@ class ElasticsearchClient:
                 }
             })
     
-            # Ajout de la recherche vectorielle si vecteur présent
+            # Recherche vectorielle
             if vector and len(vector) == self.embedding_dim:
-                vector_query = {
+                search_body["query"]["bool"]["should"].append({
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
@@ -264,11 +264,10 @@ class ElasticsearchClient:
                             "params": {"query_vector": vector}
                         }
                     }
-                }
-                search_body["query"]["bool"]["should"].append(vector_query)
+                })
                 search_body["query"]["bool"]["minimum_should_match"] = 1
     
-            # Ajout des filtres de métadonnées
+            # Filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     if isinstance(value, (list, tuple)):
@@ -294,6 +293,7 @@ class ElasticsearchClient:
             }
     
             # Exécution de la recherche avec retry
+            last_error = None
             for attempt in range(3):
                 try:
                     response = await self.es.search(
@@ -303,12 +303,22 @@ class ElasticsearchClient:
                     )
                     return self._format_search_results(response)
                 except Exception as e:
-                    if attempt == 2:  # Dernière tentative
-                        raise
-                    await asyncio.sleep(1 * (attempt + 1))
+                    last_error = e
+                    if attempt < 2:  # Si ce n'est pas la dernière tentative
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+                    logger.error(f"Erreur recherche documents: {e}", exc_info=True)
+                    metrics.increment_counter("search_errors")
+                    if isinstance(e, BadRequestError):
+                        logger.error(f"Détails de l'erreur ES: {str(e)}")
+                    return []
+            
+            # Si on arrive ici, toutes les tentatives ont échoué
+            logger.error(f"Échec après 3 tentatives: {last_error}")
+            return []
     
         except Exception as e:
-            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
+            logger.error(f"Erreur inattendue: {e}", exc_info=True)
             metrics.increment_counter("search_errors")
             return []
     
