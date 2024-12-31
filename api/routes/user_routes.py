@@ -25,7 +25,7 @@ async def create_user(
 ) -> Dict:
     try:
         # Création de l'utilisateur
-        new_user = await components.db_manager.create_user(user_data)
+        new_user = await components.db_manager.create_user(user_data.dict())
         if not new_user:
             raise HTTPException(status_code=500, detail="Erreur lors de la création de l'utilisateur")
 
