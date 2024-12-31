@@ -1,14 +1,10 @@
 # core/llm/model.py
 from typing import Dict, List, Optional, Union, Generator
 from datetime import datetime
+from contextlib import nullcontext
 import torch
 import asyncio
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    TextIteratorStreamer,
-    GenerationConfig
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, GenerationConfig
 from sentence_transformers import SentenceTransformer
 from core.config import settings
 from core.utils.logger import get_logger
@@ -156,7 +152,6 @@ class ModelInference:
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr",
     ) -> Dict:
-        """Génération de réponse optimisée."""
         try:
             start_time = datetime.utcnow()
             logger.info("Début de la génération de réponse")
@@ -193,7 +188,12 @@ class ModelInference:
             generation_config = self.tokenizer_manager.generation_config
     
             # Génération avec FP16 si activé
-            with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
+            if settings.USE_FP16:
+                amp_context = torch.amp.autocast('cuda')
+            else:
+                amp_context = nullcontext()
+    
+            with amp_context:
                 with torch.no_grad():
                     outputs = self.model.generate(
                         **inputs,
@@ -201,7 +201,7 @@ class ModelInference:
                         use_cache=True
                     )
     
-            # Post-traitement et réponse
+            # Pt-traitement et réponse
             response = self.tokenizer_manager.decode_and_clean(outputs[0])
             processing_time = (datetime.utcnow() - start_time).total_seconds()
     
