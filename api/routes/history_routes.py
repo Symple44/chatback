@@ -27,7 +27,7 @@ async def get_user_history(
     components=Depends(get_components)
 ) -> List[Dict]:
     try:
-        return await components.db.get_chat_history(user_id=user_id, limit=limit)
+        return await components.session_manager.get_chat_history(user_id=user_id, limit=limit)
     except Exception as e:
         logger.error(f"Erreur récupération historique utilisateur: {e}")
         raise HTTPException(status_code=500, detail=str(e))

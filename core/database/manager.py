@@ -65,7 +65,7 @@ class DatabaseManager:
                 logger.error(f"Erreur création utilisateur: {e}")
                 metrics.increment_counter("database_user_creation_errors")
                 return None
-
+    
     async def save_chat_interaction(
         self,
         session_id: str,

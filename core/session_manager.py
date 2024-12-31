@@ -323,6 +323,30 @@ class SessionManager:
             )
             return list(reversed(result.fetchall()))
 
+    async def get_chat_history(self, user_id: str, limit: int = 50) -> List[Dict]:
+        """
+        Récupère l'historique des conversations pour un utilisateur.
+        
+        Args:
+            user_id: ID de l'utilisateur
+            limit: Nombre maximum d'entrées à récupérer
+        
+        Returns:
+            Liste des entrées de l'historique des chats
+        """
+        async with self.session_factory() as session:
+            try:
+                result = await session.execute(
+                    select(ChatHistory)
+                    .where(ChatHistory.user_id == user_id)
+                    .order_by(ChatHistory.created_at.desc())
+                    .limit(limit)
+                )
+                return [item.to_dict() for item in result.scalars().all()]
+            except Exception as e:
+                logger.error(f"Erreur récupération historique: {e}")
+                return []
+                
     async def get_session_stats(self, session_id: str) -> Dict[str, Any]:
         """Calcule les statistiques d'une session."""
         async with self.async_session() as session:
