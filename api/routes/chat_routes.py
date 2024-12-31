@@ -16,7 +16,7 @@ from ..dependencies import get_components
 from core.utils.logger import get_logger
 from core.database.base import get_session_manager
 from core.utils.metrics import metrics
-from core.database.models import User, ChatSession, ChatHistory
+from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument
 from core.database.base import DatabaseSession
 from core.database.manager import DatabaseManager
 from core.config import settings
