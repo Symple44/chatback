@@ -40,6 +40,10 @@ class DatabaseSessionManager:
             autocommit=False,
             autoflush=False
         )
+        
+        self._last_health_check = None
+        self._health_check_interval = 30  # seconds
+        self.health_check_lock = asyncio.Lock()
 
     async def create_all(self):
         """Crée toutes les tables définies dans les modèles."""
