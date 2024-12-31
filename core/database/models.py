@@ -243,7 +243,7 @@ class ReferencedDocument(Base):
             "page_number": self.page_number,
             "relevance_score": self.relevance_score,
             "content_snippet": self.content_snippet,
-            "metadata": self.doc_metadata,
+            "document_metadata": self.doc_metadata,
             "created_at": self.created_at.isoformat()
         }
 
