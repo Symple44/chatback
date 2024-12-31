@@ -48,14 +48,33 @@ class ElasticsearchClient:
                 if not await self.check_connection():
                     raise ConnectionError("Impossible de se connecter à Elasticsearch")
 
-                # Configuration des indices
-                await self.index_manager.setup_indices()
+                # Vérification de l'état des indices
+                await self._verify_and_repair_indices()
+                
                 self.initialized = True
-                logger.info("Client Elasticsearch initialisé")
+                logger.info("Client Elasticsearch initialisé avec succès")
 
             except Exception as e:
-                logger.error(f"Erreur initialisation ES: {e}")
+                logger.error(f"Erreur initialisation ES: {e}", exc_info=True)
                 raise
+
+    async def _verify_and_repair_indices(self):
+        """Vérifie et répare les indices si nécessaire."""
+        try:
+            # Configuration initiale des templates et indices
+            await self.index_manager.setup_indices()
+            
+            # Vérification du mapping et réindexation si nécessaire
+            needs_reindex = await self.index_manager.verify_index_mapping()
+            if needs_reindex:
+                logger.info("Réindexation des données nécessaire")
+                # La réindexation est gérée dans verify_index_mapping
+            else:
+                logger.info("Mapping des indices vérifié - aucune réindexation nécessaire")
+                
+        except Exception as e:
+            logger.error(f"Erreur vérification/réparation indices: {e}")
+            raise
 
     async def check_connection(self) -> bool:
         """Vérifie la connexion à Elasticsearch."""
@@ -74,6 +93,9 @@ class ElasticsearchClient:
     ) -> List[Dict]:
         """Interface principale de recherche."""
         try:
+            if not self.initialized:
+                await self.initialize()
+
             results = await self.search_manager.search_documents(
                 query, vector, metadata_filter, **kwargs
             )
