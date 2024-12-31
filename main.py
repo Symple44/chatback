@@ -154,7 +154,7 @@ class ComponentManager:
                 logger.info("Cache Redis initialisé")
 
                 # Elasticsearch
-                from core.vectorstore.search import ElasticsearchClient
+                from core.vectorstore import ElasticsearchClient
                 es_client = ElasticsearchClient()
                 await es_client.initialize()
                 self._components["es_client"] = es_client
