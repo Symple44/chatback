@@ -132,6 +132,7 @@ class IndexSetup:
 async def main():
     """Point d'entrée principal."""
     setup = IndexSetup()
+    await setup.es_client.initialize()
     
     logger.info("Début de la configuration des index...")
     
