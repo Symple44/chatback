@@ -243,77 +243,83 @@ class ElasticsearchClient:
             if not self.initialized:
                 await self.initialize()
     
-            # Construction de la requête
-            must_clauses = []
-    
-            # Recherche textuelle
-            if query:
-                must_clauses.append({
-                    "match": {
-                        "content": {
-                            "query": query,
-                            "operator": "or",
-                            "minimum_should_match": "50%"
-                        }
-                    }
-                })
-    
-            # Filtre de métadonnées
-            if metadata_filter:
-                for key, value in metadata_filter.items():
-                    must_clauses.append({
-                        "term": {f"metadata.{key}.keyword": value}
-                    })
-    
-            # Configuration de la requête
-            search_body = {
+            # Construction de la requête de base
+            query_body = {
                 "size": size,
                 "query": {
-                    "function_score": {
-                        "query": {
-                            "bool": {
-                                "must": must_clauses
-                            }
-                        },
-                        "functions": []
+                    "bool": {
+                        "must": []
                     }
                 }
             }
     
-            # Ajout de la similarité vectorielle si disponible
-            if vector and len(vector) == self.embedding_dim:
-                search_body["query"]["function_score"]["functions"].append({
-                    "script_score": {
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {"query_vector": vector},
-                            "lang": "painless"
+            # Ajout de la recherche textuelle
+            if query:
+                query_body["query"]["bool"]["must"].append({
+                    "match": {
+                        "content": {
+                            "query": query,
+                            "operator": "or"
                         }
                     }
                 })
     
+            # Ajout du filtre de métadonnées
+            if metadata_filter:
+                for key, value in metadata_filter.items():
+                    query_body["query"]["bool"]["must"].append({
+                        "term": {f"metadata.{key}.keyword": value}
+                    })
+    
+            # Ajout de la recherche vectorielle si possible
+            if vector and len(vector) == self.embedding_dim:
+                try:
+                    query_body["query"]["bool"]["should"] = [{
+                        "script_score": {
+                            "query": {"match_all": {}},
+                            "script": {
+                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                                "params": {"query_vector": vector},
+                                "lang": "painless"
+                            }
+                        }
+                    }]
+                    query_body["query"]["bool"]["minimum_should_match"] = 1
+                except Exception as vector_error:
+                    logger.warning(f"Erreur ajout recherche vectorielle: {vector_error}")
+    
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
     
-            # Recherche avec gestion des erreurs
+            # Diagnostic logging avant la recherche
+            logger.debug(f"Requête Elasticsearch: {json.dumps(query_body, indent=2)}")
+    
             try:
                 response = await self.es.search(
                     index=index,
-                    body=search_body
+                    body=query_body
                 )
             except Exception as search_error:
-                logger.error(f"Erreur recherche Elasticsearch: {search_error}")
+                logger.error(f"Erreur détaillée recherche Elasticsearch: {search_error}")
                 
                 # Vérification de l'existence de l'index
-                index_exists = await self.es.indices.exists(index=index)
-                if not index_exists:
-                    logger.warning(f"Index {index} n'existe pas. Tentative de réinitialisation.")
-                    await self.setup_indices()
+                try:
+                    index_exists = await self.es.indices.exists(index=index)
+                    if not index_exists:
+                        logger.warning(f"Index {index} n'existe pas. Tentative de réinitialisation.")
+                        await self.setup_indices()
+                except Exception as index_check_error:
+                    logger.error(f"Erreur vérification index: {index_check_error}")
+                    return []
     
-                # Nouvelle tentative de recherche
+                # Nouvelle tentative avec requête simplifiée
+                simplified_query = {
+                    "size": size,
+                    "query": {"match_all": {}}
+                }
                 response = await self.es.search(
                     index=index,
-                    body=search_body
+                    body=simplified_query
                 )
     
             # Transformation des résultats
@@ -328,7 +334,7 @@ class ElasticsearchClient:
             ]
     
         except Exception as e:
-            logger.error(f"Erreur fatale recherche documents: {e}")
+            logger.error(f"Erreur fatale recherche documents: {e}", exc_info=True)
             metrics.increment_counter("search_critical_errors")
             return []
 
