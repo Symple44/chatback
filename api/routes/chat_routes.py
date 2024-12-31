@@ -213,7 +213,7 @@ async def get_similar_questions(
     """
     try:
         query_vector = await components.model.create_embedding(query)
-        similar = await components.db_manager.find_similar_questions(
+        similar = await components.db.find_similar_questions(
             vector=query_vector,
             threshold=threshold,
             limit=limit
@@ -279,8 +279,8 @@ async def prepare_chat_context(components, request: ChatRequest, session: ChatSe
 async def find_similar_questions(components, query_vector: List[float], metadata: Dict) -> List[Dict]:
     """Recherche des questions similaires."""
     try:
-        if hasattr(components.db_manager, "find_similar_questions"):
-            return await components.db_manager.find_similar_questions(
+        if hasattr(components.db, "find_similar_questions"):
+            return await components.db.find_similar_questions(
                 vector=query_vector,
                 threshold=settings.CONTEXT_CONFIDENCE_THRESHOLD,
                 limit=3,
@@ -446,8 +446,8 @@ async def save_chat_interaction(
 async def log_error(components, error: Exception, request: ChatRequest):
     """Log une erreur dans la base de données."""
     try:
-        if hasattr(components, 'db_manager') and hasattr(components.db_manager, 'log_error'):
-            await components.db_manager.log_error(
+        if hasattr(components, 'db_manager') and hasattr(components.db, 'log_error'):
+            await components.db.log_error(
                 error_type=type(error).__name__,
                 error_message=str(error),
                 endpoint="/api/chat",
