@@ -7,7 +7,7 @@ import os
 # Ajout du répertoire parent au PYTHONPATH pour les imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.vectorstore.search import ElasticsearchClient
+from core.vectorstore import ElasticsearchClient
 from core.config import settings
 from core.utils.logger import get_logger
 

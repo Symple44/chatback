@@ -10,7 +10,7 @@ import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm.embeddings import EmbeddingsManager
-from core.vectorstore.search import ElasticsearchClient
+from core.vectorstore import ElasticsearchClient
 from core.document_processing.text_splitter import DocumentSplitter
 from core.utils.logger import get_logger
 from core.config import settings

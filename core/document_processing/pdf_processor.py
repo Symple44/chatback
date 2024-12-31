@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 
 from core.utils.logger import get_logger
-from core.vectorstore.search import ElasticsearchClient
+from core.vectorstore import ElasticsearchClient
 from .image_processing import PDFImageProcessor
 
 logger = get_logger("pdf_processor")
