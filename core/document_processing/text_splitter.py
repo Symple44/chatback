@@ -92,6 +92,34 @@ class DocumentSplitter:
             metrics.increment_counter("document_splitting_errors")
             return []
 
+    def split_document(self, text: str, metadata: Optional[Dict] = None) -> List[Dict]:
+        """Découpe un document en chunks."""
+        chunks = []
+        
+        try:
+            text = self._preprocess_text(text)
+            raw_chunks = self._split_into_chunks(text)
+            
+            for i, chunk_text in enumerate(raw_chunks):
+                if len(chunk_text.strip()) < self.chunk_size / 4:  # Skip très petits chunks
+                    continue
+                    
+                chunks.append({
+                    "content": chunk_text,
+                    "index": i,
+                    "metadata": {
+                        **(metadata or {}),
+                        "chunk": i,
+                        "total_chunks": len(raw_chunks)
+                    }
+                })
+                
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"Erreur découpage document: {e}")
+            return []
+    
     def split_text(
         self,
         text: str,
