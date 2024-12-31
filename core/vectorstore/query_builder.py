@@ -17,21 +17,81 @@ class QueryBuilder:
         min_score: float = 0.1,
         highlight: bool = True
     ) -> Dict[str, Any]:
+        """Construit la requête de recherche."""
         search_body = {
             "size": size,
             "min_score": min_score,
             "_source": ["title", "content", "application", "metadata"],
-            "timeout": "30s",
-            "query": {
-                "bool": {
-                    "must": self._build_text_query(query),
-                    "should": self._build_vector_query(vector) if vector else [],
-                    "filter": self._build_filters(metadata_filter),
-                    "minimum_should_match": 1
-                }
-            }
+            "timeout": "30s"
         }
 
+        # Construction de la requête bool
+        bool_query = {
+            "must": [],
+            "should": [],
+            "filter": [],
+            "minimum_should_match": 1
+        }
+
+        # Ajout de la recherche textuelle
+        bool_query["must"].append({
+            "multi_match": {
+                "query": query,
+                "fields": ["title^2", "content", "metadata.application"],
+                "type": "best_fields",
+                "operator": "or",
+                "tie_breaker": 0.3,
+                "fuzziness": "AUTO",
+                "prefix_length": 2
+            }
+        })
+
+        # Ajout de la recherche vectorielle si un vecteur est fourni
+        if vector and len(vector) == self.embedding_dim:
+            bool_query["should"].append({
+                "script_score": {
+                    "query": {"match_all": {}},
+                    "script": {
+                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                        "params": {"query_vector": vector}
+                    }
+                }
+            })
+
+        # Ajout des filtres de métadonnées de manière sûre
+        if metadata_filter:
+            for key, value in metadata_filter.items():
+                field_name = f"metadata.{key}"
+                
+                # Gestion spécifique selon le type de la valeur
+                if isinstance(value, (list, tuple)):
+                    bool_query["filter"].append({
+                        "terms": {f"{field_name}.keyword": value}
+                    })
+                elif isinstance(value, (int, float)):
+                    bool_query["filter"].append({
+                        "term": {field_name: value}
+                    })
+                elif isinstance(value, dict):
+                    range_filter = {}
+                    if "gte" in value:
+                        range_filter["gte"] = value["gte"]
+                    if "lte" in value:
+                        range_filter["lte"] = value["lte"]
+                    if range_filter:
+                        bool_query["filter"].append({
+                            "range": {field_name: range_filter}
+                        })
+                else:
+                    # Pour les strings, utiliser keyword sans fuzzy
+                    bool_query["filter"].append({
+                        "term": {f"{field_name}.keyword": str(value)}
+                    })
+
+        # Ajout de la requête bool au body
+        search_body["query"] = {"bool": bool_query}
+
+        # Ajout du highlighting si demandé
         if highlight:
             search_body["highlight"] = self._build_highlight_config()
 
@@ -105,6 +165,7 @@ class QueryBuilder:
         return filters
 
     def _build_highlight_config(self) -> Dict:
+        """Construit la configuration du highlighting."""
         return {
             "fields": {
                 "content": {
