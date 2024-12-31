@@ -428,6 +428,8 @@ class DatabaseManager:
                 )
                 user = user.scalar_one_or_none()
                 if user:
+                    if not user.metadata:
+                        user.metadata = {}
                     user.metadata.update({
                         "preferences": {
                             "theme": "light",
