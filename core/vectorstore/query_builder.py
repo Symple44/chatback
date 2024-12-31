@@ -21,7 +21,7 @@ class QueryBuilder:
         search_body = {
             "size": size,
             "min_score": min_score,
-            "_source": ["title", "content", "application", "metadata"],
+            "_source": ["title", "content", "metadata"],
             "timeout": "30s"
         }
 
@@ -37,7 +37,7 @@ class QueryBuilder:
         bool_query["must"].append({
             "multi_match": {
                 "query": query,
-                "fields": ["title^2", "content", "metadata.application"],
+                "fields": ["title^2", "content"],
                 "type": "best_fields",
                 "operator": "or",
                 "tie_breaker": 0.3,
@@ -48,47 +48,26 @@ class QueryBuilder:
 
         # Ajout de la recherche vectorielle si un vecteur est fourni
         if vector and len(vector) == self.embedding_dim:
-            vector_query = {
-                "nested": {
-                    "path": "embedding",
-                    "query": {
-                        "script_score": {
-                            "query": {
-                                "bool": {
-                                    "filter": {
-                                        "exists": {
-                                            "field": "embedding"
-                                        }
-                                    }
-                                }
-                            },
-                            "script": {
-                                "source": """
-                                if (doc['embedding'].size() == 0) { return 0; }
-                                return cosineSimilarity(params.query_vector, 'embedding') + 1.0
-                                """,
-                                "params": {
-                                    "query_vector": vector
-                                }
-                            }
+            script_query = {
+                "script_score": {
+                    "query": {"match_all": {}},
+                    "script": {
+                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                        "params": {
+                            "query_vector": vector
                         }
                     }
                 }
             }
-            bool_query["should"].append(vector_query)
+            bool_query["should"].append(script_query)
 
         # Ajout des filtres de métadonnées
         if metadata_filter:
             for key, value in metadata_filter.items():
-                field_name = f"metadata.{key}"
-                
+                filter_field = f"metadata.{key}"
                 if isinstance(value, (list, tuple)):
                     bool_query["filter"].append({
-                        "terms": {f"{field_name}.keyword": value}
-                    })
-                elif isinstance(value, (int, float)):
-                    bool_query["filter"].append({
-                        "term": {field_name: value}
+                        "terms": {f"{filter_field}.keyword": value}
                     })
                 elif isinstance(value, dict):
                     range_filter = {}
@@ -98,17 +77,38 @@ class QueryBuilder:
                         range_filter["lte"] = value["lte"]
                     if range_filter:
                         bool_query["filter"].append({
-                            "range": {field_name: range_filter}
+                            "range": {filter_field: range_filter}
                         })
                 else:
                     bool_query["filter"].append({
-                        "term": {f"{field_name}.keyword": str(value)}
+                        "term": {f"{filter_field}.keyword": str(value)}
                     })
 
         search_body["query"] = {"bool": bool_query}
 
+        # Configuration du highlighting
         if highlight:
             search_body["highlight"] = self._build_highlight_config()
+
+        # Ajout du rescoring vectoriel pour améliorer la pertinence
+        if vector:
+            search_body["rescore"] = {
+                "window_size": 50,
+                "query": {
+                    "score_mode": "multiply",
+                    "rescore_query": {
+                        "script_score": {
+                            "query": {"match_all": {}},
+                            "script": {
+                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                                "params": {
+                                    "query_vector": vector
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
         return search_body
 
