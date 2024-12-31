@@ -132,8 +132,13 @@ class ComponentManager:
                 await self.system_optimizer.optimize()
 
                 # Base de données
+                from core.database.manager import DatabaseManager
                 from core.database.base import get_session_manager
-                self._components["db"] = get_session_manager(settings.get_database_url())
+
+                db_session_manager = get_session_manager(settings.get_database_url())
+                db_manager = DatabaseManager(db_session_manager.session_factory)
+                self._components["db_manager"] = db_manager
+                self._components["db"] = db_session_manager
                 logger.info("Base de données initialisée")
 
                 # Session Manager
