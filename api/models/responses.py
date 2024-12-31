@@ -220,7 +220,7 @@ class HealthCheckResponse(BaseModel):
         }
     )
     
-    status: str = Field(..., pattern="^(healthy|unhealthy|degraded)$")
-    components: Dict[str, bool]
+    status: bool
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    components: Dict[str, bool] = Field(default_factory=dict)
     metrics: Dict[str, Any] = Field(default_factory=dict)
