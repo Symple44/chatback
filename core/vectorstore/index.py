@@ -13,7 +13,7 @@ class IndexManager:
         self.es = es_client
         self.index_prefix = settings.ELASTICSEARCH_INDEX_PREFIX
         self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
-
+embedding
     async def setup_indices(self):
         """Configure les indices nécessaires."""
         try:
@@ -72,7 +72,12 @@ class IndexManager:
                             "type": "dense_vector",
                             "dims": self.embedding_dim,
                             "index": True,
-                            "similarity": "cosine"
+                            "similarity": "cosine",
+                            "index_options": {
+                                "type": "hnsw",
+                                "m": 16,
+                                "ef_construction": 100
+                            }
                         },
                         "timestamp": {"type": "date"}
                     }
