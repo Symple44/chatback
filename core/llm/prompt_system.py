@@ -1,138 +1,217 @@
 # core/llm/prompt_system.py
-from typing import List, Dict, Optional, Union, ClassVar
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
+import re
 from core.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("prompt_system")
 
 class Message(BaseModel):
-    role: str = Field(..., description="Role du message (system, user, assistant, function)")
+    role: str = Field(..., description="Role du message (system, user, assistant)")
     content: str = Field(..., description="Contenu du message")
-    name: Optional[str] = Field(None, description="Nom optionnel pour les fonctions")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict = Field(default_factory=dict)
 
-class ConversationContext(BaseModel):
-    messages: List[Message] = Field(default_factory=list)
-    system_context: Optional[str] = None
-    metadata: Dict = Field(default_factory=dict)
-    max_messages: int = Field(default=10)
-
 class PromptSystem:
-    SYSTEM_MESSAGES: ClassVar[Dict[str, str]] = {
-        "welcome": "Bienvenue ! Comment puis-je vous aider ?",
-        "error": "Désolé, une erreur est survenue.",
-        "rate_limit": "Vous avez atteint la limite de requêtes.", 
-        "maintenance": "Le système est en maintenance.",
-        "context_missing": "Aucun contexte documentaire disponible.",
-        "max_tokens": "La limite de tokens a été atteinte.",
-        "invalid_request": "Requête invalide. Veuillez réessayer.",
-        "processing": "Traitement en cours...",
-        "completed": "Traitement terminé."
-    }
-
+    """Gestionnaire de prompts pour le modèle."""
+    
     def __init__(self):
         """Initialise le système de prompts."""
+        # Template principal pour les conversations
         self.chat_template = settings.CHAT_TEMPLATE
         self.system_template = settings.SYSTEM_PROMPT
-        self.max_context_length = settings.MAX_CONTEXT_LENGTH
-        
-        self.role_formats = {
-            "system": "Système: {message}",
-            "user": "Utilisateur: {message}",
-            "assistant": "Assistant: {message}",
-            "function": "Fonction ({name}): {message}"
+
+        # Templates spécifiques pour différents types de réponses
+        self.templates = {
+            "procedure": """
+Instructions étape par étape :
+{steps}
+
+Points importants :
+{notes}
+""",
+            "error": """
+⚠️ Attention : {error_message}
+Solutions possibles :
+{solutions}
+""",
+            "context": """
+Basé sur les documents suivants :
+{context}
+
+Éléments clés identifiés :
+{key_points}
+"""
         }
         
-        self.role_instructions = {
-            "system": "Instructions système :",
-            "user": "Requête utilisateur :",
-            "assistant": "Réponse assistant :",
-            "function": "Résultat fonction {name} :"
+        # Formattage des rôles
+        self.role_formats = {
+            "system": "Instructions système :\n{message}",
+            "user": "Question utilisateur :\n{message}",
+            "assistant": "Réponse assistant :\n{message}"
         }
 
     def build_chat_prompt(
         self,
-        messages: List[Message],
-        context_docs: Optional[List[Dict]] = None,
-        lang: str = "fr",
-        instruction_format: bool = True
+        messages: List[Dict],
+        context: Optional[str] = None,
+        query: Optional[str] = None,
+        lang: str = "fr"
     ) -> str:
         """
-        Construit le prompt complet pour le chat.
+        Construit le prompt complet pour une conversation.
         
         Args:
-            messages: Liste des messages
-            context_docs: Documents de contexte
-            lang: Langue de la réponse
-            instruction_format: Ajouter les instructions formatées
+            messages: Historique des messages
+            context: Contexte documentaire
+            query: Question actuelle
+            lang: Code de langue
             
         Returns:
-            str: Le prompt formaté
+            str: Prompt formaté
         """
-        system = self.system_template.format(app_name=settings.APP_NAME)
-        context = self._format_context(context_docs) if context_docs else self.get_system_message("context_missing")
-        query = next((m.content for m in reversed(messages) if m.role == "user"), "")
+        try:
+            # Préparation du contexte système
+            system = self.system_template.format(app_name=settings.APP_NAME)
+
+            # Extraction des points clés du contexte
+            if context:
+                key_points = self._extract_key_points(context)
+                context_summary = "• " + "\n• ".join(key_points)
+            else:
+                context_summary = "Pas de contexte documentaire disponible."
+
+            # Construction de l'historique
+            history = []
+            if messages:
+                for msg in messages[-5:]:  # Limite aux 5 derniers messages
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    history.append(
+                        self.role_formats[role].format(message=content)
+                    )
+
+            # Construction du prompt final
+            prompt = self.chat_template.format(
+                system=system,
+                query=query or "",
+                context=context or "",
+                context_summary=context_summary,
+                history="\n\n".join(history),
+                timestamp=datetime.utcnow().isoformat(),
+                language=lang
+            )
+
+            return prompt
+
+        except Exception as e:
+            logger.error(f"Erreur construction prompt: {e}")
+            # Fallback sur un prompt minimal
+            return f"Question: {query}\nRéponse: "
+
+    def _extract_key_points(self, context: str, max_points: int = 3) -> List[str]:
+        """Extrait les points clés du contexte."""
+        points = []
         
-        return self.chat_template.format(
-            system=system,
-            query=query,
-            context=context,
-            context_summary=self._generate_context_summary(context_docs) if context_docs else "",
-            response=""
-        )
+        # Patterns pour identifier les informations importantes
+        patterns = [
+            (r"Pour (créer|modifier|supprimer).*?[.]\n", 0.9),  # Instructions directes
+            (r"^\d+\.\s+.*?[.]\n", 0.8),                        # Étapes numérotées
+            (r"(?:Attention|Important)\s*:.*?[.]\n", 0.7),      # Avertissements
+            (r"^[-•]\s+.*?[.]\n", 0.6),                        # Points listés
+        ]
 
-    def _format_context(self, context_docs: List[Dict]) -> str:
-        """Formate le contexte documentaire."""
-        doc_parts = []
-        for doc in context_docs:
-            title = doc.get('title', 'Document')
-            content = doc.get('content', '').strip()
-            page = doc.get('metadata', {}).get('page', 'N/A')
-            confidence = doc.get('score', 0.0)
-            
-            if content:
-                header = f"[Source: {title} (Page {page}, Pertinence: {confidence:.2f})]"
-                doc_parts.append(f"{header}\n{content}")
-                
-        return "\n\n".join(doc_parts)
+        # Extraction des correspondances
+        for pattern, score in patterns:
+            matches = re.finditer(pattern, context, re.MULTILINE)
+            for match in matches:
+                text = match.group(0).strip()
+                if text and len(text) > 20:  # Filtre les segments trop courts
+                    points.append((text, score))
 
-    def _generate_context_summary(self, context_docs: List[Dict]) -> str:
-        """Génère un résumé du contexte."""
-        if not context_docs:
-            return ""
-            
-        n_docs = len(context_docs)
-        avg_confidence = sum(doc.get('score', 0.0) for doc in context_docs) / n_docs if n_docs > 0 else 0
-        
-        return f"Basé sur {n_docs} documents pertinents (confiance moyenne: {avg_confidence:.2f})"
+        # Si pas assez de points, ajoute les premières phrases
+        if len(points) < max_points:
+            sentences = re.split(r'[.!?]\s+', context)
+            for sentence in sentences:
+                if len(sentence.strip()) > 20:
+                    points.append((sentence.strip() + ".", 0.5))
+                if len(points) >= max_points:
+                    break
 
-    def create_message(
+        # Tri par score et limite au nombre maximum
+        points.sort(key=lambda x: x[1], reverse=True)
+        return [point[0] for point in points[:max_points]]
+
+    def format_message(self, message: Message) -> str:
+        """Formate un message selon son rôle."""
+        template = self.role_formats.get(message.role, "{message}")
+        return template.format(message=message.content)
+
+    def create_procedural_response(
         self,
-        role: str,
-        content: str,
-        name: Optional[str] = None,
-        metadata: Optional[Dict] = None
-    ) -> Message:
-        """Crée un nouveau message avec métadonnées."""
-        return Message(
-            role=role,
-            content=content,
-            name=name,
-            metadata=metadata or {}
+        steps: List[str],
+        notes: Optional[List[str]] = None
+    ) -> str:
+        """
+        Crée une réponse procédurale structurée.
+        
+        Args:
+            steps: Liste des étapes
+            notes: Notes ou avertissements optionnels
+            
+        Returns:
+            str: Réponse formatée
+        """
+        formatted_steps = "\n".join(
+            f"{i+1}. {step}" for i, step in enumerate(steps)
+        )
+        
+        formatted_notes = ""
+        if notes:
+            formatted_notes = "\n".join(f"• {note}" for note in notes)
+
+        return self.templates["procedure"].format(
+            steps=formatted_steps,
+            notes=formatted_notes
         )
 
-    def format_system_prompt(self, lang: str = "fr") -> Message:
-        """Crée le message système initial."""
-        content = self.system_template.format(app_name=settings.APP_NAME)
-        metadata = {"lang": lang, "type": "system_prompt"}
-        return self.create_message("system", content, metadata=metadata)
+    def create_error_response(
+        self,
+        error_message: str,
+        solutions: List[str]
+    ) -> str:
+        """
+        Crée une réponse pour les situations d'erreur.
+        
+        Args:
+            error_message: Message d'erreur
+            solutions: Liste des solutions possibles
+            
+        Returns:
+            str: Réponse formatée
+        """
+        formatted_solutions = "\n".join(
+            f"{i+1}. {solution}" for i, solution in enumerate(solutions)
+        )
+
+        return self.templates["error"].format(
+            error_message=error_message,
+            solutions=formatted_solutions
+        )
 
     def get_system_message(self, key: str, **kwargs) -> str:
-        """Récupère un message système avec formatage optionnel."""
-        message = self.SYSTEM_MESSAGES.get(key, self.SYSTEM_MESSAGES["error"])
+        """Récupère un message système prédéfini."""
+        messages = {
+            "welcome": "Bienvenue ! Comment puis-je vous aider ?",
+            "error": "Je suis désolé, une erreur est survenue.",
+            "clarification": "Pouvez-vous préciser votre demande ?",
+            "no_context": "Je n'ai pas trouvé de contexte pertinent.",
+            "processing": "Je traite votre demande..."
+        }
+        
+        message = messages.get(key, messages["error"])
         return message.format(**kwargs) if kwargs else message
 
     def truncate_messages(
@@ -140,7 +219,7 @@ class PromptSystem:
         messages: List[Message],
         max_messages: Optional[int] = None
     ) -> List[Message]:
-        """Tronque la liste des messages en gardant les plus récents."""
+        """Tronque la liste des messages à un maximum."""
         if not max_messages:
             max_messages = settings.MAX_HISTORY_MESSAGES
             
@@ -153,23 +232,3 @@ class PromptSystem:
             truncated.insert(0, system_msg)
             
         return truncated
-
-    def format_message(self, message: Message) -> str:
-        """Formate un message selon son rôle."""
-        template = self.role_formats.get(message.role, "{message}")
-        return template.format(
-            message=message.content,
-            name=message.name or message.role
-        )
-
-    def get_conversation_stats(self, messages: List[Message]) -> Dict:
-        """Calcule des statistiques sur la conversation."""
-        return {
-            "total_messages": len(messages),
-            "messages_per_role": {
-                role: len([m for m in messages if m.role == role])
-                for role in set(m.role for m in messages)
-            },
-            "avg_message_length": sum(len(m.content) for m in messages) / len(messages) if messages else 0,
-            "last_message_time": max(m.timestamp for m in messages) if messages else None
-        }
