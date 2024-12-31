@@ -221,7 +221,7 @@ class ReferencedDocument(Base):
     page_number = Column(Integer)
     relevance_score = Column(Float)
     content_snippet = Column(Text)
-    doc_metadata = Column(JSONB, default={})
+    document_metadata  = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
@@ -230,7 +230,7 @@ class ReferencedDocument(Base):
     __table_args__ = (
         Index('idx_ref_doc_chat', chat_history_id),
         Index('idx_ref_doc_relevance', relevance_score.desc()),
-        Index('idx_ref_doc_metadata', doc_metadata, postgresql_using='gin'),
+        Index('idx_ref_doc_metadata', document_metadata, postgresql_using='gin'),
         CheckConstraint('relevance_score >= 0 AND relevance_score <= 1', name='relevance_score_check'),
     )
 
@@ -243,7 +243,7 @@ class ReferencedDocument(Base):
             "page_number": self.page_number,
             "relevance_score": self.relevance_score,
             "content_snippet": self.content_snippet,
-            "document_metadata": self.doc_metadata,
+            "document_metadata": self.document_metadata,
             "created_at": self.created_at.isoformat()
         }
 
