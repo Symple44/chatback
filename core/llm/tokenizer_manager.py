@@ -9,11 +9,9 @@ logger = get_logger("tokenizer_manager")
 
 class TokenizerManager:
     def __init__(self):
-        """Initialise le gestionnaire de tokenizer."""
         self._setup_tokenizer()
 
     def _setup_tokenizer(self):
-        """Configure le tokenizer."""
         try:
             logger.info("Initialisation du tokenizer...")
             
@@ -27,13 +25,13 @@ class TokenizerManager:
                 self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
             self.generation_config = GenerationConfig(
-                do_sample=settings.DO_SAMPLE,
-                temperature=settings.TEMPERATURE,
-                top_p=settings.TOP_P,
-                top_k=settings.TOP_K,
-                max_new_tokens=settings.MAX_NEW_TOKENS,
-                min_new_tokens=settings.MIN_NEW_TOKENS,
-                repetition_penalty=settings.REPETITION_PENALTY,
+                do_sample=bool(settings.DO_SAMPLE),
+                temperature=float(settings.TEMPERATURE),
+                top_p=float(settings.TOP_P),
+                top_k=int(settings.TOP_K),
+                max_new_tokens=int(settings.MAX_NEW_TOKENS),
+                min_new_tokens=int(settings.MIN_NEW_TOKENS),
+                repetition_penalty=float(settings.REPETITION_PENALTY),
                 pad_token_id=self.tokenizer.pad_token_id
             )
             
@@ -67,6 +65,5 @@ class TokenizerManager:
         return response
 
     async def cleanup(self):
-        """Nettoie les ressources du tokenizer."""
         if hasattr(self, 'tokenizer'):
             del self.tokenizer
