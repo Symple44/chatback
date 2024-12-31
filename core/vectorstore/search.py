@@ -34,15 +34,6 @@ class SearchManager:
     ) -> List[Dict]:
         """
         Effectue une recherche dans les documents.
-        
-        Args:
-            query: Requête textuelle
-            vector: Vecteur d'embedding optionnel
-            metadata_filter: Filtres de métadonnées
-            **kwargs: Options supplémentaires de recherche
-            
-        Returns:
-            Liste des résultats formatés
         """
         try:
             # Construction de la requête
@@ -53,38 +44,59 @@ class SearchManager:
                 **kwargs
             )
 
-            # Exécution avec retry
-            response = await self._execute_with_retry(
-                lambda: self.es.search(
-                    index=f"{self.index_prefix}_documents",
-                    body=search_body
-                )
-            )
+            # Log de la requête pour le debug
+            logger.debug(f"Requête ES: {json.dumps(search_body, indent=2)}")
 
-            # Formatage des résultats
-            results = self.response_formatter.format_search_results(response)
-            
-            # Métriques
-            metrics.increment_counter("successful_searches")
-            metrics.set_gauge("last_search_hits", len(results))
-            
-            return results
+            # Vérification de l'existence de l'index avant la recherche
+            index_name = f"{self.index_prefix}_documents"
+            if not await self.es.indices.exists(index=index_name):
+                logger.error(f"Index {index_name} n'existe pas")
+                return []
+
+            # Récupération du mapping pour debug
+            mapping = await self.es.indices.get_mapping(index=index_name)
+            logger.debug(f"Mapping actuel: {json.dumps(mapping, indent=2)}")
+
+            try:
+                # Exécution de la recherche
+                response = await self._execute_with_retry(
+                    lambda: self.es.search(
+                        index=index_name,
+                        body=search_body
+                    )
+                )
+
+                # Log de la réponse pour le debug
+                logger.debug(f"Réponse ES: {json.dumps(response, indent=2)}")
+
+                # Formatage des résultats
+                results = self.response_formatter.format_search_results(response)
+                
+                # Métriques
+                metrics.increment_counter("successful_searches")
+                metrics.set_gauge("last_search_hits", len(results))
+                
+                return results
+
+            except RequestError as e:
+                # Log détaillé de l'erreur
+                error_body = getattr(e, 'body', {})
+                if isinstance(error_body, dict):
+                    reason = error_body.get('error', {}).get('reason', str(e))
+                    root_cause = error_body.get('error', {}).get('root_cause', [])
+                    logger.error(f"Erreur ES détaillée - Raison: {reason}")
+                    if root_cause:
+                        logger.error(f"Cause racine: {json.dumps(root_cause, indent=2)}")
+                raise
 
         except Exception as e:
-            logger.error(f"Erreur lors de la recherche: {e}")
+            logger.error(f"Erreur lors de la recherche: {e}", exc_info=True)
             metrics.increment_counter("failed_searches")
             return []
 
     async def _execute_with_retry(self, operation, max_retries: Optional[int] = None) -> Any:
         """
         Exécute une opération avec retry.
-        
-        Args:
-            operation: Fonction à exécuter
-            max_retries: Nombre maximum de tentatives
-            
-        Returns:
-            Résultat de l'opération
         """
         retries = max_retries or self.max_retries
         last_error = None
@@ -101,8 +113,10 @@ class SearchManager:
                 await asyncio.sleep(self.retry_delay * (2 ** attempt))
                 
             except RequestError as e:
-                # Les erreurs de requête ne nécessitent pas de retry
-                logger.error(f"Erreur de requête: {str(e)}")
+                # Log détaillé des erreurs de requête
+                error_body = getattr(e, 'body', {})
+                if isinstance(error_body, dict):
+                    logger.error(f"Erreur de requête ES: {json.dumps(error_body, indent=2)}")
                 raise
                 
             except Exception as e:
@@ -114,168 +128,12 @@ class SearchManager:
 
         raise last_error
 
-    async def vector_search(
-        self,
-        vector: List[float],
-        size: int = 5,
-        min_score: float = 0.7,
-        metadata_filter: Optional[Dict] = None
-    ) -> List[Dict]:
-        """
-        Effectue une recherche par similarité vectorielle.
-        
-        Args:
-            vector: Vecteur de recherche
-            size: Nombre de résultats
-            min_score: Score minimum de similarité
-            metadata_filter: Filtres additionnels
-            
-        Returns:
-            Liste des documents similaires
-        """
+    async def get_mapping(self) -> Dict:
+        """Récupère le mapping actuel de l'index."""
         try:
-            script_query = {
-                "script_score": {
-                    "query": {"match_all": {}},
-                    "script": {
-                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                        "params": {"query_vector": vector}
-                    },
-                    "min_score": min_score
-                }
-            }
-
-            # Ajout des filtres si présents
-            if metadata_filter:
-                script_query = {
-                    "bool": {
-                        "must": [script_query],
-                        "filter": self.query_builder._build_filters(metadata_filter)
-                    }
-                }
-
-            response = await self._execute_with_retry(
-                lambda: self.es.search(
-                    index=f"{self.index_prefix}_documents",
-                    body={
-                        "size": size,
-                        "query": script_query,
-                        "_source": ["title", "content", "metadata"],
-                        "timeout": "30s"
-                    }
-                )
-            )
-
-            return self.response_formatter.format_search_results(response)
-
+            index_name = f"{self.index_prefix}_documents"
+            mapping = await self.es.indices.get_mapping(index=index_name)
+            return mapping
         except Exception as e:
-            logger.error(f"Erreur recherche vectorielle: {e}")
-            return []
-
-    async def hybrid_search(
-        self,
-        text_query: str,
-        vector: List[float],
-        weights: Tuple[float, float] = (0.3, 0.7),
-        **kwargs
-    ) -> List[Dict]:
-        """
-        Effectue une recherche hybride (texte + vecteur).
-        
-        Args:
-            text_query: Requête textuelle
-            vector: Vecteur d'embedding
-            weights: Poids relatifs (texte, vecteur)
-            **kwargs: Options additionnelles
-            
-        Returns:
-            Liste des résultats combinés
-        """
-        try:
-            text_weight, vector_weight = weights
-            
-            # Construction de la requête hybride
-            search_body = {
-                "query": {
-                    "bool": {
-                        "should": [
-                            {
-                                "multi_match": {
-                                    "query": text_query,
-                                    "fields": ["title^2", "content"],
-                                    "type": "best_fields",
-                                    "tie_breaker": 0.3,
-                                    "boost": text_weight
-                                }
-                            },
-                            {
-                                "script_score": {
-                                    "query": {"match_all": {}},
-                                    "script": {
-                                        "source": f"cosineSimilarity(params.query_vector, 'embedding') * {vector_weight}",
-                                        "params": {"query_vector": vector}
-                                    }
-                                }
-                            }
-                        ],
-                        "minimum_should_match": 1
-                    }
-                },
-                **kwargs
-            }
-
-            response = await self._execute_with_retry(
-                lambda: self.es.search(
-                    index=f"{self.index_prefix}_documents",
-                    body=search_body
-                )
-            )
-
-            return self.response_formatter.format_search_results(response)
-
-        except Exception as e:
-            logger.error(f"Erreur recherche hybride: {e}")
-            return []
-
-    async def get_similar_documents(
-        self,
-        doc_id: str,
-        size: int = 5,
-        min_score: float = 0.7
-    ) -> List[Dict]:
-        """
-        Trouve des documents similaires à un document donné.
-        
-        Args:
-            doc_id: ID du document de référence
-            size: Nombre de résultats
-            min_score: Score minimum de similarité
-            
-        Returns:
-            Liste des documents similaires
-        """
-        try:
-            # Récupération du document source
-            source_doc = await self._execute_with_retry(
-                lambda: self.es.get(
-                    index=f"{self.index_prefix}_documents",
-                    id=doc_id,
-                    _source=["embedding"]
-                )
-            )
-
-            if "embedding" not in source_doc["_source"]:
-                logger.warning(f"Document {doc_id} n'a pas d'embedding")
-                return []
-
-            # Recherche de documents similaires
-            vector = source_doc["_source"]["embedding"]
-            return await self.vector_search(
-                vector=vector,
-                size=size + 1,  # +1 car le document source sera dans les résultats
-                min_score=min_score
-            )
-
-        except Exception as e:
-            logger.error(f"Erreur recherche documents similaires: {e}")
-            return []
+            logger.error(f"Erreur récupération mapping: {e}")
+            return {}
