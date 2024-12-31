@@ -62,6 +62,7 @@ class ElasticsearchClient:
             # Configuration du template pour les documents
             template = {
                 "index_patterns": [f"{self.index_prefix}_*"],
+                "priority": 100,
                 "template": {
                     "settings": {
                         "analysis": {
@@ -111,6 +112,10 @@ class ElasticsearchClient:
 
             # Création du template
             template_name = f"{self.index_prefix}_template"
+            try:
+                await self.es.indices.delete_index_template(name=template_name)
+            except Exception:
+                pass
             await self.es.indices.put_index_template(
                 name=template_name,
                 body=template
