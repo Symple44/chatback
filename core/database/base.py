@@ -4,7 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import AsyncAdaptedQueuePool
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Text
 import asyncio
 from datetime import datetime
 
