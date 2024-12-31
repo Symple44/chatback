@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Any, Union
 from elasticsearch import AsyncElasticsearch
 from datetime import datetime
 import logging
+import json
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
