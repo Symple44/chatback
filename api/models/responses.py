@@ -49,11 +49,11 @@ class DocumentReference(BaseModel):
     last_updated: Optional[datetime] = None
 
     @validator('score')
-        def normalize_score(cls, v: float) -> float:
-            """Normalise le score si nécessaire."""
-            if v > 1.0:
-                return (v - 1.0) / 1.0
-            return v
+    def normalize_score(cls, v: float) -> float:
+        """Normalise le score si nécessaire."""
+        if v > 1.0:
+            return (v - 1.0) / 1.0
+        return v
 
 class ImageInfo(BaseModel):
     """Information sur une image."""
