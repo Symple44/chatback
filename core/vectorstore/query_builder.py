@@ -48,18 +48,31 @@ class QueryBuilder:
 
         # Ajout de la recherche vectorielle si un vecteur est fourni
         if vector and len(vector) == self.embedding_dim:
-            script_query = {
+            vector_query = {
                 "script_score": {
-                    "query": {"match_all": {}},
+                    "query": {
+                        "bool": {
+                            "must": [{
+                                "exists": {
+                                    "field": "embedding"
+                                }
+                            }]
+                        }
+                    },
                     "script": {
-                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                        "lang": "painless",
+                        "source": """
+                        if (doc['embedding'].size() == 0) { return 0; }
+                        return cosineSimilarity(params.query_vector, doc['embedding']) + 1.0;
+                        """,
                         "params": {
                             "query_vector": vector
                         }
-                    }
+                    },
+                    "boost_mode": "sum"
                 }
             }
-            bool_query["should"].append(script_query)
+            bool_query["should"].append(vector_query)
 
         # Ajout des filtres de métadonnées
         if metadata_filter:
@@ -89,26 +102,6 @@ class QueryBuilder:
         # Configuration du highlighting
         if highlight:
             search_body["highlight"] = self._build_highlight_config()
-
-        # Ajout du rescoring vectoriel pour améliorer la pertinence
-        if vector:
-            search_body["rescore"] = {
-                "window_size": 50,
-                "query": {
-                    "score_mode": "multiply",
-                    "rescore_query": {
-                        "script_score": {
-                            "query": {"match_all": {}},
-                            "script": {
-                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                                "params": {
-                                    "query_vector": vector
-                                }
-                            }
-                        }
-                    }
-                }
-            }
 
         return search_body
 
