@@ -16,12 +16,24 @@ class IndexManager:
 
     async def setup_indices(self):
         """Configure les indices nécessaires."""
-        await self._setup_templates()
-        await self._ensure_indices_exist()
+        try:
+            # Supprime les anciens templates si nécessaire
+            template_name = f"{self.index_prefix}_template"
+            if await self.es.indices.exists_index_template(name=template_name):
+                await self.es.indices.delete_index_template(name=template_name)
+
+            await self._setup_templates()
+            await self._ensure_indices_exist()
+            logger.info("Configuration des indices terminée avec succès")
+        except Exception as e:
+            logger.error(f"Erreur lors de la configuration des indices: {e}")
+            raise
 
     async def _setup_templates(self):
         """Configure les templates des indices."""
         template = {
+            "index_patterns": [f"{self.index_prefix}_*"],
+            "priority": 1,  # Priorité plus élevée pour éviter les conflits
             "template": {
                 "settings": {
                     "analysis": {
@@ -37,9 +49,9 @@ class IndexManager:
                             }
                         }
                     },
-                    "number_of_shards": 2,
-                    "number_of_replicas": 1,
-                    "refresh_interval": "1s"
+                    "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                    "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                    "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL
                 },
                 "mappings": {
                     "properties": {
@@ -65,14 +77,20 @@ class IndexManager:
                         "timestamp": {"type": "date"}
                     }
                 }
-            },
-            "index_patterns": [f"{self.index_prefix}_*"]
+            }
         }
 
-        await self.es.indices.put_index_template(
-            name=f"{self.index_prefix}_template",
-            body=template
-        )
+        try:
+            # Configuration du template
+            template_name = f"{self.index_prefix}_template"
+            await self.es.indices.put_index_template(
+                name=template_name,
+                body=template
+            )
+            logger.info(f"Template {template_name} créé avec succès")
+        except Exception as e:
+            logger.error(f"Erreur lors de la création du template: {e}")
+            raise
 
     async def _ensure_indices_exist(self):
         """Crée les indices s'ils n'existent pas."""
@@ -84,6 +102,7 @@ class IndexManager:
         for index in indices:
             if not await self.es.indices.exists(index=index):
                 await self.es.indices.create(index=index)
+                logger.info(f"Index {index} créé")
 
     async def index_document(
         self,
@@ -173,50 +192,6 @@ class IndexManager:
             logger.error(f"Erreur indexation bulk: {e}")
             return stats
 
-    async def update_document(
-        self,
-        doc_id: str,
-        update_fields: Dict,
-        upsert: bool = False
-    ) -> bool:
-        """Met à jour un document existant."""
-        try:
-            body = {"doc": update_fields}
-            if upsert:
-                body["doc_as_upsert"] = True
-
-            await self.es.update(
-                index=f"{self.index_prefix}_documents",
-                id=doc_id,
-                body=body,
-                refresh=True
-            )
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erreur mise à jour document {doc_id}: {e}")
-            return False
-
-    async def delete_document(self, doc_id: str) -> bool:
-        """Supprime un document."""
-        try:
-            await self.es.delete(
-                index=f"{self.index_prefix}_documents",
-                id=doc_id,
-                refresh=True
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Erreur suppression document {doc_id}: {e}")
-            return False
-
-    async def refresh_indices(self):
-        """Force le rafraîchissement des indices."""
-        try:
-            await self.es.indices.refresh(index=f"{self.index_prefix}_*")
-        except Exception as e:
-            logger.error(f"Erreur rafraîchissement indices: {e}")
-            
     async def get_index_stats(self) -> Dict[str, Any]:
         """Récupère les statistiques des indices."""
         try:
@@ -229,3 +204,23 @@ class IndexManager:
         except Exception as e:
             logger.error(f"Erreur récupération stats indices: {e}")
             return {}
+
+    async def cleanup_old_documents(self, days: int = 30) -> int:
+        """Nettoie les anciens documents."""
+        try:
+            response = await self.es.delete_by_query(
+                index=f"{self.index_prefix}_*",
+                body={
+                    "query": {
+                        "range": {
+                            "timestamp": {
+                                "lte": f"now-{days}d"
+                            }
+                        }
+                    }
+                }
+            )
+            return response.get("deleted", 0)
+        except Exception as e:
+            logger.error(f"Erreur nettoyage documents: {e}")
+            return 0
