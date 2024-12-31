@@ -257,9 +257,10 @@ async def lifespan(app: FastAPI):
         await metrics.initialize()
         try:
             await components.initialize()
+            # Initialisation explicite d'Elasticsearch
+            await components.es_client.initialize() 
         except Exception as e:
             logger.critical(f"Erreur critique lors de l'initialisation des composants: {e}")
-            # Nettoyage explicite en cas d'erreur
             await components.cleanup()
             raise
 
