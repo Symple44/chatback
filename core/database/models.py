@@ -222,7 +222,7 @@ class ReferencedDocument(Base):
     relevance_score = Column(Float)
     content_snippet = Column(Text)
     document_metadata  = Column(JSONB, default={})
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    #created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
     chat_history = relationship("ChatHistory", back_populates="referenced_documents")
@@ -244,7 +244,7 @@ class ReferencedDocument(Base):
             "relevance_score": self.relevance_score,
             "content_snippet": self.content_snippet,
             "document_metadata": self.document_metadata,
-            "created_at": self.created_at.isoformat()
+            #"created_at": self.created_at.isoformat()
         }
 
 class MessageMetrics(Base):
