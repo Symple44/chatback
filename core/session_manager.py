@@ -326,15 +326,8 @@ class SessionManager:
     async def get_chat_history(self, user_id: str, limit: int = 50) -> List[Dict]:
         """
         Récupère l'historique des conversations pour un utilisateur.
-        
-        Args:
-            user_id: ID de l'utilisateur
-            limit: Nombre maximum d'entrées à récupérer
-        
-        Returns:
-            Liste des entrées de l'historique des chats
         """
-        async with self.session_factory() as session:
+        async with self.async_session() as session:
             try:
                 result = await session.execute(
                     select(ChatHistory)
