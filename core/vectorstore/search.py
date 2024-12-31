@@ -25,6 +25,14 @@ class SearchManager:
         self.retry_delay = 1.0
         self.max_retries = 3
 
+    def _convert_es_response(self, response: Any) -> Dict:
+        """Convertit une réponse Elasticsearch en dictionnaire."""
+        if hasattr(response, 'body'):
+            return response.body
+        elif hasattr(response, 'raw'):
+            return response.raw
+        return dict(response)
+
     async def search_documents(
         self,
         query: str,
@@ -49,28 +57,34 @@ class SearchManager:
 
             # Vérification de l'existence de l'index avant la recherche
             index_name = f"{self.index_prefix}_documents"
-            if not await self.es.indices.exists(index=index_name):
+            exists_response = await self.es.indices.exists(index=index_name)
+            if not exists_response:
                 logger.error(f"Index {index_name} n'existe pas")
                 return []
 
             # Récupération du mapping pour debug
-            mapping = await self.es.indices.get_mapping(index=index_name)
-            logger.debug(f"Mapping actuel: {json.dumps(mapping, indent=2)}")
+            try:
+                mapping_response = await self.es.indices.get_mapping(index=index_name)
+                mapping_dict = self._convert_es_response(mapping_response)
+                logger.debug(f"Mapping actuel: {json.dumps(mapping_dict, indent=2)}")
+            except Exception as e:
+                logger.error(f"Erreur lors de la récupération du mapping: {e}")
 
             try:
                 # Exécution de la recherche
-                response = await self._execute_with_retry(
+                search_response = await self._execute_with_retry(
                     lambda: self.es.search(
                         index=index_name,
                         body=search_body
                     )
                 )
 
-                # Log de la réponse pour le debug
-                logger.debug(f"Réponse ES: {json.dumps(response, indent=2)}")
+                # Conversion et log de la réponse
+                response_dict = self._convert_es_response(search_response)
+                logger.debug(f"Réponse ES: {json.dumps(response_dict, indent=2)}")
 
                 # Formatage des résultats
-                results = self.response_formatter.format_search_results(response)
+                results = self.response_formatter.format_search_results(response_dict)
                 
                 # Métriques
                 metrics.increment_counter("successful_searches")
@@ -80,7 +94,7 @@ class SearchManager:
 
             except RequestError as e:
                 # Log détaillé de l'erreur
-                error_body = getattr(e, 'body', {})
+                error_body = self._convert_es_response(e.body) if hasattr(e, 'body') else {}
                 if isinstance(error_body, dict):
                     reason = error_body.get('error', {}).get('reason', str(e))
                     root_cause = error_body.get('error', {}).get('root_cause', [])
@@ -114,7 +128,7 @@ class SearchManager:
                 
             except RequestError as e:
                 # Log détaillé des erreurs de requête
-                error_body = getattr(e, 'body', {})
+                error_body = self._convert_es_response(e.body) if hasattr(e, 'body') else {}
                 if isinstance(error_body, dict):
                     logger.error(f"Erreur de requête ES: {json.dumps(error_body, indent=2)}")
                 raise
@@ -132,8 +146,8 @@ class SearchManager:
         """Récupère le mapping actuel de l'index."""
         try:
             index_name = f"{self.index_prefix}_documents"
-            mapping = await self.es.indices.get_mapping(index=index_name)
-            return mapping
+            mapping_response = await self.es.indices.get_mapping(index=index_name)
+            return self._convert_es_response(mapping_response)
         except Exception as e:
             logger.error(f"Erreur récupération mapping: {e}")
             return {}
