@@ -42,11 +42,18 @@ class DocumentReference(BaseModel):
     
     title: str = Field(..., min_length=1, max_length=255)
     page: Optional[int] = Field(None, ge=1)
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float = Field(..., ge=0.0)
     content: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     vector_id: Optional[str] = None
     last_updated: Optional[datetime] = None
+
+    @validator('score')
+        def normalize_score(cls, v: float) -> float:
+            """Normalise le score si nécessaire."""
+            if v > 1.0:
+                return (v - 1.0) / 1.0
+            return v
 
 class ImageInfo(BaseModel):
     """Information sur une image."""
