@@ -95,7 +95,7 @@ class DatabaseSessionManager:
 
             try:
                 async with self.session_factory() as session:
-                    await session.execute("SELECT 1")
+                    await session.execute(text("SELECT 1"))
                     pool_status = await self.get_pool_status()
                     
                     self._last_health_check = datetime.utcnow()
