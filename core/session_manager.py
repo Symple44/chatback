@@ -329,12 +329,8 @@ class SessionManager:
         """
         async with self.async_session() as session:
             try:
-                result = await session.execute(
-                    select(ChatHistory)
-                    .where(ChatHistory.user_id == user_id)
-                    .order_by(ChatHistory.created_at.desc())
-                    .limit(limit)
-                )
+                query = select(ChatHistory).where(ChatHistory.user_id == user_id).order_by(ChatHistory.created_at.desc()).limit(limit)
+                result = await session.execute(query)
                 return [item.to_dict() for item in result.scalars().all()]
             except Exception as e:
                 logger.error(f"Erreur récupération historique: {e}")
