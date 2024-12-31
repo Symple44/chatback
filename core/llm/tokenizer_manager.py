@@ -26,21 +26,31 @@ class TokenizerManager:
             if self.tokenizer.pad_token_id is None:
                 self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-            self.generation_config = GenerationConfig(**settings.generation_config)
+            self.generation_config = GenerationConfig(
+                do_sample=settings.DO_SAMPLE,
+                temperature=settings.TEMPERATURE,
+                top_p=settings.TOP_P,
+                top_k=settings.TOP_K,
+                max_new_tokens=settings.MAX_NEW_TOKENS,
+                min_new_tokens=settings.MIN_NEW_TOKENS,
+                repetition_penalty=settings.REPETITION_PENALTY,
+                pad_token_id=self.tokenizer.pad_token_id
+            )
+            
             logger.info(f"Tokenizer initialisé: {settings.MODEL_NAME}")
 
         except Exception as e:
             logger.error(f"Erreur configuration tokenizer: {e}")
             raise
 
-    def encode(self, text: str, max_length: int = None) -> Dict[str, torch.Tensor]:
+    def encode(self, text: str, max_length: Optional[int] = None) -> Dict[str, torch.Tensor]:
         """Encode le texte en tokens."""
         return self.tokenizer(
             text,
-            return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=max_length
+            max_length=max_length,
+            return_tensors="pt"
         )
 
     def decode_and_clean(self, token_ids: torch.Tensor) -> str:
