@@ -6,6 +6,7 @@ import ssl
 import os
 from datetime import datetime
 import asyncio
+import json
 from elasticsearch.helpers import bulk, BulkIndexError
 from elasticsearch.exceptions import ConnectionError, AuthenticationException, BadRequestError
 import certifi
