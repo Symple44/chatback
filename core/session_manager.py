@@ -11,7 +11,7 @@ from sqlalchemy import (
     create_engine
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, selectinload
 from datetime import datetime, timedelta
 import json
 import uuid
