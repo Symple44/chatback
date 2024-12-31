@@ -57,33 +57,28 @@ class EmbeddingsGenerator:
             return False
 
     async def _process_batch(self, documents: List[Dict]) -> None:
-        """Traite un lot de documents."""
         try:
             for doc in documents:
-                # Découpage du texte
                 chunks = self.text_splitter.split_document(
                     doc.get("content", ""),
                     doc.get("metadata", {})
                 )
-
-                # Génération des embeddings pour chaque chunk
+                
                 for chunk in chunks:
-                    embedding = self.embeddings_manager.generate_embeddings(
-                        [chunk["content"]]
-                    )[0]
-
-                    # Mise à jour du document
-                    await self.es_client.update_document(
-                        doc["_id"],
-                        {
-                            "embedding": embedding,
-                            "chunk_content": chunk["content"],
-                            "processed_at": datetime.utcnow().isoformat()
-                        }
-                    )
-
+                    # Utilisation correcte avec await
+                    embedding = await self.embeddings_manager.generate_embeddings([chunk["content"]])
+                    if embedding and len(embedding) > 0:
+                        await self.es_client.update_document(
+                            doc["_id"],
+                            {
+                                "embedding": embedding[0],
+                                "chunk_content": chunk["content"],
+                                "processed_at": datetime.utcnow().isoformat()
+                            }
+                        )
+                        
         except Exception as e:
-            logger.error(f"Erreur lors du traitement du lot: {e}")
+            logger.error(f"Erreur traitement lot: {e}")
             raise
 
     async def regenerate_embeddings(
@@ -145,4 +140,12 @@ async def main():
         logger.error("Des erreurs sont survenues pendant l'opération")
 
 if __name__ == "__main__":
+    async def main():
+        generator = EmbeddingsGenerator()
+        success = await generator.process_documents()
+        if success:
+            logger.info("Opération terminée avec succès")
+        else:
+            logger.error("Des erreurs sont survenues pendant l'opération")
+        
     asyncio.run(main())
