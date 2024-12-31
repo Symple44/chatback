@@ -48,16 +48,20 @@ class QueryBuilder:
                             "script": {
                                 "source": """
                                 if (!doc.containsKey('embedding') || doc['embedding'].empty) { 
-                                    return 1.0; 
+                                    return 0.0; 
                                 }
-                                return 1.0 + cosineSimilarity(params.query_vector, 'embedding');
+                                double cosine = cosineSimilarity(params.query_vector, 'embedding');
+                                return cosine;
                                 """,
                                 "params": {
                                     "query_vector": vector
                                 }
                             }
-                        }
-                    }]
+                        },
+                        "weight": 0.5
+                    }],
+                    "score_mode": "sum",
+                    "boost_mode": "multiply"
                 }
             }
         else:
