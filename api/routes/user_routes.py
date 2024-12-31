@@ -25,13 +25,13 @@ async def create_user(
 ) -> Dict:
     try:
         # Création de l'utilisateur
-        new_user = await components.db.create_user(user_data)
+        new_user = await components.db_manager.create_user(user_data)
         if not new_user:
             raise HTTPException(status_code=500, detail="Erreur lors de la création de l'utilisateur")
 
         # Initialisation des ressources en arrière-plan
         background_tasks.add_task(
-            components.db.initialize_user_resources,
+            components.db_manager.initialize_user_resources,
             str(new_user["id"])
         )
 
@@ -152,7 +152,7 @@ async def delete_user(
 
             if permanent:
                 # Suppression permanente
-                success = await components.db.cleanup_user_data(user_id)
+                success = await components.db_manager.cleanup_user_data(user_id)
                 if not success:
                     raise HTTPException(status_code=500, detail="Erreur lors de la suppression des données")
                 await session.delete(user)
@@ -228,7 +228,7 @@ async def get_user_statistics(
 ) -> Dict:
     """Récupère les statistiques détaillées d'un utilisateur."""
     try:
-        stats = await components.db.calculate_user_statistics(user_id)
+        stats = await components.db_manager.calculate_user_statistics(user_id)
         if not stats:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
         return stats
