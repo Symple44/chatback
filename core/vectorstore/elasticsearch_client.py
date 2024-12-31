@@ -247,53 +247,36 @@ class ElasticsearchClient:
             # Construction de la requête de base
             query_body = {
                 "size": size,
-                "query": {
-                    "bool": {
-                        "must": []
-                    }
-                }
+                "query": {"match_all": {}}
             }
     
-            # Ajout de la recherche textuelle
+            # Ajout de la recherche textuelle si présente
             if query:
-                query_body["query"]["bool"]["must"].append({
+                query_body["query"] = {
                     "match": {
                         "content": {
                             "query": query,
                             "operator": "or"
                         }
                     }
-                })
+                }
     
             # Ajout du filtre de métadonnées
             if metadata_filter:
-                for key, value in metadata_filter.items():
-                    query_body["query"]["bool"]["must"].append({
-                        "term": {f"metadata.{key}.keyword": value}
-                    })
-    
-            # Ajout de la recherche vectorielle si possible
-            if vector and len(vector) == self.embedding_dim:
-                try:
-                    query_body["query"]["bool"]["should"] = [{
-                        "script_score": {
-                            "query": {"match_all": {}},
-                            "script": {
-                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                                "params": {"query_vector": vector},
-                                "lang": "painless"
-                            }
-                        }
-                    }]
-                    query_body["query"]["bool"]["minimum_should_match"] = 1
-                except Exception as vector_error:
-                    logger.warning(f"Erreur ajout recherche vectorielle: {vector_error}")
+                query_body["query"] = {
+                    "bool": {
+                        "must": [
+                            query_body["query"],
+                            *[
+                                {"term": {f"metadata.{key}.keyword": value}} 
+                                for key, value in metadata_filter.items()
+                            ]
+                        ]
+                    }
+                }
     
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
-    
-            # Diagnostic logging avant la recherche
-            logger.debug(f"Requête Elasticsearch: {json.dumps(query_body, indent=2)}")
     
             try:
                 response = await self.es.search(
@@ -301,27 +284,8 @@ class ElasticsearchClient:
                     body=query_body
                 )
             except Exception as search_error:
-                logger.error(f"Erreur détaillée recherche Elasticsearch: {search_error}")
-                
-                # Vérification de l'existence de l'index
-                try:
-                    index_exists = await self.es.indices.exists(index=index)
-                    if not index_exists:
-                        logger.warning(f"Index {index} n'existe pas. Tentative de réinitialisation.")
-                        await self.setup_indices()
-                except Exception as index_check_error:
-                    logger.error(f"Erreur vérification index: {index_check_error}")
-                    return []
-    
-                # Nouvelle tentative avec requête simplifiée
-                simplified_query = {
-                    "size": size,
-                    "query": {"match_all": {}}
-                }
-                response = await self.es.search(
-                    index=index,
-                    body=simplified_query
-                )
+                logger.error(f"Erreur recherche Elasticsearch: {search_error}")
+                return []
     
             # Transformation des résultats
             return [
@@ -336,7 +300,6 @@ class ElasticsearchClient:
     
         except Exception as e:
             logger.error(f"Erreur fatale recherche documents: {e}", exc_info=True)
-            metrics.increment_counter("search_critical_errors")
             return []
 
     async def delete_document(self, doc_id: str) -> bool:
