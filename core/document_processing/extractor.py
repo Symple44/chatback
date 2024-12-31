@@ -16,6 +16,7 @@ from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .image_processing import PDFImageProcessor
+from .preprocessor import DocumentPreprocessor
 
 logger = get_logger("document_extractor")
 
@@ -40,40 +41,90 @@ class DocumentExtractor:
         self.temp_dir = Path("temp")
         self.temp_dir.mkdir(exist_ok=True)
         self.image_processor = PDFImageProcessor()
+        self.preprocessor = DocumentPreprocessor()
 
     async def extract_document_content(
         self,
         file_path: str,
         extract_images: bool = True
     ) -> Dict[str, Any]:
-        """
-        Extrait le contenu complet d'un document.
-        
-        Args:
-            file_path: Chemin du fichier
-            extract_images: Si True, extrait aussi les images
-            
-        Returns:
-            Contenu extrait avec métadonnées
-        """
+        """Extrait le contenu complet d'un document avec prétraitement."""
         try:
-            file_ext = Path(file_path).suffix.lower()
-            if file_ext not in self.supported_formats:
-                raise ValueError(f"Format de fichier non supporté: {file_ext}")
+            # Extraction du contenu brut
+            raw_content = await self._extract_raw_content(file_path, extract_images)
+            
+            # Prétraitement du contenu
+            processed_content = self.preprocessor.preprocess_document({
+                "content": raw_content.get("content", ""),
+                "metadata": raw_content.get("metadata", {}),
+                "title": Path(file_path).name,
+                "doc_id": str(file_path)
+            })
 
-            with metrics.timer("document_extraction"):
-                if file_ext == '.pdf':
-                    return await self._extract_pdf_content(file_path, extract_images)
-                elif file_ext == '.docx':
-                    return await self._extract_docx_content(file_path, extract_images)
-                else:
-                    return await self._extract_text_content(file_path)
+            # Fusion du contenu original avec le contenu prétraité
+            final_content = {
+                **raw_content,
+                "processed_sections": processed_content["sections"],
+                "processed_metadata": processed_content["metadata"],
+                "processing_info": {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "preprocessor_version": "1.0"
+                }
+            }
+
+            return final_content
 
         except Exception as e:
             logger.error(f"Erreur extraction document {file_path}: {e}")
             metrics.increment_counter("document_extraction_errors")
             raise
+            
+    async def _extract_raw_content(
+        self,
+        file_path: str,
+        extract_images: bool
+    ) -> Dict[str, Any]:
+        """Extrait le contenu brut du document selon son type."""
+        file_ext = Path(file_path).suffix.lower()
+        
+        if file_ext not in self.supported_formats:
+            raise ValueError(f"Format de fichier non supporté: {file_ext}")
 
+        if file_ext == '.pdf':
+            return await self._extract_pdf_content(file_path, extract_images)
+        elif file_ext == '.docx':
+            return await self._extract_docx_content(file_path, extract_images)
+        else:
+            return await self._extract_text_content(file_path)
+            
+    async def find_relevant_sections(
+        self,
+        query: str,
+        processed_docs: List[Dict],
+        max_sections: int = 3
+    ) -> List[Dict]:
+        """Trouve les sections les plus pertinentes pour une requête."""
+        try:
+            relevant_sections = self.preprocessor.get_most_relevant_sections(
+                processed_docs=processed_docs,
+                query=query,
+                max_sections=max_sections
+            )
+            
+            return [
+                {
+                    "title": section.title,
+                    "content": section.content,
+                    "score": section.importance_score,
+                    "metadata": section.metadata
+                }
+                for section in relevant_sections
+            ]
+
+        except Exception as e:
+            logger.error(f"Erreur recherche sections pertinentes: {e}")
+            return []
+            
     async def _extract_pdf_content(
         self,
         file_path: str,
