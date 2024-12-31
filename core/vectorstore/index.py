@@ -13,18 +13,19 @@ class IndexManager:
         self.es = es_client
         self.index_prefix = settings.ELASTICSEARCH_INDEX_PREFIX
         self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
-embedding
+        self.template_name = f"{self.index_prefix}_template"
+
     async def setup_indices(self):
         """Configure les indices nécessaires."""
         try:
-            # Supprime les anciens templates si nécessaire
-            template_name = f"{self.index_prefix}_template"
-            if await self.es.indices.exists_index_template(name=template_name):
-                await self.es.indices.delete_index_template(name=template_name)
+            # Suppression des anciens templates si nécessaires
+            if await self.es.indices.exists_index_template(name=self.template_name):
+                await self.es.indices.delete_index_template(name=self.template_name)
 
             await self._setup_templates()
             await self._ensure_indices_exist()
             logger.info("Configuration des indices terminée avec succès")
+            
         except Exception as e:
             logger.error(f"Erreur lors de la configuration des indices: {e}")
             raise
@@ -33,7 +34,7 @@ embedding
         """Configure les templates des indices."""
         template = {
             "index_patterns": [f"{self.index_prefix}_*"],
-            "priority": 1,  # Priorité plus élevée pour éviter les conflits
+            "priority": 1,
             "template": {
                 "settings": {
                     "analysis": {
@@ -41,11 +42,7 @@ embedding
                             "content_analyzer": {
                                 "type": "custom",
                                 "tokenizer": "standard",
-                                "filter": [
-                                    "lowercase",
-                                    "stop",
-                                    "snowball"
-                                ]
+                                "filter": ["lowercase", "stop", "snowball"]
                             }
                         }
                     },
@@ -86,13 +83,11 @@ embedding
         }
 
         try:
-            # Configuration du template
-            template_name = f"{self.index_prefix}_template"
             await self.es.indices.put_index_template(
-                name=template_name,
+                name=self.template_name,
                 body=template
             )
-            logger.info(f"Template {template_name} créé avec succès")
+            logger.info(f"Template {self.template_name} créé avec succès")
         except Exception as e:
             logger.error(f"Erreur lors de la création du template: {e}")
             raise
@@ -153,7 +148,7 @@ embedding
         documents: List[Dict],
         chunk_size: int = 500
     ) -> Dict[str, int]:
-        """Indexation par lots avec rapport d'erreurs."""
+        """Indexation par lots."""
         stats = {"success": 0, "errors": 0}
         
         try:
@@ -196,19 +191,6 @@ embedding
         except Exception as e:
             logger.error(f"Erreur indexation bulk: {e}")
             return stats
-
-    async def get_index_stats(self) -> Dict[str, Any]:
-        """Récupère les statistiques des indices."""
-        try:
-            stats = await self.es.indices.stats(index=f"{self.index_prefix}_*")
-            return {
-                "doc_count": stats["_all"]["primaries"]["docs"]["count"],
-                "store_size": stats["_all"]["primaries"]["store"]["size_in_bytes"],
-                "indices": stats["indices"]
-            }
-        except Exception as e:
-            logger.error(f"Erreur récupération stats indices: {e}")
-            return {}
 
     async def cleanup_old_documents(self, days: int = 30) -> int:
         """Nettoie les anciens documents."""
