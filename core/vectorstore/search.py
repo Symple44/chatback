@@ -234,51 +234,58 @@ class ElasticsearchClient:
                 "size": size,
                 "min_score": min_score,
                 "_source": ["title", "content", "application", "metadata"],
+                "timeout": "30s",
                 "query": {
                     "bool": {
-                        "must": [],
+                        "must": [
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": ["title^2", "content"],
+                                    "type": "best_fields",
+                                    "operator": "or",
+                                    "minimum_should_match": "75%",
+                                    "fuzziness": "AUTO"
+                                }
+                            }
+                        ],
                         "should": [],
                         "filter": []
                     }
                 }
             }
     
-            # Ajout de la recherche textuelle
-            search_body["query"]["bool"]["must"].append({
-                "multi_match": {
-                    "query": query,
-                    "fields": ["title^2", "content"],
-                    "type": "most_fields",
-                    "operator": "or",
-                    "minimum_should_match": "75%",
-                    "fuzziness": "AUTO"
-                }
-            })
-    
             # Ajout de la recherche vectorielle si vecteur présent
             if vector and len(vector) == self.embedding_dim:
-                vector_query = {
+                search_body["query"]["bool"]["should"].append({
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {"query_vector": vector}
-                        }
+                            "source": """
+                                double score = 0.0;
+                                if (doc['embedding'].size() == params.query_vector.length) {
+                                    score = cosineSimilarity(params.query_vector, 'embedding') + 1.0;
+                                }
+                                return score;
+                            """,
+                            "params": {
+                                "query_vector": vector
+                            }
+                        },
+                        "min_score": 0.5
                     }
-                }
-                search_body["query"]["bool"]["should"].append(vector_query)
-                search_body["query"]["bool"]["minimum_should_match"] = 1
+                })
     
             # Ajout des filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     if isinstance(value, (list, tuple)):
                         search_body["query"]["bool"]["filter"].append({
-                            "terms": {f"metadata.{key}": value}
+                            "terms": {f"metadata.{key}.keyword": value}
                         })
                     else:
                         search_body["query"]["bool"]["filter"].append({
-                            "term": {f"metadata.{key}": value}
+                            "term": {f"metadata.{key}.keyword": value}
                         })
     
             # Configuration du highlighting
@@ -291,21 +298,39 @@ class ElasticsearchClient:
                         "pre_tags": ["<mark>"],
                         "post_tags": ["</mark>"]
                     }
-                }
+                },
+                "require_field_match": False
             }
+    
+            # Log de la requête en mode debug
+            logger.debug(f"Requête Elasticsearch: {json.dumps(search_body, indent=2)}")
     
             # Exécution de la recherche avec retry
             for attempt in range(3):
                 try:
-                    # Ajout du timeout dans le corps de la requête plutôt qu'en paramètre
-                    search_body["timeout"] = "30s"
+                    # Vérification de la connexion avant la recherche
+                    if not await self.check_connection():
+                        raise ConnectionError("Elasticsearch non disponible")
+    
                     response = await self.es.search(
                         index=self.index_name,
                         body=search_body
                     )
+    
+                    logger.debug(f"Réponse Elasticsearch: {json.dumps(response, indent=2)}")
                     return self._format_search_results(response)
+    
+                except elasticsearch.ConnectionError as e:
+                    logger.error(f"Erreur de connexion (tentative {attempt + 1}/3): {e}")
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(1 * (attempt + 1))
+                except elasticsearch.RequestError as e:
+                    logger.error(f"Erreur de requête: {e.info}")
+                    raise
                 except Exception as e:
-                    if attempt == 2:  # Dernière tentative
+                    logger.error(f"Erreur inattendue: {e}")
+                    if attempt == 2:
                         raise
                     await asyncio.sleep(1 * (attempt + 1))
     
@@ -316,30 +341,42 @@ class ElasticsearchClient:
     
     def _format_search_results(self, response: Dict) -> List[Dict]:
         """Formate les résultats de recherche."""
-        results = []
-        for hit in response["hits"]["hits"]:
-            source = hit["_source"]
-            result = {
-                "title": source["title"],
-                "content": source["content"],
-                "application": source.get("application", ""),
-                "score": round(hit["_score"], 4),
-                "metadata": source.get("metadata", {}),
-                "highlights": []
-            }
-            
-            # Ajout des highlights
-            if "highlight" in hit:
-                result["highlights"] = hit["highlight"].get("content", [])
+        try:
+            results = []
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                result = {
+                    "title": source.get("title", ""),
+                    "content": source.get("content", ""),
+                    "application": source.get("application", ""),
+                    "score": round(hit["_score"], 4),
+                    "metadata": source.get("metadata", {}),
+                    "highlights": []
+                }
                 
-            # Nettoyage du contenu si nécessaire
-            if len(result["content"]) > 1000:
-                result["content"] = result["content"][:1000] + "..."
+                # Ajout des highlights
+                if "highlight" in hit:
+                    result["highlights"] = hit["highlight"].get("content", [])
+                    
+                # Nettoyage du contenu si nécessaire
+                if len(result["content"]) > 1000:
+                    result["content"] = result["content"][:1000] + "..."
+                    
+                results.append(result)
                 
-            results.append(result)
+            return results
+        except Exception as e:
+            logger.error(f"Erreur formatage résultats: {e}")
+            return []
             
-        return results
-
+    async def check_connection(self) -> bool:
+        """Vérifie la connexion à Elasticsearch."""
+        try:
+            return await self.es.ping()
+        except Exception as e:
+            logger.error(f"Erreur vérification connexion Elasticsearch: {e}")
+            return False
+    
     async def get_document(self, doc_id: str) -> Optional[Dict]:
         """Récupère un document par ID."""
         try:
