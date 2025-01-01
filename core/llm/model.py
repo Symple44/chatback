@@ -302,9 +302,9 @@ class ModelInference:
             # Fallback si aucune correspondance n'est trouvée
             return response_text.strip()
 
-    except Exception as e:
-        logger.error(f"Erreur extraction réponse: {e}")
-        return response_text
+        except Exception as e:
+            logger.error(f"Erreur extraction réponse: {e}")
+            return response_text
         
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""
