@@ -246,33 +246,104 @@ class ElasticsearchClient:
         importance_score: float = 1.0,
         refresh: bool = True
     ) -> bool:
-        """Indexe un document avec gestion améliorée des métadonnées."""
+        """
+        Indexe un document avec prétraitement et gestion améliorée des métadonnées.
+        
+        Args:
+            title: Titre du document
+            content: Contenu du document
+            vector: Vecteur d'embedding optionnel
+            metadata: Métadonnées additionnelles
+            importance_score: Score d'importance du document
+            refresh: Rafraîchir l'index immédiatement
+            
+        Returns:
+            bool: Succès de l'indexation
+        """
         try:
+            # Prétraitement du document
+            processed_doc = self.preprocessor.preprocess_document({
+                "content": content,
+                "metadata": metadata or {},
+                "title": title,
+                "doc_id": hashlib.sha256(f"{title}-{content}".encode()).hexdigest()
+            })
+
+            # Construction du document enrichi
             doc = {
                 "title": title,
                 "content": content,
-                "metadata": metadata or {},
+                "processed_content": {
+                    "sections": processed_doc["sections"],
+                    "importance_scores": [s.importance_score for s in processed_doc["sections"]]
+                },
+                "metadata": {
+                    **(metadata or {}),
+                    "word_count": len(content.split()),
+                    "processed_sections": len(processed_doc["sections"]),
+                    "language": processed_doc.get("metadata", {}).get("language", "fr"),
+                    "revision": processed_doc.get("metadata", {}).get("revision", "1"),
+                    "source": processed_doc.get("metadata", {}).get("source", "unknown"),
+                    "processing_info": {
+                        "processor_version": "1.0",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                },
                 "processed_date": datetime.utcnow().isoformat(),
-                "importance_score": importance_score
+                "importance_score": importance_score,
+                "indexing_status": {
+                    "version": 1,
+                    "last_update": datetime.utcnow().isoformat(),
+                    "has_embedding": vector is not None
+                }
             }
 
-            if vector is not None and len(vector) == self.embedding_dim:
-                doc["embedding"] = vector
+            # Ajout du vecteur si fourni et valide
+            if vector is not None:
+                if len(vector) != self.embedding_dim:
+                    logger.warning(
+                        f"Dimension du vecteur incorrecte: {len(vector)} != {self.embedding_dim}"
+                    )
+                else:
+                    doc["embedding"] = vector
 
-            response = await self.es.index(
-                index=f"{self.index_prefix}_documents",
-                document=doc,
-                refresh=refresh
-            )
-            
-            metrics.increment_counter("documents_indexed")
-            return bool(response.get("_shards", {}).get("successful", 0))
+            # Indexation avec retry en cas d'erreur
+            for attempt in range(3):
+                try:
+                    response = await self.es.index(
+                        index=f"{self.index_prefix}_documents",
+                        document=doc,
+                        refresh=refresh,
+                        pipeline="document_processing",  # Pipeline de traitement optionnel
+                        timeout="30s"
+                    )
+                    
+                    successful = bool(response.get("_shards", {}).get("successful", 0))
+                    if successful:
+                        metrics.increment_counter("documents_indexed")
+                        logger.info(
+                            f"Document indexé avec succès: {title} "
+                            f"({len(processed_doc['sections'])} sections)"
+                        )
+                    return successful
+
+                except Exception as e:
+                    if attempt == 2:  # Dernière tentative
+                        raise
+                    logger.warning(f"Tentative {attempt + 1} échouée: {e}")
+                    await asyncio.sleep(1 * (2 ** attempt))  # Backoff exponentiel
 
         except Exception as e:
-            logger.error(f"Erreur indexation document: {e}")
+            logger.error(
+                f"Erreur indexation document {title}: {e}",
+                extra={
+                    "document_title": title,
+                    "error": str(e),
+                    "has_vector": vector is not None
+                }
+            )
             metrics.increment_counter("indexing_errors")
             return False
-
     async def search_documents(
         self,
         query: str,

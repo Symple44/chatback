@@ -41,12 +41,12 @@ class DocumentReference(BaseModel):
     )
     
     title: str = Field(..., min_length=1, max_length=255)
-    page: Optional[int] = Field(None, ge=1)
+    page: Optional[int] = Field(default=0, ge=1)  
     score: float = Field(..., ge=0.0)
-    content: Optional[str] = None
+    content: str = Field(default="")  
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    vector_id: Optional[str] = None
-    last_updated: Optional[datetime] = None
+    vector_id: str = Field(default_factory=lambda: str(uuid.uuid4()))  
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
 
     @validator('score')
     def normalize_score(cls, v: float) -> float:
@@ -163,16 +163,20 @@ class ChatResponse(BaseModel):
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     processing_time: float = Field(..., ge=0.0)
     tokens_used: int = Field(..., ge=0)
-    tokens_details: Optional[Dict[str, int]] = None
+    tokens_details: Optional[Dict[str, int]] = Field(default_factory=dict)
     cost: float = Field(default=0.0, ge=0.0)
-    application: Optional[str] = None
-    fragments: Optional[List[DocumentFragment]] = None
-    similar_questions: Optional[List[SimilarQuestion]] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    application: str = Field(default="chat_api") 
+    fragments: List[DocumentFragment] = Field(default_factory=list)  
+    similar_questions: List[SimilarQuestion] = Field(default_factory=list)  
+    metadata: Dict[str, Any] = Field(default_factory=lambda: {
+        "source": "model",
+        "timestamp": datetime.utcnow().isoformat(),
+        "session_context": {}
+    })
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    query_vector: Optional[List[float]] = None
-    response_vector: Optional[List[float]] = None
-    context_used: Optional[Dict[str, Any]] = None
+    query_vector: List[float] = Field(default_factory=list) 
+    response_vector: List[float] = Field(default_factory=list)  
+    context_used: Dict[str, Any] = Field(default_factory=dict)  
     suggested_actions: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 

@@ -13,11 +13,12 @@ class ProcessedSection:
 
 class DocumentPreprocessor:
     def __init__(self):
+        """Initialisation du processeur de documents."""
         self.section_markers = [
             r"^(?:Pour|Comment)\s+[a-zéèêë].*?$",  # Instructions directes
             r"^(?:\d+[\).]|[-•])\s+.*$",           # Points numérotés ou puces
             r"^(?:Étape|Phase|Partie)\s+.*:?$",    # Sections structurées
-            r"^.*?\b(?:cliquez|sélectionnez|renseignez)\b.*$"  # Actions utilisateur
+            r"^.*?\b(?:cliquez|sélectionnez|renseignez|faites)\b.*$"  # Actions utilisateur
         ]
         
         # Patterns à nettoyer
@@ -26,7 +27,12 @@ class DocumentPreprocessor:
             (r'^\s+', ''),              # Espaces début de ligne
             (r'\s+$', ''),              # Espaces fin de ligne
             (r'\n{3,}', '\n\n'),        # Lignes vides multiples
-            (r'[^\S\n]+', ' ')          # Espaces non-break
+            (r'[^\S\n]+', ' '),         # Espaces non-break
+            (r'2M-MANAGER.*?\n', ''),   # En-têtes
+            (r'2CM-MANAGER.*?\n', ''),   # En-têtes
+            (r'Page \d+ sur \d+', ''),  # Numéros de page
+            (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
+            (r'<\|\w+\|>.*?<\/\|\w+\|>', '', re.DOTALL)  # Balises de formatage
         ]
 
     def preprocess_document(self, doc: Dict) -> Dict:

@@ -23,6 +23,7 @@ class PDFProcessor:
         """
         self.es_client = es_client
         self.image_processor = PDFImageProcessor()
+        self.preprocessor = DocumentPreprocessor()
         self.temp_dir = Path("temp/pdf")
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,21 +45,34 @@ class PDFProcessor:
         try:
             logger.info(f"Traitement du PDF: {file_path}")
             
-            # Extraction du texte
-            text_content = await self.extract_text(file_path)
+            # Extraction du texte avec structure des pages
+            extracted_content = await self.extract_text(file_path)
+            
+            # Prétraitement avec DocumentPreprocessor
+            processed_content = self.preprocessor.preprocess_document({
+                "content": extracted_content["full_text"],
+                "metadata": {
+                    **(await self._extract_metadata(file_path)),
+                    "pages_info": extracted_content["pages"],
+                    "total_pages": extracted_content["total_pages"]
+                },
+                "title": Path(file_path).name,
+                "doc_id": str(file_path)
+            })
             
             # Extraction des images si demandé
             images = []
             if extract_images:
                 images = await self.image_processor.extract_images_from_pdf(file_path)
             
-            # Lecture des métadonnées
-            metadata = await self._extract_metadata(file_path)
-            
             return {
-                "content": text_content,
+                "content": processed_content["sections"],  # Contenu prétraité
+                "pages": extracted_content["pages"],  # Information structurée des pages
                 "images": images,
-                "metadata": metadata,
+                "metadata": {
+                    **processed_content["metadata"],
+                    "page_count": extracted_content["total_pages"]
+                },
                 "processed_at": datetime.utcnow().isoformat()
             }
             
@@ -66,33 +80,49 @@ class PDFProcessor:
             logger.error(f"Erreur traitement PDF {file_path}: {e}")
             raise
 
-    async def extract_text(self, file_path: str) -> str:
+    async def extract_text(self, file_path: str) -> Dict[str, str]:
         """
-        Extrait le texte d'un PDF.
+        Extrait le texte d'un PDF avec structure des pages.
         
         Args:
             file_path: Chemin du fichier PDF
-            
+                
         Returns:
-            Texte extrait
+            Dict contenant le texte complet et la structure des pages
         """
         logger.info(f"Extraction du texte de {file_path}")
-        text_content = ""
         
         try:
             doc = fitz.open(file_path)
+            pages_data = []
+            full_text = ""
             
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 text = page.get_text()
                 
-                # Ajout du numéro de page et du texte
-                text_content += f"\n=== Page {page_num + 1} ===\n{text}"
+                # Structure de la page
+                page_data = {
+                    "number": page_num + 1,
+                    "content": text,
+                    "dimensions": {
+                        "width": page.rect.width,
+                        "height": page.rect.height
+                    }
+                }
+                pages_data.append(page_data)
+                
+                # Ajout à la version complète avec marqueur de page
+                full_text += f"\n=== Page {page_num + 1} ===\n{text}"
                 
                 logger.debug(f"Page {page_num + 1} extraite")
             
-            return text_content
-            
+            return {
+                "text": full_text.strip(),
+                "pages": pages_data,
+                "total_pages": len(pages_data)
+            }
+                
         except Exception as e:
             logger.error(f"Erreur lors de l'extraction: {e}")
             raise
