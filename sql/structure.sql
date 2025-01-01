@@ -97,6 +97,25 @@ CREATE TABLE message_embeddings (
     embedding_metadata  JSONB DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS error_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    error_type VARCHAR(100) NOT NULL,
+    error_message TEXT NOT NULL,
+    stack_trace TEXT,
+    component VARCHAR(100),
+    severity VARCHAR(20) DEFAULT 'error',
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    session_id VARCHAR(255),
+    error_metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT severity_check CHECK (severity IN ('debug', 'info', 'warning', 'error', 'critical'))
+);
+
+-- Index pour optimiser les requêtes
+CREATE INDEX IF NOT EXISTS idx_error_type ON error_logs(error_type);
+CREATE INDEX IF NOT EXISTS idx_error_severity ON error_logs(severity);
+CREATE INDEX IF NOT EXISTS idx_error_created ON error_logs(created_at DESC);
+
 CREATE INDEX idx_message_embedding_type ON message_embeddings(embedding_type);
 CREATE INDEX idx_message_vector ON message_embeddings USING gin(vector);
 CREATE INDEX idx_message_metadata ON message_embeddings USING gin(embedding_metadata);
