@@ -256,7 +256,7 @@ class ModelInference:
 
             # 8. Préparation de la réponse
             response = {
-                "response": self._extract_response(response_text),
+                "response": response_text,
                 "confidence_score": min(confidence_score, 1.0),
                 "processing_time": processing_time,
                 "tokens_used": {
@@ -290,33 +290,6 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
-    
-    def _extract_response(self, response_text: str) -> str:
-        """
-        Extrait uniquement la partie réponse du texte généré
-        """
-        try:
-            # Étapes de nettoyage
-            # 1. Supprimer le contenu système
-            response = response_text.split('</|system|>')[-1]
-            
-            # 2. Supprimer le contexte
-            response = response.split('</|context|>')[-1]
-            
-            # 3. Supprimer l'historique
-            response = response.split('</|history|>')[-1]
-            
-            # 4. Extraire la partie après <|assistant|>
-            response = response.split('<|assistant|>')[-1]
-            
-            # 5. Supprimer les balises résiduelles
-            response = response.replace('<|user|>', '').replace('Réponse :', '').strip()
-            
-            return response
-
-        except Exception as e:
-            logger.error(f"Erreur extraction réponse: {e}")
-            return response_text.strip()
         
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""
