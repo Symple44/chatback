@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     # Machine Learning
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     MODEL_NAME: str = os.getenv("MODEL_NAME", "mistralai/Mixtral-8x7B-Instruct-v0.1")
+    MODEL_NAME_SUMMARIZER: str = os.getenv("MODEL_NAME_SUMMARIZER", "csebuetnlp/mT5_multilingual_XLSum")
     MODEL_REVISION: str = os.getenv("MODEL_REVISION", "main")
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
