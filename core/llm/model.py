@@ -300,10 +300,53 @@ class ModelInference:
             logger.info(f"Génération réussie en {processing_time:.2f}s")
             return response
 
-    except Exception as e:
-        logger.error(f"Erreur génération: {str(e)}", exc_info=True)
-        metrics.increment_counter("generation_errors")
-        raise
+        except Exception as e:
+            logger.error(f"Erreur génération: {str(e)}", exc_info=True)
+            metrics.increment_counter("generation_errors")
+            raise
+
+    async def _prepare_chat_context(
+        self,
+        query: str,
+        context_docs: List[Dict],
+        conversation_history: Optional[List[Dict]] = None
+    ) -> str:
+        """Prépare le contexte pour le chat."""
+        try:
+            # Utilisation du nouveau système de prompts
+            prompt = self.prompt_system.build_chat_prompt(
+                messages=conversation_history or [],
+                context=self._format_context_docs(context_docs),
+                query=query
+            )
+            
+            return prompt
+            
+        except Exception as e:
+            logger.error(f"Erreur préparation contexte: {e}")
+            return self._build_fallback_prompt(query)
+            
+    def _format_context_docs(self, docs: List[Dict]) -> str:
+        """Formate les documents de contexte."""
+        if not docs:
+            return ""
+            
+        formatted_docs = []
+        for doc in docs:
+            if "processed_sections" in doc:
+                # Utilise les sections prétraitées
+                sections = doc["processed_sections"]
+                content = "\n\n".join(s["content"] for s in sections)
+            else:
+                content = doc.get("content", "")
+                
+            formatted_docs.append(content)
+            
+        return "\n\n---\n\n".join(formatted_docs)
+        
+    def _build_fallback_prompt(self, query: str) -> str:
+        """Construit un prompt de secours en cas d'erreur."""
+        return f"Question: {query}\nRéponse:"
 
     def _calculate_confidence(self, context_docs: Optional[List[Dict]]) -> float:
         """Calcule le score de confiance."""
