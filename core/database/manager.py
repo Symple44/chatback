@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from .models import (
     User, ChatSession, ChatHistory, ReferencedDocument, 
-    MessageEmbedding, UsageMetric, SystemConfig
+    MessageEmbedding, UsageMetric, SystemConfig, ErrorLog
 )
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
