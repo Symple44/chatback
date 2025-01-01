@@ -210,7 +210,10 @@ class ModelInference:
                 logger.debug(f"Prompt Chain-of-Thought généré: {prompt[:500]}...")
 
             # 5. Configuration de génération
-            generation_config = GenerationConfig(**settings.generation_config())
+            generation_config = GenerationConfig(**{
+                k: v for k, v in settings.generation_config.items() 
+                if k in GenerationConfig.__init__.__code__.co_varnames
+            })
 
             # 6. Génération avec gestion automatique de la RAM/VRAM
             with metrics.timer("model_inference"):
