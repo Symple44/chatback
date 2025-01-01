@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, UUID4, EmailStr, validator, constr, Confi
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import numpy as np
+import uuid
 
 class UserResponse(BaseModel):
     """Réponse utilisateur."""
