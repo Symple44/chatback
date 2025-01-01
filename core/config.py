@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     MODEL_NAME: str = os.getenv("MODEL_NAME", "mistralai/Mixtral-8x7B-Instruct-v0.1")
     MODEL_REVISION: str = os.getenv("MODEL_REVISION", "main")
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+    EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
 
     # GPU Configuration
     USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
