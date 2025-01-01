@@ -1,5 +1,5 @@
 # core/vectorstore/index.py
-from typing import Dict, List, Optional, Union, Any, Generator
+from typing import Dict, List, Optional, Union, Any, Generator, Tuple
 from datetime import datetime
 from elasticsearch.helpers import BulkIndexError, async_bulk
 import asyncio
