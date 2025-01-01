@@ -225,6 +225,7 @@ class ModelInference:
                 with context_manager:
                     with torch.no_grad():
                         # Tokenisation
+                        logger.info(prompt)
                         inputs = self.tokenizer_manager(
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
@@ -240,7 +241,6 @@ class ModelInference:
 
                         # Décodage et nettoyage
                         response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
-                        actual_response = self.prompt_system.extract_response(response_text)
                         
 
             # 7. Post-traitement et métriques
@@ -256,7 +256,7 @@ class ModelInference:
 
             # 8. Préparation de la réponse
             response = {
-                "response": actual_response,
+                "response": response_text,
                 "confidence_score": min(confidence_score, 1.0),
                 "processing_time": processing_time,
                 "tokens_used": {

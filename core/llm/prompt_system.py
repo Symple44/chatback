@@ -259,40 +259,6 @@ Basé sur les documents suivants :
         
         message = messages.get(key, messages["error"])
         return message.format(**kwargs) if kwargs else message
-        
-    def extract_response(self, full_text: str) -> str:
-        """
-        Extrait la réponse réelle du texte généré
-        
-        Args:
-            full_text (str): Texte complet généré
-        
-        Returns:
-            str: Réponse extraite
-        """
-        # Expressions pour nettoyer et extraire la réponse
-        clean_patterns = [
-            r"Réponse détaillée\s*:?\s*(.*)",  # Cherche après "Réponse détaillée:"
-            r"Réponse\s*:?\s*(.*)",            # Cherche après "Réponse:"
-        ]
-        
-        for pattern in clean_patterns:
-            match = re.search(pattern, full_text, re.DOTALL)
-            if match:
-                response = match.group(1).strip()
-                if response:
-                    return response
-        
-        # Fallback: prendre les premières lignes significatives
-        lines = [
-            line.strip() for line in full_text.split('\n') 
-            if line.strip() and not any(keyword in line.lower() for keyword in [
-                'consignes', 'analyse', 'décomposition', 'formulation', 
-                'contexte', 'question', 'points clés'
-            ])
-        ]
-        
-        return '\n'.join(lines[:3]) if lines else full_text
 
     def truncate_messages(
         self,
