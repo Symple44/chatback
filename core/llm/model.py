@@ -249,7 +249,6 @@ class ModelInference:
                         inputs = self.tokenizer_manager(
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
-                            truncation=True,
                             return_tensors="pt"
                         ).to(self.model.device)
     
