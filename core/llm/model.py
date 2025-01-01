@@ -293,19 +293,27 @@ class ModelInference:
         Extrait uniquement la partie réponse du texte généré
         """
         try:
-            # Rechercher la partie après la balise <|assistant|>
-            match = re.search(r'<\|assistant\|>\s*Réponse\s*:(.*)', response_text, re.DOTALL)
+            # Étapes de nettoyage
+            # 1. Supprimer le contenu système
+            response = response_text.split('</|system|>')[-1]
             
-            if match:
-                response = match.group(1).strip()
-                return response
+            # 2. Supprimer le contexte
+            response = response.split('</|context|>')[-1]
             
-            # Fallback si aucune correspondance n'est trouvée
-            return response_text.strip()
+            # 3. Supprimer l'historique
+            response = response.split('</|history|>')[-1]
+            
+            # 4. Extraire la partie après <|assistant|>
+            response = response.split('<|assistant|>')[-1]
+            
+            # 5. Supprimer les balises résiduelles
+            response = response.replace('<|user|>', '').replace('Réponse :', '').strip()
+            
+            return response
 
         except Exception as e:
             logger.error(f"Erreur extraction réponse: {e}")
-            return response_text
+            return response_text.strip()
         
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""
