@@ -161,10 +161,8 @@ class DatabaseManager:
         limit: int = 5,
         metadata: Optional[Dict] = None
     ) -> List[Dict]:
-        """Trouve des questions similaires basées sur la similarité vectorielle."""
         try:
             async with self.session_factory() as session:
-                # Conversion du vecteur au format PostgreSQL correct
                 vector_str = "[" + ",".join(map(str, vector)) + "]"
                 
                 query = text("""
@@ -184,7 +182,7 @@ class DatabaseManager:
                 result = await session.execute(
                     query,
                     {
-                        "vector": vector_str,  # Vecteur au format string correct
+                        "vector": vector_str,
                         "threshold": threshold,
                         "limit": limit
                     }
@@ -194,7 +192,10 @@ class DatabaseManager:
                     {
                         "query": row.query,
                         "response": row.response,
-                        "similarity": row.similarity
+                        "similarity": row.similarity,
+                        "timestamp": datetime.utcnow(),
+                        "user_id": None,
+                        "session_id": None
                     } 
                     for row in result
                 ]
