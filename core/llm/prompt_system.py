@@ -89,20 +89,14 @@ Basé sur les documents suivants :
     Question à traiter :
     {query}
 
-    Étape 1 - Analyse : 
-    - Informations pertinentes :
-
-    Étape 2 - Raisonnement :
-    - Décomposition de la question :
-
-    Étape 3 - Réponse finale :
+    Réponse :
     """
             
             return prompt
 
         except Exception as e:
             logger.error(f"Erreur génération prompt chain-of-thought: {e}")
-            return self.build_chat_prompt(messages, context, query, lang)
+            return f"Question: {query}\nRéponse:"
 
     def build_chat_prompt(
         self,

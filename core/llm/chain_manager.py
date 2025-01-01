@@ -159,7 +159,7 @@ class LangchainManager:
                 
             if content:
                 title = doc.get("title", "Document")
-                context_parts.append(f"[{title}]\n{content}")
+                context_parts.append(f"[Source: {title}]\n{content}")
         
         return "\n\n---\n\n".join(context_parts) if context_parts else ""
 
