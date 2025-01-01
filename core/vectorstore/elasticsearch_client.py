@@ -58,9 +58,8 @@ class ElasticsearchClient:
                 raise
 
     async def setup_indices(self):
-        """Configure les indices nécessaires."""
+        """Configure les indices avec mapping optimisé."""
         try:
-            # Configuration du template pour les documents
             template = {
                 "index_patterns": [f"{self.index_prefix}_*"],
                 "priority": 100,
@@ -71,13 +70,39 @@ class ElasticsearchClient:
                                 "content_analyzer": {
                                     "type": "custom",
                                     "tokenizer": "standard",
-                                    "filter": ["lowercase", "stop", "snowball"]
+                                    "filter": [
+                                        "lowercase",
+                                        "asciifolding",
+                                        "word_delimiter_graph",
+                                        "fr_stop",
+                                        "fr_stemmer"
+                                    ]
+                                }
+                            },
+                            "filter": {
+                                "fr_stop": {
+                                    "type": "stop",
+                                    "stopwords": "_french_"
+                                },
+                                "fr_stemmer": {
+                                    "type": "stemmer",
+                                    "language": "light_french"
                                 }
                             }
                         },
                         "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
                         "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
-                        "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL
+                        "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
+                        "index": {
+                            "similarity": {
+                                "scripted_tfidf": {
+                                    "type": "scripted",
+                                    "script": {
+                                        "source": "double tf = Math.sqrt(doc.freq); double idf = Math.log((field.docCount+1.0)/(term.docFreq+1.0)) + 1.0; return query.boost * tf * idf;"
+                                    }
+                                }
+                            }
+                        }
                     },
                     "mappings": {
                         "properties": {
@@ -94,18 +119,31 @@ class ElasticsearchClient:
                             },
                             "content": {
                                 "type": "text",
-                                "analyzer": "content_analyzer"
+                                "analyzer": "content_analyzer",
+                                "term_vector": "with_positions_offsets",
+                                "similarity": "scripted_tfidf"
                             },
                             "embedding": {
                                 "type": "dense_vector",
-                                "dims": settings.ELASTICSEARCH_EMBEDDING_DIM,
-                                "index": True,
-                                "similarity": "cosine"
+                                "dims": self.embedding_dim,
+                                "similarity": "cosine",
+                                "index": True
                             },
                             "metadata": {
                                 "type": "object",
-                                "dynamic": True
-                            }
+                                "dynamic": True,
+                                "properties": {
+                                    "source": {"type": "keyword"},
+                                    "last_updated": {"type": "date"},
+                                    "confidence": {"type": "float"},
+                                    "tags": {"type": "keyword"},
+                                    "application": {"type": "keyword"},
+                                    "language": {"type": "keyword"},
+                                    "version": {"type": "keyword"}
+                                }
+                            },
+                            "processed_date": {"type": "date"},
+                            "importance_score": {"type": "float"}
                         }
                     }
                 }
@@ -117,12 +155,13 @@ class ElasticsearchClient:
                 await self.es.indices.delete_index_template(name=template_name)
             except Exception:
                 pass
+
             await self.es.indices.put_index_template(
                 name=template_name,
                 body=template
             )
 
-            # Création des indices si nécessaire
+            # Création des indices nécessaires
             indices = [
                 f"{self.index_prefix}_documents",
                 f"{self.index_prefix}_vectors"
@@ -204,29 +243,31 @@ class ElasticsearchClient:
         content: str,
         vector: Optional[List[float]] = None,
         metadata: Optional[Dict] = None,
+        importance_score: float = 1.0,
         refresh: bool = True
     ) -> bool:
-        """Indexe un document."""
+        """Indexe un document avec gestion améliorée des métadonnées."""
         try:
             doc = {
                 "title": title,
                 "content": content,
                 "metadata": metadata or {},
-                "timestamp": datetime.utcnow().isoformat()
+                "processed_date": datetime.utcnow().isoformat(),
+                "importance_score": importance_score
             }
 
             if vector is not None and len(vector) == self.embedding_dim:
                 doc["embedding"] = vector
 
-            await self.es.index(
+            response = await self.es.index(
                 index=f"{self.index_prefix}_documents",
                 document=doc,
                 refresh=refresh
             )
             
             metrics.increment_counter("documents_indexed")
-            return True
-            
+            return bool(response.get("_shards", {}).get("successful", 0))
+
         except Exception as e:
             logger.error(f"Erreur indexation document: {e}")
             metrics.increment_counter("indexing_errors")
