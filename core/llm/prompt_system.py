@@ -52,6 +52,47 @@ Basé sur les documents suivants :
             "user": "Question utilisateur :\n{message}",
             "assistant": "Réponse assistant :\n{message}"
         }
+    
+    def build_chain_of_thought_prompt(
+        self,
+        messages: List[Dict],
+        context: Optional[str] = None,
+        query: Optional[str] = None,
+        lang: str = "fr"
+    ) -> str:
+        try:
+            context_summary = self._extract_key_points(context) if context else ""
+            
+            prompt = f"""Instructions de raisonnement :
+
+    1. Analyse du contexte
+    - Identifier les informations pertinentes
+    - Repérer les éléments clés liés à la question
+
+    2. Décomposition logique
+    - Décomposer la question
+    - Associer chaque partie au contexte
+    - Évaluer la complétude de la réponse
+
+    3. Formulation de la réponse
+    - Réponse structurée
+    - Utiliser STRICTEMENT le contexte
+    - Précision et concision
+
+    Contexte : {context or "Aucun contexte"}
+
+    Points clés : 
+    {" • ".join(context_summary) if context_summary else "Aucun point clé"}
+
+    Question : {query}
+
+    Raisonnement détaillé :"""
+            
+            return prompt
+
+        except Exception as e:
+            logger.error(f"Erreur prompt chain-of-thought: {e}")
+            return self.build_chat_prompt(messages, context, query, lang)
 
     def build_chat_prompt(
         self,

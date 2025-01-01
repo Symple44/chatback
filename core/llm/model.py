@@ -152,23 +152,11 @@ class ModelInference:
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr",
     ) -> Dict:
-        """
-        Génère une réponse basée sur le contexte et l'historique de la conversation.
-        
-        Args:
-            query: Question ou requête de l'utilisateur
-            context_docs: Documents de contexte avec leurs sections prétraitées
-            conversation_history: Historique des messages précédents
-            language: Code de langue (défaut: fr)
-            
-        Returns:
-            Dict contenant la réponse et les métadonnées associées
-        """
         try:
             start_time = datetime.utcnow()
             metrics.increment_counter("generation_requests")
             logger.info(f"Début génération réponse pour query: {query[:100]}...")
-    
+
             # 1. Préparation du contexte
             relevant_sections = []
             if context_docs:
@@ -186,11 +174,11 @@ class ModelInference:
                             "importance_score": 1.0,
                             "metadata": doc.get("metadata", {})
                         })
-    
+
             # Tri et sélection des sections les plus pertinentes
             relevant_sections.sort(key=lambda x: float(x.get("importance_score", 0)), reverse=True)
             top_sections = relevant_sections[:3]  # Limite aux 3 meilleures sections
-    
+
             # 2. Préparation de l'historique
             processed_history = []
             if conversation_history:
@@ -201,48 +189,36 @@ class ModelInference:
                             "role": msg.get("role", "user"),
                             "content": msg.get("content", "")
                         })
-    
+
             # 3. Construction du contexte formaté
             formatted_context = "\n\n".join([
                 f"[Source: {section.get('metadata', {}).get('source', 'Document')}]\n"
                 f"{section['content']}"
                 for section in top_sections
             ])
-    
-            # 4. Génération du prompt
+
+            # 4. Génération du prompt avec Chain-of-Thought
             with metrics.timer("prompt_construction"):
-                prompt = self.prompt_system.build_chat_prompt(
+                prompt = self.prompt_system.build_chain_of_thought_prompt(
                     messages=processed_history,
                     context=formatted_context,
                     lang=language,
                     query=query
                 )
-    
+
                 # Log du prompt en mode debug
-                logger.debug(f"Prompt généré: {prompt[:500]}...")
-    
+                logger.debug(f"Prompt Chain-of-Thought généré: {prompt[:500]}...")
+
             # 5. Configuration de génération
-            generation_config = GenerationConfig(
-                temperature=float(settings.TEMPERATURE),
-                top_p=float(settings.TOP_P),
-                max_new_tokens=int(settings.MAX_NEW_TOKENS),
-                min_new_tokens=int(settings.MIN_NEW_TOKENS),
-                do_sample=settings.DO_SAMPLE,
-                num_beams=int(settings.NUM_BEAMS),
-                repetition_penalty=float(settings.REPETITION_PENALTY),
-                length_penalty=float(settings.LENGTH_PENALTY),
-                pad_token_id=self.tokenizer_manager.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer_manager.tokenizer.eos_token_id,
-                bos_token_id=self.tokenizer_manager.tokenizer.bos_token_id,
-            )
-    
+            generation_config = GenerationConfig(**settings.generation_config())
+
             # 6. Génération avec gestion automatique de la RAM/VRAM
             with metrics.timer("model_inference"):
                 if settings.USE_FP16:
                     context_manager = torch.amp.autocast('cuda')
                 else:
                     context_manager = nullcontext()
-    
+
                 with context_manager:
                     with torch.no_grad():
                         # Tokenisation
@@ -251,28 +227,28 @@ class ModelInference:
                             max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
                         ).to(self.model.device)
-    
+
                         # Génération
                         outputs = self.model.generate(
                             **inputs,
-                            generation_config=generation_config,  # Objet GenerationConfig directement
+                            generation_config=generation_config,
                             use_cache=True
                         )
-    
+
                         # Décodage et nettoyage
                         response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
-    
+
             # 7. Post-traitement et métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
             input_tokens = len(inputs.input_ids[0])
             output_tokens = len(outputs[0]) - input_tokens
-    
+
             # Calcul du score de confiance basé sur les sections utilisées
             confidence_score = sum(
                 float(section.get("importance_score", 0)) 
                 for section in top_sections
             ) / max(len(top_sections), 1)
-    
+
             # 8. Préparation de la réponse
             response = {
                 "response": response_text,
@@ -296,15 +272,15 @@ class ModelInference:
                     "language": language
                 }
             }
-    
+
             # Log des métriques
             metrics.increment_counter("successful_generations")
             metrics.set_gauge("last_generation_time", processing_time)
             metrics.set_gauge("last_tokens_used", input_tokens + output_tokens)
-    
+
             logger.info(f"Génération réussie en {processing_time:.2f}s")
             return response
-    
+
         except Exception as e:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
