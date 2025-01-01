@@ -246,7 +246,7 @@ class ModelInference:
                 with context_manager:
                     with torch.no_grad():
                         # Tokenisation
-                        inputs = self.tokenizer_manager.encode(
+                        inputs = self.tokenizer_manager(
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
                             truncation=True,
