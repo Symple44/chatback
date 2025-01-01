@@ -288,19 +288,19 @@ class ModelInference:
             raise
     
     def _extract_response(self, response_text: str) -> str:
-    """
-    Extrait uniquement la partie réponse du texte généré
-    """
-    try:
-        # Rechercher la partie après la balise <|assistant|>
-        match = re.search(r'<\|assistant\|>\s*Réponse\s*:(.*)', response_text, re.DOTALL)
-        
-        if match:
-            response = match.group(1).strip()
-            return response
-        
-        # Fallback si aucune correspondance n'est trouvée
-        return response_text.strip()
+        """
+        Extrait uniquement la partie réponse du texte généré
+        """
+        try:
+            # Rechercher la partie après la balise <|assistant|>
+            match = re.search(r'<\|assistant\|>\s*Réponse\s*:(.*)', response_text, re.DOTALL)
+            
+            if match:
+                response = match.group(1).strip()
+                return response
+            
+            # Fallback si aucune correspondance n'est trouvée
+            return response_text.strip()
 
     except Exception as e:
         logger.error(f"Erreur extraction réponse: {e}")
