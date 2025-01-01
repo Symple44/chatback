@@ -101,7 +101,8 @@ Basé sur les documents suivants :
                 context_summary=context_summary,
                 history="\n\n".join(history),
                 timestamp=datetime.utcnow().isoformat(),
-                language=lang
+                language=lang,
+                response=""
             )
 
             return prompt
@@ -109,7 +110,7 @@ Basé sur les documents suivants :
         except Exception as e:
             logger.error(f"Erreur construction prompt: {e}")
             # Fallback sur un prompt minimal
-            return f"Question: {query}\nRéponse: "
+            return f"<|system|>\n{settings.SYSTEM_PROMPT}\n</|system|>\n\n<|user|>\n{query}\n</|user|>\n\n<|assistant|>\n"
 
     def _extract_key_points(self, context: str, max_points: int = 3) -> List[str]:
         """Extrait les points clés du contexte."""
