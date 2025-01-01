@@ -126,7 +126,7 @@ async def process_chat_message(
                 processing_time=(datetime.utcnow() - start_time).total_seconds(),
                 tokens_used=model_response["tokens_used"]["total"],
                 tokens_details=model_response["tokens_used"],
-                cost=calculate_cost(model_response["tokens_used"]),
+                #cost=calculate_cost(model_response["tokens_used"]),
                 application=request.application or "chat_api",
                 query_vector=query_vector,
                 response_vector=response_vector,
