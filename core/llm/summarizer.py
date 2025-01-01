@@ -2,7 +2,7 @@
 from typing import List, Dict
 import asyncio
 import torch
-from transformers import AutoTokenizer, AutoModelForSeq2SeqGeneration
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from core.config import settings
 
 class DocumentSummarizer:
