@@ -17,7 +17,7 @@ class DocumentSummarizer:
     async def initialize(self):
         if not self._initialized:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, use_fast=False)
             
             if torch.cuda.is_available():
                 self.model = self.model.to("cuda")
