@@ -197,17 +197,14 @@ class ModelInference:
                 for section in top_sections
             ])
 
-            # 4. Génération du prompt avec Chain-of-Thought
+            # 4. Génération du prompt 
             with metrics.timer("prompt_construction"):
-                prompt = self.prompt_system.build_chain_of_thought_prompt(
+                prompt = self.prompt_system.build_chat_prompt(
                     messages=processed_history,
                     context=formatted_context,
-                    lang=language,
-                    query=query
+                    query=query,
+                    lang=language
                 )
-
-                # Log du prompt en mode debug
-                logger.debug(f"Prompt Chain-of-Thought généré: {prompt[:500]}...")
 
             # 5. Configuration de génération
             generation_config = GenerationConfig(**{
@@ -290,27 +287,6 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
-
-    async def _prepare_chat_context(
-        self,
-        query: str,
-        context_docs: List[Dict],
-        conversation_history: Optional[List[Dict]] = None
-    ) -> str:
-        """Prépare le contexte pour le chat."""
-        try:
-            # Utilisation du nouveau système de prompts
-            prompt = self.prompt_system.build_chat_prompt(
-                messages=conversation_history or [],
-                context=self._format_context_docs(context_docs),
-                query=query
-            )
-            
-            return prompt
-            
-        except Exception as e:
-            logger.error(f"Erreur préparation contexte: {e}")
-            return self._build_fallback_prompt(query)
             
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""

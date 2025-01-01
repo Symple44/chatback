@@ -52,51 +52,6 @@ Basé sur les documents suivants :
             "user": "Question utilisateur :\n{message}",
             "assistant": "Réponse assistant :\n{message}"
         }
-    
-    def build_chain_of_thought_prompt(
-        self,
-        messages: List[Dict],
-        context: Optional[str] = None,
-        query: Optional[str] = None,
-        lang: str = "fr"
-    ) -> str:
-        try:
-            # Préparation du contexte
-            context_summary = self._extract_key_points(context) if context else []
-            
-            # Construction du prompt de raisonnement structuré
-            prompt = f"""Consignes de réponse :
-    1. Analyse du contexte
-    - Identifiez précisément les informations pertinentes pour répondre à la question
-    - Repérez les éléments clés en lien direct avec la demande
-
-    2. Décomposition logique
-    - Décomposez la question en sous-parties
-    - Associez chaque élément aux informations contextuelles
-    - Évaluez la capacité du contexte à répondre complètement
-
-    3. Formulation de la réponse
-    - Construisez une réponse structurée et concise
-    - Utilisez STRICTEMENT les informations du contexte
-    - Répondez de manière claire et directe
-
-    Contexte documentaire :
-    {context or "Aucun contexte disponible"}
-
-    Points clés du contexte :
-    {" • ".join(context_summary) if context_summary else "Aucun point clé identifié"}
-
-    Question à traiter :
-    {query}
-
-    Réponse :
-    """
-            
-            return prompt
-
-        except Exception as e:
-            logger.error(f"Erreur génération prompt chain-of-thought: {e}")
-            return f"Question: {query}\nRéponse:"
 
     def build_chat_prompt(
         self,
