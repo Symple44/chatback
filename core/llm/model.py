@@ -240,6 +240,8 @@ class ModelInference:
 
                         # Décodage et nettoyage
                         response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
+                        actual_response = self.tokenizer_manager.extract_response(full_response_text)
+                        
 
             # 7. Post-traitement et métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
@@ -254,7 +256,7 @@ class ModelInference:
 
             # 8. Préparation de la réponse
             response = {
-                "response": response_text,
+                "response": actual_response,
                 "confidence_score": min(confidence_score, 1.0),
                 "processing_time": processing_time,
                 "tokens_used": {
