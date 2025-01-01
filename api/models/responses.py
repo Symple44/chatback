@@ -163,6 +163,7 @@ class ChatResponse(BaseModel):
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     processing_time: float = Field(..., ge=0.0)
     tokens_used: int = Field(..., ge=0)
+    tokens_details: Optional[Dict[str, int]] = None
     cost: float = Field(default=0.0, ge=0.0)
     application: Optional[str] = None
     fragments: Optional[List[DocumentFragment]] = None

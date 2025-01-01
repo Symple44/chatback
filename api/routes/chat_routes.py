@@ -110,9 +110,10 @@ async def process_chat_message(
                 session_id=chat_session.session_id,
                 conversation_id=uuid.uuid4(),
                 documents=[DocumentReference(**doc) for doc in relevant_docs],
-                confidence_score=model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
-                processing_time=(datetime.utcnow() - start_time).total_seconds(),
-                tokens_used=model_response.get("tokens_used", 0) if isinstance(model_response, dict) else 0,
+                confidence_score=model_response.get("confidence_score", 0.0),
+                processing_time=model_response.get("processing_time", 0.0),
+                tokens_used=model_response["tokens_used"]["total"],
+                tokens_details=model_response["tokens_used"],
                 metadata={
                     "source": "model",
                     "timestamp": datetime.utcnow().isoformat(),
@@ -339,41 +340,33 @@ async def generate_response(components, request: ChatRequest, context: Dict, sim
         }
 
 def format_chat_response(response_data: Dict, chat_session: ChatSession, start_time: datetime) -> ChatResponse:
-    """Formate la réponse finale."""
     try:
         processing_time = (datetime.utcnow() - start_time).total_seconds()
-
-        # Prépare les références aux documents
-        documents = []
-        if "documents" in response_data:
-            for doc in response_data["documents"]:
-                documents.append(
-                    DocumentReference(
-                        title=doc.get("title", "Unknown"),
-                        page=doc.get("page", 1),
-                        score=float(doc.get("score", 0.0)),
-                        content=doc.get("content", None),
-                        metadata=doc.get("metadata", {})
-                    )
-                )
+        documents = [DocumentReference(
+            title=doc.get("title", "Unknown"),
+            page=doc.get("page", 1),
+            score=float(doc.get("score", 0.0)),
+            content=doc.get("content"),
+            metadata=doc.get("metadata", {})
+        ) for doc in response_data.get("documents", [])]
 
         return ChatResponse(
-            response=response_data.get("response_text", ""),
+            response=response_data.get("response", ""),
             session_id=str(chat_session.session_id),
             conversation_id=str(uuid.uuid4()),
             documents=documents,
-            confidence_score=float(response_data.get("confidence", 0.0)),
+            confidence_score=float(response_data.get("confidence_score", 0.0)),
             processing_time=float(processing_time),
-            tokens_used=int(response_data.get("tokens_used", 0)),
+            tokens_used=response_data["tokens_used"]["total"],
+            tokens_details=response_data["tokens_used"],
             metadata={
-                "source": response_data.get("source", "unknown"),
+                "source": response_data.get("source", "model"),
                 "timestamp": datetime.utcnow().isoformat(),
                 "session_context": chat_session.session_context
             }
         )
     except Exception as e:
         logger.error(f"Erreur formatage réponse: {e}")
-        # Réponse de fallback en cas d'erreur
         return ChatResponse(
             response="Une erreur est survenue lors du formatage de la réponse.",
             session_id=str(chat_session.session_id),
