@@ -1,4 +1,3 @@
-# core/llm/tokenizer_manager.py
 from transformers import AutoTokenizer, GenerationConfig
 from typing import Dict, Any, Optional
 import torch
@@ -42,14 +41,14 @@ class TokenizerManager:
             logger.error(f"Erreur configuration tokenizer: {e}")
             raise
 
-    def encode(
+    def __call__(
         self,
         text: str,
         max_length: Optional[int] = None,
         padding: bool = True,
         return_tensors: str = "pt"
     ) -> Dict[str, torch.Tensor]:
-        """Encode le texte en tokens."""
+        """Tokenize le texte."""
         return self.tokenizer(
             text,
             max_length=max_length,
@@ -65,12 +64,11 @@ class TokenizerManager:
             skip_special_tokens=True,
             clean_up_tokenization_spaces=True
         )
-
         if "Réponse:" in response:
             response = response.split("Réponse:")[-1].strip()
-
         return response
 
     async def cleanup(self):
+        """Nettoie les ressources."""
         if hasattr(self, 'tokenizer'):
             del self.tokenizer
