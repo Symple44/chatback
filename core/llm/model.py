@@ -240,7 +240,7 @@ class ModelInference:
 
                         # Décodage et nettoyage
                         response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
-                        actual_response = self.tokenizer_manager.extract_response(full_response_text)
+                        actual_response = self.prompt_system.extract_response(response_text)
                         
 
             # 7. Post-traitement et métriques
