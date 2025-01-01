@@ -61,37 +61,47 @@ Basé sur les documents suivants :
         lang: str = "fr"
     ) -> str:
         try:
-            context_summary = self._extract_key_points(context) if context else ""
+            # Préparation du contexte
+            context_summary = self._extract_key_points(context) if context else []
             
-            prompt = f"""Instructions de raisonnement :
-
+            # Construction du prompt de raisonnement structuré
+            prompt = f"""Consignes de réponse :
     1. Analyse du contexte
-    - Identifier les informations pertinentes
-    - Repérer les éléments clés liés à la question
+    - Identifiez précisément les informations pertinentes pour répondre à la question
+    - Repérez les éléments clés en lien direct avec la demande
 
     2. Décomposition logique
-    - Décomposer la question
-    - Associer chaque partie au contexte
-    - Évaluer la complétude de la réponse
+    - Décomposez la question en sous-parties
+    - Associez chaque élément aux informations contextuelles
+    - Évaluez la capacité du contexte à répondre complètement
 
     3. Formulation de la réponse
-    - Réponse structurée
-    - Utiliser STRICTEMENT le contexte
-    - Précision et concision
+    - Construisez une réponse structurée et concise
+    - Utilisez STRICTEMENT les informations du contexte
+    - Répondez de manière claire et directe
 
-    Contexte : {context or "Aucun contexte"}
+    Contexte documentaire :
+    {context or "Aucun contexte disponible"}
 
-    Points clés : 
-    {" • ".join(context_summary) if context_summary else "Aucun point clé"}
+    Points clés du contexte :
+    {" • ".join(context_summary) if context_summary else "Aucun point clé identifié"}
 
-    Question : {query}
+    Question à traiter :
+    {query}
 
-    Raisonnement détaillé :"""
+    Étape 1 - Analyse : 
+    - Informations pertinentes :
+
+    Étape 2 - Raisonnement :
+    - Décomposition de la question :
+
+    Étape 3 - Réponse finale :
+    """
             
             return prompt
 
         except Exception as e:
-            logger.error(f"Erreur prompt chain-of-thought: {e}")
+            logger.error(f"Erreur génération prompt chain-of-thought: {e}")
             return self.build_chat_prompt(messages, context, query, lang)
 
     def build_chat_prompt(
