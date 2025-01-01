@@ -13,6 +13,7 @@ from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager
 from .memory_manager import MemoryManager
 from .prompt_system import PromptSystem
+from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 
@@ -29,6 +30,7 @@ class ModelInference:
         self.embedding_model = None
         self._initialized = False
         self.prompt_system = PromptSystem()
+        self.summarizer = DocumentSummarizer()
 
     async def initialize(self):
         """Initialise le modèle de manière asynchrone."""
@@ -45,6 +47,7 @@ class ModelInference:
                 # Initialisation des modèles
                 await self._initialize_model()
                 await self._initialize_embedding_model()
+                await self.summarizer.initialize()
                 
                 self._initialized = True
                 logger.info(f"Modèle {settings.MODEL_NAME} initialisé avec succès")
@@ -198,11 +201,15 @@ class ModelInference:
                 for section in top_sections
             ])
 
+            # Génération du résumé
+            summary = await self.summarizer.summarize_documents(context_docs) if context_docs else ""
+            
             # 4. Génération du prompt 
             with metrics.timer("prompt_construction"):
                 prompt = self.prompt_system.build_chat_prompt(
                     messages=processed_history,
                     context=formatted_context,
+                    context_summary=summary,
                     query=query,
                     lang=language
                 )
