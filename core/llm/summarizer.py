@@ -3,6 +3,7 @@ from typing import List, Dict
 import asyncio
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqGeneration
+from core.config import settings
 
 class DocumentSummarizer:
     def __init__(self):
