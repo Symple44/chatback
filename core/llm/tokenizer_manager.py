@@ -41,15 +41,22 @@ class TokenizerManager:
             logger.error(f"Erreur configuration tokenizer: {e}")
             raise
 
-    def encode(self, text: str, max_length: Optional[int] = None) -> Dict[str, torch.Tensor]:
-        """Encode le texte en tokens."""
-        return self.tokenizer(
-            text,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors="pt"
-        )
+    class TokenizerManager:
+        def encode(
+            self,
+            text: str,
+            max_length: Optional[int] = None,
+            padding: bool = True,
+            return_tensors: str = "pt"
+        ) -> Dict[str, torch.Tensor]:
+            """Encode le texte en tokens."""
+            return self.tokenizer(
+                text,
+                padding=padding,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                truncation=max_length is not None
+            )
 
     def decode_and_clean(self, token_ids: torch.Tensor) -> str:
         """Décode et nettoie la sortie du modèle."""
