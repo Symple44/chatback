@@ -10,6 +10,7 @@ from datetime import datetime
 from core.utils.logger import get_logger
 from core.vectorstore import ElasticsearchClient
 from .image_processing import PDFImageProcessor
+from .preprocessor import DocumentPreprocessor
 
 logger = get_logger("pdf_processor")
 
