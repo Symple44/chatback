@@ -7,7 +7,7 @@ from core.config import settings
 
 class DocumentSummarizer:
     def __init__(self):
-        self.model_name = settings.MODEL_NAME
+        self.model_name = settings.MODEL_NAME_SUMMARIZER
         self.tokenizer = None
         self.model = None
         self.max_length = 1024
