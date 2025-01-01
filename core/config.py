@@ -152,20 +152,45 @@ class Settings(BaseSettings):
 </|system|>
 
 <|context|>
+Documentation pertinente :
 {context}
+
+Points clés :
+{context_summary}
 </|context|>
 
+<|history|>
+{history}
+</|history|>
+
 <|user|>
-{query}
+Question : {query}
 </|user|>
 
 <|assistant|>
-Je vais répondre en me basant sur le contexte fourni et en respectant les contraintes demandées.
+Je vais répondre en me basant sur le contexte fourni.
 
-{context_summary}
-
-Réponse: {response}
+Réponse :
+{response}
 </|assistant|>"""
+
+    # Formats prédéfinis
+    PROCEDURE_FORMAT: str = """
+Prérequis :
+{prerequisites}
+
+Étapes :
+{steps}
+
+Points importants :
+{notes}
+"""
+
+    ERROR_FORMAT: str = """
+⚠️ Erreur : {error_message}
+Solutions possibles :
+{solutions}
+"""
 
     SYSTEM_PROMPT: ClassVar[str] = (
         "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires, "
