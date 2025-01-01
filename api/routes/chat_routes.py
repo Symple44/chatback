@@ -75,6 +75,18 @@ async def process_chat_message(
                 language=request.language
             )
 
+             # Génération de l'embedding pour la réponse
+            response_vector = await components.model.create_embedding(
+                model_response.get("response", "")
+            )
+
+            # Recherche de questions similaires
+            similar_questions = await components.db_manager.find_similar_questions(
+                vector=query_vector,
+                threshold=0.8,
+                limit=3
+            )
+
             response_text = model_response.get("response", "") if isinstance(model_response, dict) else str(model_response)
 
             # 6. Mise à jour du contexte de session
@@ -111,13 +123,27 @@ async def process_chat_message(
                 conversation_id=uuid.uuid4(),
                 documents=[DocumentReference(**doc) for doc in relevant_docs],
                 confidence_score=model_response.get("confidence_score", 0.0),
-                processing_time=model_response.get("processing_time", 0.0),
+                processing_time=(datetime.utcnow() - start_time).total_seconds(),
                 tokens_used=model_response["tokens_used"]["total"],
                 tokens_details=model_response["tokens_used"],
+                cost=calculate_cost(model_response["tokens_used"]),
+                application=request.application or "chat_api",
+                query_vector=query_vector,
+                response_vector=response_vector,
+                similar_questions=[
+                    SimilarQuestion(**question) for question in similar_questions
+                ],
+                context_used={
+                    "documents_count": len(relevant_docs),
+                    "max_relevance": max((d.get("score", 0.0) for d in relevant_docs), default=0.0),
+                    "context_tokens": model_response["tokens_used"].get("context", 0)
+                },
                 metadata={
                     "source": "model",
                     "timestamp": datetime.utcnow().isoformat(),
-                    "session_context": chat_session.session_context
+                    "session_context": chat_session.session_context,
+                    "model_name": settings.MODEL_NAME,
+                    "model_version": settings.VERSION
                 }
             )
 
