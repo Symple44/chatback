@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))
     MAX_RELEVANT_DOCS: int = int(os.getenv("MAX_RELEVANT_DOCS", "8"))
     MAX_CHUNKS_PER_DOC: int = int(os.getenv("MAX_CHUNKS_PER_DOC", "100"))
+    MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
+    PROMPT_TEMPERATURE: float = float(os.getenv("PROMPT_TEMPERATURE", "0.7"))
+    CONTEXT_TOKENS_LIMIT: int = int(os.getenv("CONTEXT_TOKENS_LIMIT", "2047"))
 
     # Templates
     CHAT_TEMPLATE: str = """<|system|>
