@@ -21,6 +21,7 @@ class EmbeddingsManager:
             self.model = self._load_model()
             self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
             self.batch_size = settings.EMBEDDING_BATCH_SIZE
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
             self.executor = ThreadPoolExecutor(max_workers=4)
             self.cache = {}  # Cache simple pour les embeddings fréquents
             
@@ -36,13 +37,14 @@ class EmbeddingsManager:
             # Configuration du modèle
             model = SentenceTransformer(
                 settings.EMBEDDING_MODEL,
-                device="cpu",  # Force CPU pour la stabilité
+                device=self.device,
                 cache_folder=str(settings.CACHE_DIR)
             )
             
             # Optimisations
             model.max_seq_length = 512
-            model.eval()  # Mode évaluation
+            if self.device == "cuda":
+                model.half()
             
             return model
             
@@ -53,7 +55,8 @@ class EmbeddingsManager:
     async def generate_embeddings(
         self,
         texts: List[str],
-        batch_size: Optional[int] = None
+        batch_size: Optional[int] = None,
+        normalize: bool = True
     ) -> List[List[float]]:
         """
         Génère les embeddings pour une liste de textes.
@@ -66,93 +69,109 @@ class EmbeddingsManager:
             Liste d'embeddings
         """
         try:
-            with metrics.timer("embedding_generation"):
-                # Nettoyage et validation des textes
-                texts = [self._preprocess_text(t) for t in texts]
-                if not texts:
-                    return []
+            texts = [self._preprocess_text(t) for t in texts if t]
+            if not texts:
+                return []
 
-                # Utilisation du cache pour les textes fréquents
-                cached_embeddings = []
-                texts_to_embed = []
-                
-                for text in texts:
-                    if text in self.cache:
-                        cached_embeddings.append(self.cache[text])
-                    else:
-                        texts_to_embed.append(text)
+            # Vérification du cache
+            cached_embeddings = []
+            texts_to_embed = []
+            
+            for text in texts:
+                cache_key = hash(text)
+                if cache_key in self._cache:
+                    cached_embeddings.append(self._cache[cache_key])
+                else:
+                    texts_to_embed.append(text)
 
-                if not texts_to_embed:
-                    return cached_embeddings
+            if not texts_to_embed:
+                return cached_embeddings
 
-                # Génération des nouveaux embeddings
-                batch_size = batch_size or self.batch_size
-                
-                loop = asyncio.get_event_loop()
-                embeddings = await loop.run_in_executor(
-                    self.executor,
-                    self._batch_encode,
-                    texts_to_embed,
-                    batch_size
-                )
+            # Génération par lots
+            batch_size = batch_size or self.batch_size
+            loop = asyncio.get_event_loop()
+            
+            embeddings = await loop.run_in_executor(
+                self.executor,
+                self._batch_encode,
+                texts_to_embed,
+                batch_size,
+                normalize
+            )
 
-                # Mise en cache des nouveaux embeddings
-                for text, emb in zip(texts_to_embed, embeddings):
-                    self.cache[text] = emb
+            # Mise en cache
+            for text, emb in zip(texts_to_embed, embeddings):
+                self._cache[hash(text)] = emb
 
-                # Combinaison des embeddings cachés et nouveaux
-                final_embeddings = []
-                cache_idx = 0
-                embed_idx = 0
-                
-                for text in texts:
-                    if text in self.cache:
-                        final_embeddings.append(cached_embeddings[cache_idx])
-                        cache_idx += 1
-                    else:
-                        final_embeddings.append(embeddings[embed_idx])
-                        embed_idx += 1
+            # Fusion des résultats
+            final_embeddings = []
+            cache_idx = 0
+            embed_idx = 0
+            
+            for text in texts:
+                cache_key = hash(text)
+                if cache_key in self._cache:
+                    final_embeddings.append(cached_embeddings[cache_idx])
+                    cache_idx += 1
+                else:
+                    final_embeddings.append(embeddings[embed_idx])
+                    embed_idx += 1
 
-                metrics.increment_counter("embeddings_generated", len(texts))
-                return final_embeddings
+            return final_embeddings
 
         except Exception as e:
             logger.error(f"Erreur génération embeddings: {e}")
-            metrics.increment_counter("embedding_errors")
-            raise
+            return []
 
     def _batch_encode(
         self,
         texts: List[str],
-        batch_size: int
+        batch_size: int,
+        normalize: bool = True
     ) -> List[List[float]]:
-        """Encode les textes par lots."""
+        """Encode les textes par lots avec optimisations."""
         try:
-            with torch.no_grad():
-                all_embeddings = []
-                
-                for i in range(0, len(texts), batch_size):
-                    batch = texts[i:i + batch_size]
+            with torch.inference_mode():
+                if self.device == "cuda":
+                    with torch.cuda.amp.autocast():
+                        embeddings = self.model.encode(
+                            texts,
+                            batch_size=batch_size,
+                            show_progress_bar=False,
+                            normalize_embeddings=normalize,
+                            convert_to_tensor=True
+                        )
+                else:
                     embeddings = self.model.encode(
-                        batch,
+                        texts,
                         batch_size=batch_size,
                         show_progress_bar=False,
-                        normalize_embeddings=True,
-                        convert_to_numpy=True
+                        normalize_embeddings=normalize,
+                        convert_to_tensor=True
                     )
-                    all_embeddings.extend(embeddings)
-                
-                return [emb.tolist() for emb in all_embeddings]
-                
+
+                if normalize:
+                    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+
+                return embeddings.cpu().numpy().tolist()
+
         except Exception as e:
             logger.error(f"Erreur encodage par lots: {e}")
             raise
 
     def _preprocess_text(self, text: str) -> str:
-        """Prétraite un texte avant l'embedding."""
+        """Prétraitement amélioré des textes."""
         if not isinstance(text, str):
             text = str(text)
-        return text.strip()[:512]  # Limitation de la longueur
+            
+        # Nettoyage basique
+        text = text.strip().lower()
+        
+        # Normalisation des caractères spéciaux
+        text = text.replace('\n', ' ').replace('\t', ' ')
+        
+        # Limitation de longueur
+        return text[:512]  # Limite à 512 tokens
 
     @lru_cache(maxsize=1000)
     async def generate_embedding(self, text: str) -> List[float]:
@@ -185,30 +204,41 @@ class EmbeddingsManager:
             logger.error(f"Erreur génération embedding: {e}")
             raise
 
-    def compute_similarity(
+    async def compute_similarity(
         self,
-        embedding1: List[float],
-        embedding2: List[float]
-    ) -> float:
-        """
-        Calcule la similarité cosinus entre deux embeddings.
-        
-        Args:
-            embedding1: Premier embedding
-            embedding2: Deuxième embedding
-            
-        Returns:
-            Score de similarité
-        """
+        embeddings1: Union[List[float], List[List[float]]],
+        embeddings2: Union[List[float], List[List[float]]],
+        metric: str = "cosine"
+    ) -> Union[float, List[float]]:
+        """Calcul de similarité avec plusieurs métriques."""
         try:
-            v1 = np.array(embedding1)
-            v2 = np.array(embedding2)
-            similarity = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-            return float(similarity)
+            e1 = np.array(embeddings1)
+            e2 = np.array(embeddings2)
             
+            if e1.ndim == 1:
+                e1 = e1.reshape(1, -1)
+            if e2.ndim == 1:
+                e2 = e2.reshape(1, -1)
+
+            if metric == "cosine":
+                # Similarité cosinus optimisée
+                norm1 = np.linalg.norm(e1, axis=1, keepdims=True)
+                norm2 = np.linalg.norm(e2, axis=1, keepdims=True)
+                dot_product = np.dot(e1, e2.T)
+                similarities = dot_product / (norm1 * norm2.T)
+                
+            elif metric == "euclidean":
+                # Distance euclidienne
+                similarities = -np.linalg.norm(e1[:, None] - e2, axis=2)
+                
+            else:
+                raise ValueError(f"Métrique non supportée: {metric}")
+
+            return similarities.squeeze().tolist()
+
         except Exception as e:
             logger.error(f"Erreur calcul similarité: {e}")
-            return 0.0
+            return 0.0 if len(embeddings1) == 1 and len(embeddings2) == 1 else []
 
     async def batch_similarity(
         self,
@@ -242,12 +272,15 @@ class EmbeddingsManager:
             return [0.0] * len(embeddings)
 
     async def cleanup(self):
-        """Nettoie les ressources."""
+        """Nettoyage des ressources."""
         try:
             self.executor.shutdown(wait=True)
-            self.cache.clear()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            self._cache.clear()
+            if hasattr(self.model, "cpu"):
+                self.model.cpu()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
             logger.info("Ressources embeddings nettoyées")
             
         except Exception as e:
