@@ -228,7 +228,10 @@ class ModelInference:
                             max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
                         ).to(self.model.device)
-
+                        
+                        input_tokens_count = len(inputs.input_ids[0])
+                        logger.info(f"Nombre de tokens d'entrée : {input_tokens_count} / {settings.MAX_INPUT_LENGTH}")
+                        
                         # Génération
                         outputs = self.model.generate(
                             **inputs,
