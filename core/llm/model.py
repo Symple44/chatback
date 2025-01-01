@@ -222,7 +222,6 @@ class ModelInference:
                 with context_manager:
                     with torch.no_grad():
                         # Tokenisation
-                        logger.info(prompt)
                         inputs = self.tokenizer_manager(
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
@@ -253,7 +252,7 @@ class ModelInference:
 
             # 8. Préparation de la réponse
             response = {
-                "response": response_text,
+                "response": self._extract_response(response_text),
                 "confidence_score": min(confidence_score, 1.0),
                 "processing_time": processing_time,
                 "tokens_used": {
@@ -287,7 +286,26 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
-            
+    
+    def _extract_response(self, response_text: str) -> str:
+    """
+    Extrait uniquement la partie réponse du texte généré
+    """
+    try:
+        # Rechercher la partie après la balise <|assistant|>
+        match = re.search(r'<\|assistant\|>\s*Réponse\s*:(.*)', response_text, re.DOTALL)
+        
+        if match:
+            response = match.group(1).strip()
+            return response
+        
+        # Fallback si aucune correspondance n'est trouvée
+        return response_text.strip()
+
+    except Exception as e:
+        logger.error(f"Erreur extraction réponse: {e}")
+        return response_text
+        
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""
         if not docs:
