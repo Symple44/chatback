@@ -68,6 +68,8 @@ class LangchainManager:
             
             # La chaîne sera configurée quand le vectorstore sera disponible
             self.chain = None
+
+            self.prompt_system = PromptSystem()
             
             logger.info("LangchainManager initialisé avec succès")
             
@@ -107,7 +109,12 @@ class LangchainManager:
         try:
             if not self.chain:
                 raise ValueError("Chain not configured. Please set up vectorstore first.")
-    
+                
+            prompt = self.prompt_system.build_chat_prompt(
+                messages=[{"role": "user", "content": query}],
+                context=self._prepare_context(context_docs),
+                query=query
+            )
             # Préparation du contexte
             context = self._prepare_context(context_docs)
             
@@ -139,16 +146,22 @@ class LangchainManager:
         """Prépare le contexte pour la chaîne."""
         context_parts = []
         for doc in documents:
-            content = doc.get('content', '').strip()
-            title = doc.get('title', 'Unknown')
-            page = doc.get('metadata', {}).get('page', 'N/A')
-            
-            if content:
-                context_parts.append(
-                    f"[Document: {title} (Page {page})]\n{content}"
+            if "processed_sections" in doc:
+                # Utilise les sections prétraitées
+                sections = sorted(
+                    doc["processed_sections"],
+                    key=lambda x: x.get("importance_score", 0),
+                    reverse=True
                 )
+                content = "\n\n".join(s["content"] for s in sections[:3])
+            else:
+                content = doc.get("content", "").strip()
+                
+            if content:
+                title = doc.get("title", "Document")
+                context_parts.append(f"[{title}]\n{content}")
         
-        return "\n\n".join(context_parts) if context_parts else "Aucun contexte disponible."
+        return "\n\n---\n\n".join(context_parts) if context_parts else ""
 
     def _calculate_confidence(self, documents: List[Dict]) -> float:
         """Calcule le score de confiance."""
