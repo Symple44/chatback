@@ -172,22 +172,25 @@ class ChatProcessor:
         Crée une réponse demandant des clarifications à l'utilisateur.
         """
         # Construction du message de clarification
-        if context_analysis["clarification_reason"] == "confidence_low":
-            clarification_text = (
+        clarification_reason = context_analysis.get("clarification_reason", "default")
+        
+        clarification_texts = {
+            "confidence_low": (
                 "Je ne suis pas certain de bien comprendre votre demande. "
                 "Pourriez-vous préciser :"
-            )
-        elif context_analysis["clarification_reason"] == "insufficient_context":
-            clarification_text = (
+            ),
+            "insufficient_context": (
                 "Je n'ai pas trouvé suffisamment d'informations dans mes documents. "
                 "Pourriez-vous reformuler votre question ? "
                 "Voici ce que j'ai compris :"
-            )
-        else:
-            clarification_text = (
+            ),
+            "default": (
                 "J'ai trouvé plusieurs thèmes possibles dans votre demande. "
                 "Pour mieux vous aider, pourriez-vous préciser :"
             )
+        }
+        
+        clarification_text = clarification_texts.get(clarification_reason, clarification_texts["default"])
 
         # Ajout des questions spécifiques
         questions = context_analysis.get("questions", [])
@@ -209,7 +212,7 @@ class ChatProcessor:
 
         return ChatResponse(
             response=clarification_text,
-            session_id=chat_session.session_id,
+            session_id=str(chat_session.session_id),
             conversation_id=uuid.uuid4(),
             metadata={
                 "needs_clarification": True,
@@ -220,9 +223,10 @@ class ChatProcessor:
             },
             confidence_score=0.0,
             processing_time=0.0,
-            tokens_used=0
+            tokens_used=0,
+            documents=[]
         )
-        
+    
     def _calculate_context_confidence(self, docs: List[Dict]) -> float:
         """Calcule le score de confiance moyen des documents."""
         if not docs:
@@ -304,7 +308,7 @@ class ChatProcessor:
             response_text = response["response"]
 
         # Génération des identifiants
-        session_id = chat_session.session_id
+        session_id = str(chat_session.session_id)
         conversation_id = uuid.uuid4()
 
         # Construction de la réponse finale
