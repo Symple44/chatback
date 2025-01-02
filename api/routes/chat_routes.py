@@ -162,7 +162,7 @@ async def process_chat_message(
                 context_used={
                     "documents_count": len(relevant_docs),
                     "max_relevance": max((d.get("score", 0.0) for d in relevant_docs), default=0.0),
-                    "context_tokens": model_response["tokens_used"].get("context", 0)
+                    "context_tokens": model_response.get("tokens_used", {}).get("context", 0)
                 },
                 metadata={
                     "source": "model",
