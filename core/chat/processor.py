@@ -303,10 +303,15 @@ class ChatProcessor:
             )
             response_text = response["response"]
 
+        # Génération des identifiants
+        session_id = chat_session.session_id
+        conversation_id = uuid.uuid4()
+
         # Construction de la réponse finale
         return ChatResponse(
             response=response_text,
-            session_id=str(chat_session.session_id),
+            session_id=session_id,
+            conversation_id=conversation_id,
             documents=[DocumentReference(**doc) for doc in relevant_docs],
             confidence_score=response.get("confidence_score", 0.0),
             processing_time=(datetime.utcnow() - start_time).total_seconds(),
