@@ -1,6 +1,7 @@
 # core/llm/summarizer.py
 from typing import List, Dict, Optional, Tuple
 import torch
+import re
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from collections import defaultdict
 from core.config import settings
