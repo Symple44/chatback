@@ -112,17 +112,32 @@ class TokenizerManager:
                 clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
 
-            # Vérification de la longueur minimale
-            if len(full_response) < 5:
-                logger.warning(f"Réponse générée trop courte. Contenu brut : {full_response}")
-                full_response = "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
+             # Pattern spécifique pour extraire la réponse de l'assistant
+        assistant_pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
+        
+        match = re.search(assistant_pattern, full_response, re.DOTALL | re.IGNORECASE)
+        
+        if match:
+            response = match.group(1).strip()
+        else:
+            # Fallback si aucun match
+            response = full_response.strip()
 
-            return full_response
+        # Nettoyage supplémentaire
+        response = re.sub(r'\s+', ' ', response)  # Normaliser les espaces
+        response = response.strip()
 
-        except Exception as e:
-            logger.error(f"Erreur de décodage: {e}")
-            logger.error(f"Tokens décodés bruts : {full_response}")
-            return "Une erreur est survenue lors de la génération de la réponse."
+        # Vérification de la longueur minimale
+        if len(response) < 5:
+            logger.warning(f"Réponse générée trop courte. Contenu brut : {full_response}")
+            response = "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Erreur de décodage: {e}")
+        logger.error(f"Tokens décodés bruts : {full_response}")
+        return "Une erreur est survenue lors de la génération de la réponse."
 
     async def cleanup(self):
         """Nettoie les ressources."""
