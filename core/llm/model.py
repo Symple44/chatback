@@ -289,7 +289,9 @@ class ModelInference:
             num_beams=int(settings.NUM_BEAMS),
             repetition_penalty=float(settings.REPETITION_PENALTY),
             length_penalty=float(settings.LENGTH_PENALTY),
-            early_stopping=True
+            early_stopping=True,
+            pad_token_id=self.tokenizer_manager.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer_manager.tokenizer.eos_token_id,
             no_repeat_ngram_size=3,
             diversity_penalty=0.0,
             forced_bos_token_id=None,
