@@ -64,25 +64,32 @@ class TokenizerManager:
         
     def encode_with_truncation(
         self, 
-        text: str, 
+        messages: List[Dict],
         max_length: Optional[int] = None, 
         return_tensors: str = "pt"
     ) -> Dict[str, torch.Tensor]:
         """
         Encode et tronque le texte avec gestion de la longueur maximale.
         """
-        if max_length is None:
-            max_length = self.max_length
-
-        # Encode avec troncature
-        encoded = self.tokenizer(
-            text, 
-            truncation=True, 
-            max_length=max_length, 
-            padding=True, 
-            return_tensors=return_tensors
-        )
-        return encoded
+        try:
+            # Utiliser apply_chat_template
+            inputs = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                max_length=max_length or self.max_length,
+                return_tensors=return_tensors,
+                truncation=True,
+                padding=True
+            )
+            
+            return {
+                "input_ids": inputs,
+                "attention_mask": inputs.ne(self.tokenizer.pad_token_id)
+            }
+        except Exception as e:
+            logger.error(f"Erreur de tokenisation Llama-3.1: {e}")
+            raise
 
 
     def decode_and_clean(
@@ -99,22 +106,32 @@ class TokenizerManager:
             skip_special_tokens: Ignorer les tokens spéciaux
             skip_assistant_token: Ignorer le token assistant et ne garder que la réponse
         """
-        response = self.tokenizer.decode(
-            token_ids,
-            skip_special_tokens=skip_special_tokens,
-            clean_up_tokenization_spaces=True
-        )
+        try:
+            # Décodage en utilisant le tokenizer du modèle Llama-3.1
+            response = self.tokenizer.decode(
+                token_ids,
+                skip_special_tokens=skip_special_tokens,
+                clean_up_tokenization_spaces=True
+            )
 
-        # Nettoyage des balises de rôle si demandé
-        if skip_assistant_token:
-            # Supprime tout ce qui précède la balise assistant
-            if "<|assistant|>" in response:
-                response = response.split("<|assistant|>")[-1]
-            # Supprime la balise de fin si présente
-            if "</|assistant|>" in response:
-                response = response.split("</|assistant|>")[0]
-            
-        return response.strip()
+            # Nettoyage spécifique pour Llama-3.1
+            # Supprimer les tokens de début et de fin de génération
+            response = response.split('<|eot_id|>')[0]  # Llama-3.1 utilise ce token pour marquer la fin
+
+            # Supprimer les balises de rôle si nécessaire
+            if skip_assistant_token:
+                # Regex pour supprimer les balises de rôle
+                response = re.sub(r'<\|start_header_id\|>assistant<\|end_header_id\|>.*?<\|eot_id\|>', '', response, flags=re.DOTALL)
+
+            # Nettoyage supplémentaire
+            response = response.strip()
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Erreur de décodage Llama-3.1: {e}")
+            # Fallback si une erreur se produit
+            return self.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
 
     async def cleanup(self):
         """Nettoie les ressources."""
