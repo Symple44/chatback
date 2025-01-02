@@ -101,37 +101,16 @@ class TokenizerManager:
     def decode_and_clean(
         self, 
         token_ids: torch.Tensor, 
-        skip_special_tokens: bool = True
+        skip_special_tokens: bool = True,
+        clean_up_tokenization_spaces: bool = True,
     ) -> str:
         try:
             # Décodage initial 
             full_response = self.tokenizer.decode(
                 token_ids, 
                 skip_special_tokens=skip_special_tokens,
-                clean_up_tokenization_spaces=True
+                clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
-
-            # Nettoyage spécifique pour Llama-3.1
-            # Recherche de la réponse réelle
-            patterns = [
-                r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)',
-                r'assistant:(.*?)(<\|eot_id\|>|$)',
-                r'^(.*?)(<\|start_header_id\||<\|eot_id\|>)'
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
-                if match:
-                    response = match.group(1).strip()
-                    if response:
-                        break
-            else:
-                # Si aucun pattern ne match, utiliser la réponse complète
-                response = full_response.strip()
-
-            # Nettoyage supplémentaire
-            response = re.sub(r'\s+', ' ', response)  # Normaliser les espaces
-            response = response.strip()
 
             # Vérification de la longueur minimale
             if len(response) < 5:
