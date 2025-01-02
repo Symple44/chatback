@@ -187,12 +187,31 @@ class ModelInference:
             validated_docs = await self._validate_and_prepare_context(context_docs)
             context_info = await self._analyze_context_relevance(validated_docs, query)
 
-            # 1.5 Génération du résumé du contexte si nécessaire
-            if validated_docs and not context_summary:
-                context_summary = await self.summarizer.summarize_documents(validated_docs)
-                logger.debug(f"Résumé généré: {context_summary}")
-
-            # 2. Construction du prompt avec le nouveau format
+            # 1.5 Analyse et résumé du contexte
+            if validated_docs:
+                # Générer le résumé seulement si nécessaire
+                if not context_summary:
+                    try:
+                        context_summary = await self.summarizer.summarize_documents(validated_docs)
+                        logger.debug(f"Résumé généré: {context_summary}")
+                        
+                        # Mise à jour du context_info avec les informations du résumé
+                        if isinstance(context_summary, dict):
+                            context_info.update({
+                                "themes": context_summary.get("themes", []),
+                                "key_points": context_summary.get("key_points", []),
+                                "needs_clarification": context_summary.get("needs_clarification", False)
+                            })
+                    except Exception as e:
+                        logger.error(f"Erreur génération résumé: {e}")
+                        # En cas d'erreur, on utilise une version simplifiée du contexte
+                        context_summary = {
+                            "raw_summary": "\n".join(
+                                doc.get("content", "")[:200] for doc in validated_docs[:2]
+                            )
+                        }
+                        
+            # 2. Construction du prompt avec le nouveau format en utilisant prioritairement le résumé
             prompt = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=validated_docs,
