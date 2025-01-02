@@ -1,7 +1,7 @@
 # core/config.py
 from pydantic_settings import BaseSettings
 from pydantic import validator 
-from typing import Dict, Optional, List, Tuple, ClassVar, Union
+from typing import Dict, Optional, List, Tuple, ClassVar, Union, Any
 from pathlib import Path
 import os
 import json
