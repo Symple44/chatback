@@ -3,7 +3,6 @@ from typing import List, Dict, Optional, Tuple
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from collections import defaultdict
-import re
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
@@ -33,14 +32,19 @@ Questions suggérées:
 {questions}
 """
 
+        self.max_length = 512
+        self.min_length = 50
+        
         # Configuration de génération
         self.generation_params = {
-            "max_length": 1024,
-            "min_length": 100,
-            "num_beams": 2,
-            "length_penalty": 1.0,
+            "max_length": self.max_length,
+            "min_length": self.min_length,
+            "num_beams": 4,
+            "length_penalty": 2.0,
             "early_stopping": True,
-            "do_sample": False
+            "no_repeat_ngram_size": 3,
+            "do_sample": False,  
+            "temperature": 1.0  
         }
 
     async def initialize(self):
@@ -53,18 +57,25 @@ Questions suggérées:
             
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                use_fast=True
+                model_max_length=self.max_length
             )
 
+            # Chargement du modèle
             model_config = {
                 "torch_dtype": torch.float16 if settings.USE_FP16 else torch.float32,
-                "device_map": "auto"
+                "low_cpu_mem_usage": True
             }
 
             self.model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
                 **model_config
             )
+
+            # Optimisations GPU
+            if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
+                self.model = self.model.to("cuda")
+                if settings.USE_FP16:
+                    self.model = self.model.half()
 
             self._initialized = True
             logger.info("Résumeur de contexte initialisé")
