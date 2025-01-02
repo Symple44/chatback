@@ -101,43 +101,49 @@ class TokenizerManager:
     def decode_and_clean(
         self, 
         token_ids: torch.Tensor, 
-        skip_special_tokens: bool = True,
-        skip_assistant_token: bool = True
+        skip_special_tokens: bool = True
     ) -> str:
-        """
-        Décode et nettoie la sortie du modèle.
-        
-        Args:
-            token_ids: Tokens à décoder
-            skip_special_tokens: Ignorer les tokens spéciaux
-            skip_assistant_token: Ignorer le token assistant et ne garder que la réponse
-        """
         try:
-            # Décodage en utilisant le tokenizer du modèle Llama-3.1
-            response = self.tokenizer.decode(
-                token_ids,
+            # Décodage initial 
+            full_response = self.tokenizer.decode(
+                token_ids, 
                 skip_special_tokens=skip_special_tokens,
                 clean_up_tokenization_spaces=True
             )
 
             # Nettoyage spécifique pour Llama-3.1
-            # Supprimer les tokens de début et de fin de génération
-            response = response.split('<|eot_id|>')[0]  # Llama-3.1 utilise ce token pour marquer la fin
+            # Recherche de la réponse réelle
+            patterns = [
+                r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)',
+                r'assistant:(.*?)(<\|eot_id\|>|$)',
+                r'^(.*?)(<\|start_header_id\||<\|eot_id\|>)'
+            ]
 
-            # Supprimer les balises de rôle si nécessaire
-            if skip_assistant_token:
-                # Regex pour supprimer les balises de rôle
-                response = re.sub(r'<\|start_header_id\|>assistant<\|end_header_id\|>.*?<\|eot_id\|>', '', response, flags=re.DOTALL)
+            for pattern in patterns:
+                match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
+                if match:
+                    response = match.group(1).strip()
+                    if response:
+                        break
+            else:
+                # Si aucun pattern ne match, utiliser la réponse complète
+                response = full_response.strip()
 
             # Nettoyage supplémentaire
+            response = re.sub(r'\s+', ' ', response)  # Normaliser les espaces
             response = response.strip()
+
+            # Vérification de la longueur minimale
+            if len(response) < 5:
+                logger.warning(f"Réponse générée trop courte. Contenu brut : {full_response}")
+                response = "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
 
             return response
 
         except Exception as e:
-            logger.error(f"Erreur de décodage Llama-3.1: {e}")
-            # Fallback si une erreur se produit
-            return self.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+            logger.error(f"Erreur de décodage: {e}")
+            logger.error(f"Tokens décodés bruts : {full_response}")
+            return "Une erreur est survenue lors de la génération de la réponse."
 
     async def cleanup(self):
         """Nettoie les ressources."""
