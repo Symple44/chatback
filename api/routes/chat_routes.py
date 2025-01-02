@@ -20,6 +20,7 @@ from core.database.models import User, ChatSession, ChatHistory, ReferencedDocum
 from core.database.base import DatabaseSession
 from core.database.manager import DatabaseManager
 from core.config import settings
+from core.chat.processor import ChatProcessor
 
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -33,145 +34,43 @@ async def process_chat_message(
     """
     Traite une requête de chat et retourne une réponse complète.
     """
-    start_time = datetime.utcnow()
-
     try:
-        with metrics.timer("chat_processing"):
-            model_response = {"response": "", "tokens_used": {}, "confidence": 0.0}
-
-            # 1. Vérification et récupération de l'utilisateur
-            async with DatabaseSession() as session:
-                user = await session.execute(
-                    select(User).where(User.id == request.user_id)
-                )
-                user = user.scalar_one_or_none()
-                if not user:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="Utilisateur non trouvé"
-                    )
-
-            # 2. Gestion de la session
-            chat_session = await components.session_manager.get_or_create_session(
-                str(request.session_id) if request.session_id else None,
-                str(request.user_id),
-                request.metadata
+        # 1. Vérification de l'utilisateur
+        async with DatabaseSession() as session:
+            user = await session.execute(
+                select(User).where(User.id == request.user_id)
             )
-
-            # 3. Préparation du contexte
-            query_vector = await components.model.create_embedding(request.query)
-
-            # 4. Recherche de documents pertinents
-            relevant_docs = await components.es_client.search_documents(
-                query=request.query,
-                vector=query_vector,
-                metadata_filter={"application": request.application} if request.application else None,
-                size=settings.MAX_RELEVANT_DOCS
-            )
-
-            # Analyse et résumé du contexte
-            context_analysis = await components.model.summarizer.summarize_documents(relevant_docs)
-
-            # Vérification des clarifications nécessaires
-            if context_analysis["clarifications_needed"] and not chat_session.session_context.get("history"):
-                response_text = (
-                    f"J'ai trouvé plusieurs sujets potentiels dans votre demande. "
-                    f"Pour mieux vous aider, pourriez-vous préciser :\n\n"
-                    f"{context_analysis['questions'][0] if context_analysis['questions'] else ''}"
+            user = user.scalar_one_or_none()
+            if not user:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Utilisateur non trouvé"
                 )
 
-                # Sauvegarde du contexte pour clarifications
-                await components.session_manager.update_session_context(
-                    chat_session.session_id,
-                    {
-                        "pending_clarification": True,
-                        "context_analysis": context_analysis,
-                        "original_query": request.query
-                    }
-                )
-            else:
-                # Génération d'une réponse avec le modèle
-                model_response = await components.model.generate_response(
-                    query=request.query,
-                    context_docs=relevant_docs,
-                    context_summary=context_analysis["structured_summary"],
-                    conversation_history=chat_session.session_context.get("history", []),
-                    language=request.language
-                )
-                response_text = model_response.get("response", "")
+        # 2. Récupération ou création de la session
+        chat_session = await components.session_manager.get_or_create_session(
+            str(request.session_id) if request.session_id else None,
+            str(request.user_id),
+            request.metadata
+        )
 
-            # Vérification de la validité de response_text
-            if not response_text.strip():
-                response_text = "Je suis désolé, je n'ai pas pu générer une réponse."
+        # 3. Traitement du message avec le nouveau processeur
+        chat_processor = ChatProcessor(components)
+        response = await chat_processor.process_message(request, chat_session)
 
-            logger.debug(f"Response text généré : {response_text}")
+        # 4. Sauvegarde en arrière-plan
+        background_tasks.add_task(
+            save_chat_interaction,
+            components,
+            chat_session.session_id,
+            request,
+            response.response,
+            response.query_vector if hasattr(response, 'query_vector') else None,
+            datetime.utcnow(),
+            response.documents
+        )
 
-            # Génération de l'embedding pour la réponse
-            response_vector = await components.model.create_embedding(response_text)
-
-            # Recherche de questions similaires
-            similar_questions = await components.db_manager.find_similar_questions(
-                vector=query_vector,
-                threshold=0.8,
-                limit=3
-            )
-
-            # Mise à jour du contexte de session
-            await components.session_manager.update_session_context(
-                chat_session.session_id,
-                {
-                    "query": request.query,
-                    "response": response_text,
-                    "metadata": {
-                        "application": request.application,
-                        "language": request.language,
-                        "confidence": model_response.get("confidence", 0.0),
-                        "processing_time": (datetime.utcnow() - start_time).total_seconds()
-                    }
-                }
-            )
-
-            # Sauvegarde en arrière-plan
-            background_tasks.add_task(
-                save_chat_interaction,
-                components,
-                chat_session.session_id,
-                request,
-                response_text,
-                query_vector,
-                start_time,
-                relevant_docs
-            )
-
-            # Préparation de la réponse
-            return ChatResponse(
-                response=response_text,
-                session_id=chat_session.session_id,
-                conversation_id=uuid.uuid4(),
-                documents=[DocumentReference(**doc) for doc in relevant_docs],
-                confidence_score=model_response.get("confidence", 0.0),
-                processing_time=(datetime.utcnow() - start_time).total_seconds(),
-                tokens_used=model_response.get("tokens_used", {}).get("total", 0),
-                tokens_details=model_response.get("tokens_used", {}),
-                application=request.application or "chat_api",
-                query_vector=query_vector,
-                response_vector=response_vector,
-                similar_questions=[
-                    SimilarQuestion(**question) for question in similar_questions
-                ],
-                context_used={
-                    "documents_count": len(relevant_docs),
-                    "max_relevance": max((d.get("score", 0.0) for d in relevant_docs), default=0.0),
-                    "context_tokens": model_response.get("tokens_used", {}).get("context", 0)
-                },
-                metadata={
-                    "source": "model",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "session_context": chat_session.session_context,
-                    "model_name": settings.MODEL_NAME,
-                    "model_version": settings.VERSION
-                }
-            )
+        return response
 
     except HTTPException as he:
         raise he
