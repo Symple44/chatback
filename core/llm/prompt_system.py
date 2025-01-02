@@ -78,7 +78,7 @@ Instructions spécifiques:
 
 {assistant_role}"""
 
-    def build_chat_prompt(
+    async def build_chat_prompt(
         self,
         query: str,
         context_docs: List[Dict],
