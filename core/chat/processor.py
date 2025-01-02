@@ -84,6 +84,7 @@ class ChatProcessor:
         Recherche les documents pertinents et évalue la confiance du contexte.
         """
         relevant_docs = await self.components.es_client.search_documents(
+            query="",
             vector=query_vector,
             metadata_filter={"application": application} if application else None,
             size=settings.MAX_RELEVANT_DOCS
