@@ -259,13 +259,9 @@ class ModelInference:
         # Récupération des paramètres de base depuis les settings
         base_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
         
-        # Conversion explicite en entiers pour les tokens
-        max_tokens = int(base_config.get("max_tokens", settings.MAX_NEW_TOKENS))
-        min_tokens = int(settings.MIN_NEW_TOKENS)
-        
         return GenerationConfig(
-            max_new_tokens=max_tokens,
-            min_new_tokens=min_tokens,
+            max_new_tokens=int(base_config.get("max_tokens", settings.MAX_NEW_TOKENS)),
+            min_new_tokens=int(settings.MIN_NEW_TOKENS),
             temperature=float(base_config.get("temperature", settings.TEMPERATURE)),
             top_p=float(settings.TOP_P),
             top_k=int(settings.TOP_K),
