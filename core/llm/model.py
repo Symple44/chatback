@@ -180,7 +180,7 @@ class ModelInference:
                         # Tokenisation avec gestion de la longueur
                         inputs = self.tokenizer_manager.encode_with_truncation(
                             prompt,
-                            max_length=MAX_INPUT_LENGTH
+                            max_length=MAX_INPUT_LENGTH,
                             return_tensors="pt"
                         )
                         
