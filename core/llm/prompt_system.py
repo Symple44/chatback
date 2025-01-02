@@ -242,4 +242,5 @@ Instructions spécifiques:
     def _build_fallback_prompt(self, query: str, role: str = "assistant") -> str:
         """Construit un prompt minimal en cas d'erreur."""
         role_info = self.roles.get(role, self.roles["assistant"])
-        return f"{role_info['format'].format(message=f'Question: {query}\nRéponse:')}"
+        message = f"Question: {query}" + "\n" + "Réponse:"
+        return role_info["format"].format(message=message)
