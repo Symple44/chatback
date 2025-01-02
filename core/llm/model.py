@@ -184,7 +184,7 @@ class ModelInference:
             context_info = await self._analyze_context_relevance(validated_docs, query)
 
             # 2. Construction du prompt adapté au scénario
-            prompt = await self._build_contextual_prompt(
+            prompt = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=validated_docs,
                 context_summary=context_summary,
@@ -314,44 +314,6 @@ class ModelInference:
             "relevance_scores": relevance_scores,
             "total_tokens": total_tokens
         }
-
-    async def _build_contextual_prompt(
-        self,
-        query: str,
-        context_docs: List[Dict],
-        context_summary: Optional[Dict],
-        conversation_history: Optional[List[Dict]],
-        context_info: Dict,
-        language: str,
-        response_type: str
-    ) -> str:
-        """
-        Construit un prompt adapté au contexte et au type de réponse demandé.
-        """
-        # Construction du contexte
-        if context_info["has_context"]:
-            if context_summary:
-                context_text = context_summary.get("structured_summary", "")
-            else:
-                context_text = self._format_context_docs(context_docs)
-        else:
-            context_text = ""
-
-        # Ajout d'instructions spécifiques selon le type de réponse
-        response_instructions = {
-            "comprehensive": "Fournissez une réponse détaillée et complète.",
-            "concise": "Fournissez une réponse courte et directe.",
-            "technical": "Fournissez une réponse technique avec des détails d'implémentation."
-        }.get(response_type, "")
-
-        # Construction du prompt final
-        return self.prompt_system.build_chat_prompt(
-            messages=conversation_history or [],
-            context=context_text,
-            query=query,
-            additional_instructions=response_instructions,
-            lang=language
-        )
 
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
         """
