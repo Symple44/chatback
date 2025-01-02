@@ -197,6 +197,7 @@ class ModelInference:
                 language=language,
                 response_type=response_type
             )
+            logger.info(prompt)
 
             # 3. Génération avec gestion de la mémoire
             with metrics.timer("model_inference"):
