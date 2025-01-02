@@ -392,11 +392,9 @@ class ModelInference:
         try:
             # Première tentative avec configuration complète
             outputs = self.model.generate(
-                **inputs,
+                **inputs,  # inputs contient déjà attention_mask
                 generation_config=generation_config,
-                attention_mask=inputs.get("attention_mask", None),
-                # Ajout de stopping_criteria pour éviter une fin prématurée
-                stopping_criteria=None,
+                # Enlever attention_mask des paramètres additionnels
                 output_attentions=False,
                 output_hidden_states=False,
                 return_dict_in_generate=False,
