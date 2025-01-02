@@ -27,43 +27,55 @@ class ChatProcessor:
     ) -> ChatResponse:
         """
         Traite un message chat avec une logique améliorée d'interaction.
-        
-        Args:
-            request: La requête de chat
-            chat_session: Session de chat optionnelle
-            
-        Returns:
-            ChatResponse: Réponse formatée
         """
         start_time = datetime.utcnow()
         try:
-            # 1. Analyse initiale du contexte
-            query_vector = await self.components.model.create_embedding(request.query)
-            relevant_docs, context_confidence = await self._find_relevant_documents(
-                query_vector,
-                request.application
-            )
+            # 1. Génération du vecteur de requête
+            try:
+                query_vector = await self.components.model.create_embedding(request.query)
+                if not isinstance(query_vector, list) or len(query_vector) == 0:
+                    logger.error("Échec de la création du vecteur de requête")
+                    raise ValueError("Vecteur de requête invalide")
+            except Exception as e:
+                logger.error(f"Erreur création vecteur requête: {e}")
+                raise
 
-            # 2. Vérification du contexte de session pour les clarifications en cours
+            # 2. Recherche des documents pertinents
+            try:
+                relevant_docs = await self.components.es_client.search_documents(
+                    query=request.query,  # Ajout de la requête textuelle
+                    vector=query_vector,
+                    metadata_filter={"application": request.application} if request.application else None,
+                    size=settings.MAX_RELEVANT_DOCS
+                )
+                
+                # Calcul du score de confiance
+                context_confidence = self._calculate_context_confidence(relevant_docs)
+            except Exception as e:
+                logger.error(f"Erreur recherche documents: {e}")
+                relevant_docs = []
+                context_confidence = 0.0
+
+            # 3. Vérification du contexte de session pour les clarifications
             if chat_session and chat_session.session_context.get("pending_clarification"):
                 return await self._handle_clarification_response(
                     request, chat_session, relevant_docs
                 )
 
-            # 3. Analyse de contexte et décision de clarification
+            # 4. Analyse de contexte
             context_analysis = await self._analyze_context(
                 request.query,
                 relevant_docs,
                 context_confidence
             )
 
-            # 4. Génération de la réponse appropriée
-            if context_analysis["needs_clarification"]:
-                return await self._create_clarification_response(
+            # 5. Génération de la réponse appropriée
+            if context_analysis.get("needs_clarification", False):
+                response = await self._create_clarification_response(
                     request, chat_session, context_analysis
                 )
             else:
-                return await self._generate_final_response(
+                response = await self._generate_final_response(
                     request,
                     chat_session,
                     relevant_docs,
@@ -71,10 +83,21 @@ class ChatProcessor:
                     start_time
                 )
 
+            # 6. Enrichissement de la réponse avec les vecteurs
+            response.query_vector = query_vector
+            if response.response:
+                try:
+                    response.response_vector = await self.components.model.create_embedding(response.response)
+                except Exception as e:
+                    logger.error(f"Erreur création vecteur réponse: {e}")
+                    response.response_vector = [0.0] * len(query_vector)  # Vecteur par défaut
+
+            return response
+
         except Exception as e:
             logger.error(f"Erreur traitement message: {e}", exc_info=True)
             metrics.increment_counter("chat_errors")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise
 
     async def _find_relevant_documents(
         self,
@@ -106,32 +129,38 @@ class ChatProcessor:
         relevant_docs: List[Dict],
         context_confidence: float
     ) -> Dict:
-        """
-        Analyse le contexte pour déterminer si des clarifications sont nécessaires.
-        """
-        # Analyse du contexte par le summarizer
-        context_analysis = await self.components.model.summarizer.summarize_documents(relevant_docs)
-        
-        needs_clarification = False
-        clarification_reason = None
+        """Analyse le contexte pour déterminer si des clarifications sont nécessaires."""
+        try:
+            # Analyse du contexte par le summarizer si disponible
+            if hasattr(self.components.model, 'summarizer'):
+                context_analysis = await self.components.model.summarizer.summarize_documents(relevant_docs)
+            else:
+                context_analysis = {
+                    "needs_clarification": context_confidence < self.confidence_threshold,
+                    "themes": [],
+                    "questions": []
+                }
 
-        # Cas nécessitant clarification
-        if context_confidence < self.confidence_threshold:
-            needs_clarification = True
-            clarification_reason = "confidence_low"
-        elif len(relevant_docs) < self.min_relevant_docs:
-            needs_clarification = True
-            clarification_reason = "insufficient_context"
-        elif context_analysis.get("clarifications_needed", False):
-            needs_clarification = True
-            clarification_reason = "multiple_themes"
+            # Ajout des critères de clarification
+            needs_clarification = (
+                context_confidence < self.confidence_threshold or
+                len(relevant_docs) < self.min_relevant_docs or
+                context_analysis.get("needs_clarification", False)
+            )
 
-        return {
-            **context_analysis,
-            "needs_clarification": needs_clarification,
-            "clarification_reason": clarification_reason,
-            "context_confidence": context_confidence
-        }
+            return {
+                **context_analysis,
+                "needs_clarification": needs_clarification,
+                "context_confidence": context_confidence
+            }
+
+        except Exception as e:
+            logger.error(f"Erreur analyse contexte: {e}")
+            return {
+                "needs_clarification": True,
+                "context_confidence": 0.0,
+                "error": str(e)
+            }
 
     async def _create_clarification_response(
         self,
@@ -193,6 +222,13 @@ class ChatProcessor:
             processing_time=0.0,
             tokens_used=0
         )
+        
+    def _calculate_context_confidence(self, docs: List[Dict]) -> float:
+        """Calcule le score de confiance moyen des documents."""
+        if not docs:
+            return 0.0
+        scores = [doc.get("score", 0.0) for doc in docs]
+        return sum(scores) / len(scores)
 
     async def _handle_clarification_response(
         self,
