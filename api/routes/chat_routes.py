@@ -100,8 +100,12 @@ async def process_chat_message(
                     language=request.language
                 )
                 response_text = model_response.get("response", "")
+            
+            # Vérification de la validité de response_text
+            if not response_text.strip():
+                response_text = "Je suis désolé, je n'ai pas pu générer une réponse."
 
-             # Génération de l'embedding pour la réponse
+            # Génération de l'embedding pour la réponse
             response_vector = await components.model.create_embedding(
                 model_response.get("response", "")
             )
