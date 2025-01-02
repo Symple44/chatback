@@ -26,7 +26,6 @@ class PromptSystem:
     
     def __init__(self):
         """Initialise le système de prompts."""
-        self.chat_template = settings.CHAT_TEMPLATE
         self.system_roles = settings.SYSTEM_ROLES
         self.response_types = settings.RESPONSE_TYPES
 
@@ -42,42 +41,74 @@ class PromptSystem:
     ) -> str:
         """Construit un prompt complet avec la nouvelle structure."""
         try:
-            # System message
-            system = self.system_roles["system"].format(app_name=settings.APP_NAME)
-
-            # Contexte
-            context_content = self._prepare_context(context_docs, context_summary)
-
-            # Analyse du contexte
-            themes = self._format_themes(context_info.get("themes", []))
-            clarifications = self._format_clarifications(context_info.get("clarifications", []))
-            questions = self._format_questions(context_info.get("suggested_questions", []))
-
-            # Historique
-            history = self._format_conversation_history(conversation_history)
-
-            # Instructions
-            instructions = self._build_instructions(response_type, context_info)
+            # Construction du prompt
+            messages = []
             
-            # Section assistant
-            assistant_section = self._format_assistant_section()
+            # 1. Message système
+            system_content = [
+                f"Je suis {settings.APP_NAME}, votre assistant IA spécialisé.",
+                "Je fournis des réponses précises basées sur la documentation disponible."
+            ]
+            messages.append({
+                "role": "system",
+                "content": "\n".join(system_content)
+            })
 
-            # Construction du prompt final avec les balises de rôle
-            return self.chat_template.format(
-                system=system,
-                context=context_content,
-                themes=themes,
-                clarifications=clarifications,
-                questions=questions,
-                history=history,
-                instructions=instructions,
-                query=query,
-                assistant_section=assistant_section
-            )
+            # 2. Message de contexte (comme système également)
+            if context_docs or context_summary:
+                context_content = []
+                
+                # Ajout du résumé s'il existe
+                if context_summary:
+                    if isinstance(context_summary, dict):
+                        context_content.append(context_summary.get("structured_summary", ""))
+                    else:
+                        context_content.append(str(context_summary))
+                
+                # Ajout des sources pertinentes
+                if context_docs:
+                    context_content.append("\nSources pertinentes:")
+                    for doc in context_docs:
+                        title = doc.get("title", "")
+                        score = doc.get("score", 0)
+                        context_content.append(f"• {title} (pertinence: {score:.2f})")
+                
+                messages.append({
+                    "role": "system",
+                    "content": "\n".join(context_content)
+                })
+
+            # 3. Ajout de l'historique des conversations
+            if conversation_history:
+                for msg in conversation_history[-5:]:  # Limité aux 5 derniers messages
+                    messages.append({
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", "")
+                    })
+
+            # 4. Ajout des instructions spécifiques (comme système)
+            instructions = self._build_instructions(response_type, context_info)
+            if instructions:
+                messages.append({
+                    "role": "system",
+                    "content": instructions
+                })
+
+            # 5. Ajout de la question de l'utilisateur
+            messages.append({
+                "role": "user",
+                "content": query
+            })
+
+            return messages
 
         except Exception as e:
             logger.error(f"Erreur construction prompt: {e}")
-            return self._build_fallback_prompt(query)
+            # Format minimal en cas d'erreur
+            return [
+                {"role": "system", "content": f"Je suis {settings.APP_NAME}, votre assistant."},
+                {"role": "user", "content": query}
+            ]
 
     def _prepare_context(
         self,
@@ -141,94 +172,31 @@ class PromptSystem:
 
         return "\n".join(context_parts)
         
-    def _format_assistant_section(self, response: Optional[str] = None) -> str:
-        """Formate la section de l'assistant."""
-        return """<|assistant|>
-        {response}
-        </|assistant|>""".format(response=response or "")
-
-    def _build_fallback_prompt(self, query: str) -> str:
-        """Construit un prompt minimal en cas d'erreur."""
-        return f"""<|system|>
-{self.system_roles['system'].format(app_name=settings.APP_NAME)}
-</|system|>
-
-<|user|>
-{query}
-</|user|>
-
-<|assistant|>
-Je vais vous aider avec cette demande.
-</|assistant|>"""
-
-    def _format_conversation_history(
-        self,
-        history: Optional[List[Dict]]
-    ) -> str:
-        """Formate l'historique avec les rôles."""
-        if not history:
-            return "Pas d'historique disponible."
-
-        formatted_messages = []
-        for msg in history[-settings.MAX_HISTORY_MESSAGES:]:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            role_prefix = self.system_roles.get(role, "")
-            formatted_messages.append(f"<|{role}|>\n{content}\n</|{role}|>")
-
-        return "\n".join(formatted_messages)
-
+    except Exception as e:
+        logger.error(f"Erreur construction prompt: {e}")
+        # Format minimal en cas d'erreur
+        return [
+            {"role": "system", "content": f"Je suis {settings.APP_NAME}, votre assistant."},
+            {"role": "user", "content": query}
+        ]
+        
     def _build_instructions(
         self,
         response_type: str,
         context_info: Optional[Dict]
     ) -> str:
-        """Construit les instructions avec le nouveau format."""
+        """Construit les instructions pour le modèle."""
         instructions = []
-
-        # Instructions de base selon le type de réponse
+        
+        # Instructions basées sur le type de réponse
         response_config = self.response_types.get(response_type, self.response_types["comprehensive"])
         instructions.append(response_config["description"])
-
+        
         # Instructions basées sur le contexte
         if context_info:
             if context_info.get("needs_clarification"):
-                instructions.append("• Demandez des précisions si nécessaire")
-            if context_info.get("context_confidence", 0) < 0.5:
-                instructions.append("• Indiquez si des informations supplémentaires sont requises")
-            if context_info.get("ambiguous_themes", False):
-                instructions.append("• Précisez le thème principal de la réponse")
-
+                instructions.append("Demandez des précisions si nécessaire")
+            if context_info.get("confidence", 0) < 0.5:
+                instructions.append("Indiquez si des informations supplémentaires sont requises")
+        
         return "\n".join(instructions)
-
-    def _format_themes(self, themes: List[str]) -> str:
-        """Formate la liste des thèmes."""
-        if not themes:
-            return "• Aucun thème spécifique identifié"
-        return "\n".join(f"• {theme}" for theme in themes)
-
-    def _format_clarifications(self, clarifications: List[str]) -> str:
-        """Formate les points nécessitant clarification."""
-        if not clarifications:
-            return "• Aucune clarification nécessaire"
-        return "\n".join(f"• {clarif}" for clarif in clarifications)
-
-    def _format_questions(self, questions: List[str]) -> str:
-        """Formate les questions suggérées."""
-        if not questions:
-            return "• Aucune question supplémentaire"
-        return "\n".join(f"• {q}" for q in questions)
-
-    def _build_fallback_prompt(self, query: str) -> str:
-        """Construit un prompt minimal en cas d'erreur."""
-        return f"""<|system|>
-{self.system_roles['system'].format(app_name=settings.APP_NAME)}
-</|system|>
-
-<|user|>
-{query}
-</|user|>
-
-<|assistant|>
-Je vais essayer de vous aider avec cette demande.
-</|assistant|>"""

@@ -222,7 +222,7 @@ class ModelInference:
                 response_type=response_type
             )
             
-            logger.info(prompt)
+            #logger.info(prompt)
             # 3. Génération avec gestion de la mémoire
             with metrics.timer("model_inference"):
                 generation_config = self._get_generation_config(response_type)
