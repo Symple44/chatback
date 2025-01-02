@@ -247,6 +247,8 @@ class ModelInference:
                             skip_special_tokens=True,
                             skip_assistant_token=True
                         )
+                        if not response_text.strip():
+                            response_text = "Je m'excuse, je n'ai pas pu générer une réponse appropriée. Pourriez-vous reformuler votre question ?"
 
             # 4. Post-traitement et calcul des métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
