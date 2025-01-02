@@ -58,6 +58,9 @@ class PromptSystem:
 
             # Instructions
             instructions = self._build_instructions(response_type, context_info)
+            
+            # Section assistant
+            assistant_section = self._format_assistant_section()
 
             # Construction du prompt final avec les balises de rôle
             return self.chat_template.format(
@@ -69,7 +72,7 @@ class PromptSystem:
                 history=history,
                 instructions=instructions,
                 query=query,
-                response=""  # La réponse sera générée par le modèle
+                assistant_section=assistant_section
             )
 
         except Exception as e:
@@ -137,6 +140,26 @@ class PromptSystem:
                 context_parts.append("\nAucun document pertinent trouvé.")
 
         return "\n".join(context_parts)
+        
+    def _format_assistant_section(self, response: Optional[str] = None) -> str:
+        """Formate la section de l'assistant."""
+        return """<|assistant|>
+        {response}
+        </|assistant|>""".format(response=response or "")
+
+    def _build_fallback_prompt(self, query: str) -> str:
+        """Construit un prompt minimal en cas d'erreur."""
+        return f"""<|system|>
+{self.system_roles['system'].format(app_name=settings.APP_NAME)}
+</|system|>
+
+<|user|>
+{query}
+</|user|>
+
+<|assistant|>
+Je vais vous aider avec cette demande.
+</|assistant|>"""
 
     def _format_conversation_history(
         self,
