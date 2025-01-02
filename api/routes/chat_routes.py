@@ -67,13 +67,38 @@ async def process_chat_message(
                 size=settings.MAX_RELEVANT_DOCS
             )
 
-            # 5. Génération de la réponse
-            model_response = await components.model.generate_response(
-                query=request.query,
-                context_docs=relevant_docs,
-                conversation_history=chat_session.session_context.get("history", []),
-                language=request.language
-            )
+            # Analyse et résumé du contexte
+            context_analysis = await components.model.summarizer.summarize_documents(relevant_docs)
+            
+            # Si des clarifications sont nécessaires et qu'il n'y a pas d'historique
+            if (context_analysis["clarifications_needed"] and 
+                not chat_session.session_context.get("history")):
+                # Génération d'une réponse demandant des clarifications
+                response_text = (
+                    f"J'ai trouvé plusieurs sujets potentiels dans votre demande. "
+                    f"Pour mieux vous aider, pourriez-vous préciser :\n\n"
+                    f"{context_analysis['questions'][0] if context_analysis['questions'] else ''}"
+                )
+                
+                # Sauvegarde du contexte pour la suite
+                await components.session_manager.update_session_context(
+                    chat_session.session_id,
+                    {
+                        "pending_clarification": True,
+                        "context_analysis": context_analysis,
+                        "original_query": request.query
+                    }
+                )
+            else:
+                # Génération de la réponse normale avec le contexte enrichi
+                model_response = await components.model.generate_response(
+                    query=request.query,
+                    context_docs=relevant_docs,
+                    context_summary=context_analysis["structured_summary"],
+                    conversation_history=chat_session.session_context.get("history", []),
+                    language=request.language
+                )
+                response_text = model_response.get("response", "")
 
              # Génération de l'embedding pour la réponse
             response_vector = await components.model.create_embedding(

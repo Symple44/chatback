@@ -153,6 +153,7 @@ class ModelInference:
         self,
         query: str,
         context_docs: Optional[List[Dict]] = None,
+        context_summary: Optional[Dict] = None,
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr",
     ) -> Dict:
@@ -161,71 +162,42 @@ class ModelInference:
             metrics.increment_counter("generation_requests")
             logger.info(f"Début génération réponse pour query: {query[:100]}...")
 
-            # 1. Préparation du contexte
-            relevant_sections = []
-            if context_docs:
-                for doc in context_docs:
-                    if "processed_sections" in doc:
-                        # Utilise les sections prétraitées
-                        relevant_sections.extend([
-                            section for section in doc["processed_sections"]
-                            if isinstance(section, dict) and section.get("content")
-                        ])
-                    else:
-                        # Fallback sur le contenu brut
-                        relevant_sections.append({
-                            "content": doc.get("content", ""),
-                            "importance_score": 1.0,
-                            "metadata": doc.get("metadata", {})
-                        })
+            # 1. Analyse et résumé du contexte si non fourni
+            if context_docs and not context_summary:
+                context_summary = await self.summarizer.summarize_documents(context_docs)
 
-            # Tri et sélection des sections les plus pertinentes
-            relevant_sections.sort(key=lambda x: float(x.get("importance_score", 0)), reverse=True)
-            top_sections = relevant_sections[:3]  # Limite aux 3 meilleures sections
+            # 2. Préparation du prompt basé sur l'analyse thématique
+            prompt_context = ""
+            needs_clarification = False
 
-            # 2. Préparation de l'historique
-            processed_history = []
-            if conversation_history:
-                # Limite l'historique aux 5 derniers messages
-                for msg in conversation_history[-5:]:
-                    if isinstance(msg, dict):
-                        processed_history.append({
-                            "role": msg.get("role", "user"),
-                            "content": msg.get("content", "")
-                        })
+            if context_summary:
+                # Si des clarifications sont nécessaires et pas d'historique
+                if context_summary.get("clarifications_needed", False) and not conversation_history:
+                    needs_clarification = True
+                    prompt_context = f"""
+                    Plusieurs thèmes ont été identifiés:
+                    {context_summary.get('structured_summary', '')}
+                    
+                    Avant de répondre, je devrais demander des clarifications à l'utilisateur.
+                    """
+                else:
+                    prompt_context = context_summary.get('structured_summary', '')
 
-            # 3. Construction du contexte formaté
-            formatted_context = "\n\n".join([
-                f"[Source: {section.get('metadata', {}).get('source', 'Document')}]\n"
-                f"{section['content']}"
-                for section in top_sections
-            ])
-
-            # Génération du résumé
-            summary = await self.summarizer.summarize_documents(context_docs) if context_docs else ""
-            
-            # 4. Génération du prompt 
+            # 3. Construction du prompt complet
             with metrics.timer("prompt_construction"):
                 prompt = self.prompt_system.build_chat_prompt(
-                    messages=processed_history,
-                    context=formatted_context,
-                    context_summary=summary,
+                    messages=conversation_history or [],
+                    context=prompt_context,
                     query=query,
                     lang=language
                 )
 
-            # 5. Configuration de génération
-            generation_config = GenerationConfig(**{
-                k: v for k, v in settings.generation_config.items() 
-                if k in GenerationConfig.__init__.__code__.co_varnames
-            })
+            # 4. Configuration de génération
+            generation_config = GenerationConfig(**settings.generation_config)
 
-            # 6. Génération avec gestion automatique de la RAM/VRAM
+            # 5. Génération avec gestion automatique de la RAM/VRAM
             with metrics.timer("model_inference"):
-                if settings.USE_FP16:
-                    context_manager = torch.amp.autocast('cuda')
-                else:
-                    context_manager = nullcontext()
+                context_manager = torch.amp.autocast('cuda') if settings.USE_FP16 else nullcontext()
 
                 with context_manager:
                     with torch.no_grad():
@@ -235,49 +207,47 @@ class ModelInference:
                             max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
                         ).to(self.model.device)
-                        
+
                         input_tokens_count = len(inputs.input_ids[0])
-                        logger.info(f"Nombre de tokens d'entrée : {input_tokens_count} / {settings.MAX_INPUT_LENGTH}")
-                        
-                        # Génération
-                        outputs = self.model.generate(
-                            **inputs,
-                            generation_config=generation_config,
-                            use_cache=True
-                        )
+                        logger.info(f"Nombre de tokens d'entrée : {input_tokens_count}")
 
-                        # Décodage et nettoyage
-                        response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
-                        
+                        # Si des clarifications sont nécessaires
+                        if needs_clarification:
+                            # Génération d'une réponse demandant des précisions
+                            questions = context_summary.get('questions', [])
+                            response_text = self._generate_clarification_response(
+                                questions=questions,
+                                themes=context_summary.get('themes', [])
+                            )
+                            output_tokens = len(self.tokenizer_manager(response_text)['input_ids'])
+                        else:
+                            # Génération normale
+                            outputs = self.model.generate(
+                                **inputs,
+                                generation_config=generation_config,
+                                use_cache=True
+                            )
+                            response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
+                            output_tokens = len(outputs[0]) - input_tokens_count
 
-            # 7. Post-traitement et métriques
+            # 6. Calcul du score de confiance et métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-            input_tokens = len(inputs.input_ids[0])
-            output_tokens = len(outputs[0]) - input_tokens
+            confidence_score = self._calculate_confidence(
+                context_docs,
+                has_clarification=needs_clarification
+            )
 
-            # Calcul du score de confiance basé sur les sections utilisées
-            confidence_score = sum(
-                float(section.get("importance_score", 0)) 
-                for section in top_sections
-            ) / max(len(top_sections), 1)
-
-            # 8. Préparation de la réponse
             response = {
                 "response": response_text,
-                "confidence_score": min(confidence_score, 1.0),
+                "confidence_score": confidence_score,
                 "processing_time": processing_time,
                 "tokens_used": {
-                    "input": input_tokens,
+                    "input": input_tokens_count,
                     "output": output_tokens,
-                    "total": input_tokens + output_tokens
+                    "total": input_tokens_count + output_tokens
                 },
-                "context_info": {
-                    "num_sections_used": len(top_sections),
-                    "sources": [
-                        section.get("metadata", {}).get("source")
-                        for section in top_sections
-                    ]
-                },
+                "needs_clarification": needs_clarification,
+                "themes": context_summary.get('themes', []) if context_summary else [],
                 "metadata": {
                     "model_version": settings.MODEL_NAME,
                     "timestamp": datetime.utcnow().isoformat(),
@@ -288,7 +258,7 @@ class ModelInference:
             # Log des métriques
             metrics.increment_counter("successful_generations")
             metrics.set_gauge("last_generation_time", processing_time)
-            metrics.set_gauge("last_tokens_used", input_tokens + output_tokens)
+            metrics.set_gauge("last_tokens_used", response["tokens_used"]["total"])
 
             logger.info(f"Génération réussie en {processing_time:.2f}s")
             return response
@@ -297,6 +267,44 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
+
+    def _generate_clarification_response(
+        self,
+        questions: List[str],
+        themes: List[str]
+    ) -> str:
+        """Génère une réponse demandant des clarifications."""
+        if not questions:
+            questions = [
+                f"Pourriez-vous préciser si votre question concerne l'un de ces thèmes : {', '.join(themes)}?"
+            ]
+        
+        response = (
+            "Pour mieux vous aider, j'aurais besoin de quelques précisions. "
+            f"\n\n{questions[0]}"
+        )
+        
+        if len(questions) > 1:
+            response += f"\n\nJe pourrais aussi avoir besoin de savoir :\n" + \
+                       "\n".join(f"- {q}" for q in questions[1:])
+        
+        return response
+
+    def _calculate_confidence(
+        self,
+        context_docs: Optional[List[Dict]],
+        has_clarification: bool = False
+    ) -> float:
+        """Calcule le score de confiance en tenant compte des clarifications."""
+        if has_clarification:
+            # Score de confiance réduit si des clarifications sont nécessaires
+            return 0.5
+            
+        if not context_docs:
+            return 0.3
+            
+        scores = [doc.get("score", 0.0) for doc in context_docs]
+        return min(sum(scores) / len(scores) if scores else 0.5, 1.0)
         
     def _format_context_docs(self, docs: List[Dict]) -> str:
         """Formate les documents de contexte."""
@@ -316,17 +324,6 @@ class ModelInference:
             
         return "\n\n---\n\n".join(formatted_docs)
         
-    def _build_fallback_prompt(self, query: str) -> str:
-        """Construit un prompt de secours en cas d'erreur."""
-        return f"Question: {query}\nRéponse:"
-
-    def _calculate_confidence(self, context_docs: Optional[List[Dict]]) -> float:
-        """Calcule le score de confiance."""
-        if not context_docs:
-            return 0.5
-        scores = [doc.get("score", 0.0) for doc in context_docs]
-        return min(sum(scores) / len(scores) if scores else 0.5, 1.0)
-
     async def cleanup(self):
         """Nettoie les ressources."""
         try:
