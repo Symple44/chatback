@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import asyncio
+import uuid
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
