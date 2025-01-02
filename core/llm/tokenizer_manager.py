@@ -72,20 +72,25 @@ class TokenizerManager:
         Encode et tronque le texte avec gestion de la longueur maximale.
         """
         try:
-            # Utiliser apply_chat_template
-            inputs = self.tokenizer.apply_chat_template(
+            # Utiliser apply_chat_template pour générer le texte
+            tokenized_text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=True,
                 add_generation_prompt=True,
-                max_length=max_length or self.max_length,
-                return_tensors=return_tensors,
-                truncation=True,
-                padding=True
+                return_tensors=return_tensors
             )
             
+            # Créer un masque d'attention
+            attention_mask = tokenized_text.ne(self.tokenizer.pad_token_id)
+            
+            # Tronquer si nécessaire
+            if max_length and tokenized_text.shape[1] > max_length:
+                tokenized_text = tokenized_text[:, :max_length]
+                attention_mask = attention_mask[:, :max_length]
+            
             return {
-                "input_ids": inputs,
-                "attention_mask": inputs.ne(self.tokenizer.pad_token_id)
+                "input_ids": tokenized_text,
+                "attention_mask": attention_mask
             }
         except Exception as e:
             logger.error(f"Erreur de tokenisation Llama-3.1: {e}")

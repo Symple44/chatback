@@ -234,7 +234,12 @@ class ModelInference:
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
-                        ).to(self.model.device)
+                        )
+                        
+                        inputs = {
+                            "input_ids": inputs["input_ids"].to(self.model.device),
+                            "attention_mask": inputs["attention_mask"].to(self.model.device)
+                        }
                         
                         # Génération
                         outputs = await self._generate_with_fallback(
