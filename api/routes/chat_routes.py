@@ -333,13 +333,13 @@ async def save_chat_interaction(
     session_id: str,
     request: ChatRequest,
     response_text: str,
-    query_vector: List[float],
+    query_vector: Optional[List[float]],
     start_time: datetime,
     referenced_docs: List[DocumentReference]
 ):
     """Sauvegarde l'interaction dans la base de données."""
     try:
-        # Génération du vecteur pour la réponse
+        # Génération du vecteur de réponse
         response_vector = await components.model.create_embedding(response_text)
         processing_time = (datetime.utcnow() - start_time).total_seconds()
 
@@ -347,17 +347,16 @@ async def save_chat_interaction(
         async with DatabaseSession() as session:
             # Création de l'entrée d'historique de chat
             chat_history = ChatHistory(
-                id=uuid.uuid4(),
                 session_id=session_id,
                 user_id=request.user_id,
                 query=request.query,
                 response=response_text,
                 query_vector=query_vector or [],
                 response_vector=response_vector,
-                confidence_score=0.0,  # À ajuster si nécessaire
-                tokens_used=0,  # À ajuster si nécessaire
+                confidence_score=0.0,
+                tokens_used=0,
                 processing_time=processing_time,
-                metadata={
+                chat_metadata={
                     "source": "model",
                     "application": request.application,
                     "language": request.language,
@@ -369,8 +368,7 @@ async def save_chat_interaction(
             # Ajout des documents référencés
             for doc in referenced_docs:
                 referenced_doc = ReferencedDocument(
-                    id=uuid.uuid4(),
-                    chat_history_id=chat_history.id,
+                    chat_history_id=chat_history.id,  # L'ID sera généré automatiquement
                     document_name=doc.title,
                     page_number=doc.page or 0,
                     relevance_score=float(doc.score),
@@ -380,11 +378,16 @@ async def save_chat_interaction(
                 session.add(referenced_doc)
 
             await session.commit()
+            await session.refresh(chat_history)  # Récupérer l'ID généré
+            
             metrics.increment_counter("chat_interactions_saved")
+
+            return chat_history.id
 
     except Exception as e:
         logger.error(f"Erreur sauvegarde interaction: {e}", exc_info=True)
         metrics.increment_counter("chat_save_errors")
+        return None
 
 async def log_error(components, error: Exception, request: ChatRequest):
     """Log une erreur dans la base de données."""
