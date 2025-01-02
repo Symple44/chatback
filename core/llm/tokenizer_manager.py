@@ -113,11 +113,11 @@ class TokenizerManager:
             )
 
             # Vérification de la longueur minimale
-            if len(response) < 5:
+            if len(full_response) < 5:
                 logger.warning(f"Réponse générée trop courte. Contenu brut : {full_response}")
-                response = "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
+                full_response = "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
 
-            return response
+            return full_response
 
         except Exception as e:
             logger.error(f"Erreur de décodage: {e}")
