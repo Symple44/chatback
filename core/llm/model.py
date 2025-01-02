@@ -249,7 +249,7 @@ class ModelInference:
 
                         response_text = self.tokenizer_manager.decode_and_clean(
                             outputs[0],
-                            skip_special_tokens=True
+                            skip_special_tokens=True,
                             clean_up_tokenization_spaces=True
                         )
                         if not response_text.strip():
