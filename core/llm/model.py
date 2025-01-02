@@ -210,10 +210,7 @@ class ModelInference:
                             prompt,
                             max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
-                        )
-                        
-                        # Déplacer les inputs sur le même device que le modèle
-                        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                        ).to(self.model.device)
                         
                         # Génération
                         outputs = await self._generate_with_fallback(
@@ -221,19 +218,31 @@ class ModelInference:
                             generation_config
                         )
                         
-                        response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
+                        response_text = self.tokenizer_manager.decode_and_clean(
+                            outputs[0],
+                            skip_assistant_token=True
+                        )
 
             # 4. Post-traitement et calcul des métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-            response_info = self._prepare_response_info(
-                response_text=response_text,
-                context_info=context_info,
-                processing_time=processing_time,
-                inputs=inputs,
-                outputs=outputs
-            )
-
-            return response_info
+            
+            return {
+                "response": response_text,
+                "confidence_score": context_info["confidence"],
+                "processing_time": processing_time,
+                "tokens_used": {
+                    "input": len(inputs["input_ids"][0]),
+                    "output": len(outputs[0]) - len(inputs["input_ids"][0]),
+                    "total": len(outputs[0])
+                },
+                "context_info": context_info,
+                "metadata": {
+                    "model_version": settings.MODEL_NAME,
+                    "response_type": response_type,
+                    "language": language,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            }
 
         except Exception as e:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
@@ -324,25 +333,22 @@ class ModelInference:
         }
 
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
-        """
-        Retourne la configuration de génération adaptée au type de réponse.
-        """
+        """Configuration de génération adaptée au type de réponse."""
+        # Récupération des paramètres de base depuis les settings
+        base_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
         
-        base_config = settings.generation_config.copy()
-
-        # Ajustements selon le type de réponse
-        if response_type == "concise":
-            base_config.update({
-                "max_new_tokens": min(512, settings.MAX_NEW_TOKENS),
-                "temperature": max(0.3, settings.TEMPERATURE - 0.2)
-            })
-        elif response_type == "technical":
-            base_config.update({
-                "temperature": max(0.2, settings.TEMPERATURE - 0.3),
-                "top_p": min(0.85, settings.TOP_P)
-            })
-
-        return GenerationConfig(**base_config)
+        return GenerationConfig(
+            max_new_tokens=base_config.get("max_tokens", settings.MAX_NEW_TOKENS),
+            min_new_tokens=settings.MIN_NEW_TOKENS,
+            temperature=base_config.get("temperature", settings.TEMPERATURE),
+            top_p=settings.TOP_P,
+            top_k=settings.TOP_K,
+            do_sample=settings.DO_SAMPLE,
+            num_beams=settings.NUM_BEAMS,
+            repetition_penalty=settings.REPETITION_PENALTY,
+            length_penalty=settings.LENGTH_PENALTY,
+            early_stopping=True
+        )
 
     async def _generate_with_fallback(
         self,
@@ -377,37 +383,3 @@ class ModelInference:
                     generation_config=fallback_config
                 )
             raise
-
-    def _prepare_response_info(
-        self,
-        response_text: str,
-        context_info: Dict,
-        processing_time: float,
-        inputs: Dict[str, torch.Tensor],
-        outputs: torch.Tensor
-    ) -> Dict:
-        """
-        Prépare les informations de réponse et les métriques.
-        """
-        input_tokens = len(inputs["input_ids"][0])
-        output_tokens = len(outputs[0]) - input_tokens
-
-        return {
-            "response": response_text,
-            "confidence_score": context_info["confidence"],
-            "processing_time": processing_time,
-            "tokens_used": {
-                "input": input_tokens,
-                "output": output_tokens,
-                "context": context_info["total_tokens"],
-                "total": input_tokens + output_tokens
-            },
-            "context_info": {
-                "has_context": context_info["has_context"],
-                "relevance_scores": context_info["relevance_scores"]
-            },
-            "metadata": {
-                "model_version": settings.MODEL_NAME,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        }

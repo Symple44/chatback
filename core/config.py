@@ -153,57 +153,79 @@ class Settings(BaseSettings):
 
     # Templates
     CHAT_TEMPLATE: str = """<|system|>
-{system}
-</|system|>
+    {system}
+    </|system|>
 
-<|context|>
-Documentation pertinente :
-{context}
+    <|context|>
+    === CONTEXTE PERTINENT ===
+    {context}
 
-Points clés :
-{context_summary}
-</|context|>
+    === ANALYSE DU CONTEXTE ===
+    Thèmes identifiés:
+    {themes}
 
-<|history|>
-{history}
-</|history|>
+    Points à clarifier:
+    {clarifications}
 
-<|user|>
-Question : {query}
-</|user|>
+    Questions suggérées:
+    {questions}
+    </|context|>
 
-<|assistant|>
-Je vais répondre en me basant sur le contexte fourni.
+    <|history|>
+    === HISTORIQUE DE LA CONVERSATION ===
+    {history}
+    </|history|>
 
-Réponse :
-{response}
-</|assistant|>"""
+    <|instructions|>
+    === INSTRUCTIONS SPÉCIFIQUES ===
+    {instructions}
+    </|instructions|>
 
-    # Formats prédéfinis
-    PROCEDURE_FORMAT: str = """
-Prérequis :
-{prerequisites}
+    <|user|>
+    Question: {query}
+    </|user|>
 
-Étapes :
-{steps}
+    <|assistant|>
+    Je vais vous aider avec cette demande.
 
-Points importants :
-{notes}
-"""
+    {response}
+    </|assistant|>"""
 
-    ERROR_FORMAT: str = """
-⚠️ Erreur : {error_message}
-Solutions possibles :
-{solutions}
-"""
+    # Rôles système
+    SYSTEM_ROLES: Dict[str, str] = {
+        "system": "Je suis {app_name}, votre assistant IA spécialisé.",
+        "user": "En tant qu'utilisateur, je demande :",
+        "assistant": "En tant qu'assistant technique, je vais vous aider :",
+        "context": "Voici le contexte pertinent :",
+    }
 
-    SYSTEM_PROMPT: ClassVar[str] = (
-        "Je suis {app_name}, un assistant IA conçu pour fournir des réponses claires, "
-        "concises et précises. Je m'appuie sur les documents fournis pour donner des "
-        "informations vérifiées et pertinentes. Mon objectif est de comprendre exactement "
-        "vos besoins et d'y répondre de la manière la plus utile possible. Je peux "
-        "adapter mon style de réponse selon vos préférences."
-    ).format(app_name=APP_NAME)
+    # Types de réponses
+    RESPONSE_TYPES: Dict[str, Dict[str, Any]] = {
+        "comprehensive": {
+            "description": "Réponse détaillée et complète",
+            "temperature": 0.7,
+            "max_tokens": 1024
+        },
+        "concise": {
+            "description": "Réponse courte et directe",
+            "temperature": 0.5,
+            "max_tokens": 512
+        },
+        "technical": {
+            "description": "Réponse technique avec détails",
+            "temperature": 0.3,
+            "max_tokens": 1024
+        }
+    }
+
+    # Format des clarifications
+    CLARIFICATION_FORMAT: str = """
+    Pour mieux vous aider, j'aurais besoin de quelques précisions:
+    {clarifications}
+
+    Suggestions de reformulation:
+    {suggestions}
+    """
 
     # Server Configuration
     WORKERS: int = int(os.getenv("WORKERS", "24"))
