@@ -183,11 +183,16 @@ class ModelInference:
             start_time = datetime.utcnow()
             metrics.increment_counter("generation_requests")
 
-            # 1. Préparation et validation du contexte
+            # 1. Validation et préparation du contexte
             validated_docs = await self._validate_and_prepare_context(context_docs)
             context_info = await self._analyze_context_relevance(validated_docs, query)
 
-            # 2. Construction du prompt adapté au scénario
+            # 1.5 Génération du résumé du contexte si nécessaire
+            if validated_docs and not context_summary:
+                context_summary = await self.summarizer.summarize_documents(validated_docs)
+                logger.debug(f"Résumé généré: {context_summary}")
+
+            # 2. Construction du prompt avec le nouveau format
             prompt = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=validated_docs,
@@ -197,8 +202,8 @@ class ModelInference:
                 language=language,
                 response_type=response_type
             )
+            
             logger.info(prompt)
-
             # 3. Génération avec gestion de la mémoire
             with metrics.timer("model_inference"):
                 generation_config = self._get_generation_config(response_type)
@@ -248,6 +253,28 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
+    
+    def _get_generation_config(self, response_type: str) -> GenerationConfig:
+        """Configuration de génération adaptée au type de réponse."""
+        # Récupération des paramètres de base depuis les settings
+        base_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
+        
+        # Conversion explicite en entiers pour les tokens
+        max_tokens = int(base_config.get("max_tokens", settings.MAX_NEW_TOKENS))
+        min_tokens = int(settings.MIN_NEW_TOKENS)
+        
+        return GenerationConfig(
+            max_new_tokens=max_tokens,
+            min_new_tokens=min_tokens,
+            temperature=float(base_config.get("temperature", settings.TEMPERATURE)),
+            top_p=float(settings.TOP_P),
+            top_k=int(settings.TOP_K),
+            do_sample=bool(settings.DO_SAMPLE),
+            num_beams=int(settings.NUM_BEAMS),
+            repetition_penalty=float(settings.REPETITION_PENALTY),
+            length_penalty=float(settings.LENGTH_PENALTY),
+            early_stopping=True
+        )
 
     async def _validate_and_prepare_context(
         self,
@@ -331,24 +358,6 @@ class ModelInference:
             "relevance_scores": relevance_scores,
             "total_tokens": total_tokens
         }
-
-    def _get_generation_config(self, response_type: str) -> GenerationConfig:
-        """Configuration de génération adaptée au type de réponse."""
-        # Récupération des paramètres de base depuis les settings
-        base_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
-        
-        return GenerationConfig(
-            max_new_tokens=base_config.get("max_tokens", settings.MAX_NEW_TOKENS),
-            min_new_tokens=settings.MIN_NEW_TOKENS,
-            temperature=base_config.get("temperature", settings.TEMPERATURE),
-            top_p=settings.TOP_P,
-            top_k=settings.TOP_K,
-            do_sample=settings.DO_SAMPLE,
-            num_beams=settings.NUM_BEAMS,
-            repetition_penalty=settings.REPETITION_PENALTY,
-            length_penalty=settings.LENGTH_PENALTY,
-            early_stopping=True
-        )
 
     async def _generate_with_fallback(
         self,
