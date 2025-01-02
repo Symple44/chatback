@@ -319,15 +319,8 @@ class ModelInference:
         """
         Retourne la configuration de génération adaptée au type de réponse.
         """
-        base_config = {
-            "do_sample": settings.DO_SAMPLE,
-            "temperature": settings.TEMPERATURE,
-            "top_p": settings.TOP_P,
-            "top_k": settings.TOP_K,
-            "repetition_penalty": settings.REPETITION_PENALTY,
-            "max_new_tokens": settings.MAX_NEW_TOKENS,
-            "min_new_tokens": settings.MIN_NEW_TOKENS,
-        }
+        
+        base_config = settings.generation_config.copy()
 
         # Ajustements selon le type de réponse
         if response_type == "concise":
