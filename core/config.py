@@ -151,41 +151,6 @@ class Settings(BaseSettings):
     PROMPT_TEMPERATURE: float = float(os.getenv("PROMPT_TEMPERATURE", "0.7"))
     CONTEXT_TOKENS_LIMIT: int = int(os.getenv("CONTEXT_TOKENS_LIMIT", "2047"))
 
-    # Templates
-    CHAT_TEMPLATE: str = """<|system|>
-    {system}
-    </|system|>
-
-    <|context|>
-    === CONTEXTE PERTINENT ===
-    {context}
-
-    === ANALYSE DU CONTEXTE ===
-    Thèmes identifiés:
-    {themes}
-
-    Points à clarifier:
-    {clarifications}
-
-    Questions suggérées:
-    {questions}
-    </|context|>
-
-    <|history|>
-    === HISTORIQUE DE LA CONVERSATION ===
-    {history}
-    </|history|>
-
-    <|instructions|>
-    === INSTRUCTIONS SPÉCIFIQUES ===
-    {instructions}
-    </|instructions|>
-
-    <|user|>
-    Question: {query}
-    </|user|>
-
-    {assistant_section}"""
 
     # Rôles système
     SYSTEM_ROLES: Dict[str, str] = {
