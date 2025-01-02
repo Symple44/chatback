@@ -35,7 +35,30 @@ class ModelInference:
         # Nouveaux paramètres de configuration
         self.max_context_docs = 6
         #self.min_confidence_threshold = 0.6
-        
+    async def initialize(self):
+        """Initialise le modèle de manière asynchrone."""
+        if not self._initialized:
+            try:
+                # Authentification Hugging Face
+                if not await self.auth_manager.setup_auth():
+                    raise ValueError("Échec de l'authentification Hugging Face")
+
+                # Vérification de l'accès au modèle
+                if not self.auth_manager.get_model_access(settings.MODEL_NAME):
+                    raise ValueError(f"Accès non autorisé au modèle {settings.MODEL_NAME}")
+
+                # Initialisation des modèles
+                await self._initialize_model()
+                await self._initialize_embedding_model()
+                await self.summarizer.initialize()
+                
+                self._initialized = True
+                logger.info(f"Modèle {settings.MODEL_NAME} initialisé avec succès")
+
+            except Exception as e:
+                logger.error(f"Erreur lors de l'initialisation du modèle: {e}")
+                raise
+                
     async def _initialize_model(self):
         """Configure et charge le modèle."""
         try:
