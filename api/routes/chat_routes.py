@@ -37,7 +37,8 @@ async def process_chat_message(
 
     try:
         with metrics.timer("chat_processing"):
-            model_response = {}
+            model_response = {"response": "", "tokens_used": {}, "confidence": 0.0}
+
             # 1. Vérification et récupération de l'utilisateur
             async with DatabaseSession() as session:
                 user = await session.execute(
@@ -50,7 +51,7 @@ async def process_chat_message(
                         detail="Utilisateur non trouvé"
                     )
 
-            # 2. Gestion de la session - Utilisation du session_manager au lieu de db_manager
+            # 2. Gestion de la session
             chat_session = await components.session_manager.get_or_create_session(
                 str(request.session_id) if request.session_id else None,
                 str(request.user_id),
@@ -70,18 +71,16 @@ async def process_chat_message(
 
             # Analyse et résumé du contexte
             context_analysis = await components.model.summarizer.summarize_documents(relevant_docs)
-            
-            # Si des clarifications sont nécessaires et qu'il n'y a pas d'historique
-            if (context_analysis["clarifications_needed"] and 
-                not chat_session.session_context.get("history")):
-                # Génération d'une réponse demandant des clarifications
+
+            # Vérification des clarifications nécessaires
+            if context_analysis["clarifications_needed"] and not chat_session.session_context.get("history"):
                 response_text = (
                     f"J'ai trouvé plusieurs sujets potentiels dans votre demande. "
                     f"Pour mieux vous aider, pourriez-vous préciser :\n\n"
                     f"{context_analysis['questions'][0] if context_analysis['questions'] else ''}"
                 )
-                
-                # Sauvegarde du contexte pour la suite
+
+                # Sauvegarde du contexte pour clarifications
                 await components.session_manager.update_session_context(
                     chat_session.session_id,
                     {
@@ -91,7 +90,7 @@ async def process_chat_message(
                     }
                 )
             else:
-                # Génération de la réponse normale avec le contexte enrichi
+                # Génération d'une réponse avec le modèle
                 model_response = await components.model.generate_response(
                     query=request.query,
                     context_docs=relevant_docs,
@@ -100,15 +99,15 @@ async def process_chat_message(
                     language=request.language
                 )
                 response_text = model_response.get("response", "")
-            
+
             # Vérification de la validité de response_text
             if not response_text.strip():
                 response_text = "Je suis désolé, je n'ai pas pu générer une réponse."
 
+            logger.debug(f"Response text généré : {response_text}")
+
             # Génération de l'embedding pour la réponse
-            response_vector = await components.model.create_embedding(
-                model_response.get("response", "")
-            )
+            response_vector = await components.model.create_embedding(response_text)
 
             # Recherche de questions similaires
             similar_questions = await components.db_manager.find_similar_questions(
@@ -117,9 +116,7 @@ async def process_chat_message(
                 limit=3
             )
 
-            response_text = model_response.get("response", "") if isinstance(model_response, dict) else str(model_response)
-
-            # 6. Mise à jour du contexte de session
+            # Mise à jour du contexte de session
             await components.session_manager.update_session_context(
                 chat_session.session_id,
                 {
@@ -128,13 +125,13 @@ async def process_chat_message(
                     "metadata": {
                         "application": request.application,
                         "language": request.language,
-                        "confidence": model_response.get("confidence", 0.0) if isinstance(model_response, dict) else 0.0,
+                        "confidence": model_response.get("confidence", 0.0),
                         "processing_time": (datetime.utcnow() - start_time).total_seconds()
                     }
                 }
             )
 
-            # 7. Sauvegarde en arrière-plan
+            # Sauvegarde en arrière-plan
             background_tasks.add_task(
                 save_chat_interaction,
                 components,
@@ -146,17 +143,16 @@ async def process_chat_message(
                 relevant_docs
             )
 
-            # 8. Préparation de la réponse
+            # Préparation de la réponse
             return ChatResponse(
                 response=response_text,
                 session_id=chat_session.session_id,
                 conversation_id=uuid.uuid4(),
                 documents=[DocumentReference(**doc) for doc in relevant_docs],
-                confidence_score=model_response.get("confidence_score", 0.0),
+                confidence_score=model_response.get("confidence", 0.0),
                 processing_time=(datetime.utcnow() - start_time).total_seconds(),
                 tokens_used=model_response.get("tokens_used", {}).get("total", 0),
                 tokens_details=model_response.get("tokens_used", {}),
-                #cost=calculate_cost(model_response["tokens_used"]),
                 application=request.application or "chat_api",
                 query_vector=query_vector,
                 response_vector=response_vector,
@@ -185,9 +181,8 @@ async def process_chat_message(
         await log_error(components, e, request)
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail="Une erreur interne est survenue."
         )
-
 
 @router.get("/stream")
 async def stream_chat_response(
