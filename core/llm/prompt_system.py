@@ -1,3 +1,4 @@
+# core/llm/prompt_system.py
 from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field, validator
 from datetime import datetime
@@ -166,12 +167,13 @@ class PromptSystem:
     def _build_fallback_prompt(self, query: str) -> str:
         """Construit un prompt minimal en cas d'erreur."""
         return f"""<|system|>
-{self.system_roles['system'].format(app_name=settings.APP_NAME)}
-</|system|>
+        {self.system_roles['system'].format(app_name=settings.APP_NAME)}
+        </|system|>
 
-<|user|>
-{query}
-</|user|>
+        <|user|>
+        {query}
+        </|user|>
 
-<|assistant|>
-Je vais essayer de vous aider avec cette demande.
+        <|assistant|>
+        Je vais essayer de vous aider avec cette demande.
+        </|assistant|>"""
