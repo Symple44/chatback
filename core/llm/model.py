@@ -290,6 +290,12 @@ class ModelInference:
             repetition_penalty=float(settings.REPETITION_PENALTY),
             length_penalty=float(settings.LENGTH_PENALTY),
             early_stopping=True
+            no_repeat_ngram_size=3,
+            diversity_penalty=0.0,
+            forced_bos_token_id=None,
+            forced_eos_token_id=None,
+            bad_words_ids=None,
+            remove_invalid_values=True
         )
 
     async def _validate_and_prepare_context(
@@ -380,27 +386,35 @@ class ModelInference:
         inputs: Dict[str, torch.Tensor],
         generation_config: GenerationConfig
     ) -> torch.Tensor:
-        """
-        Génère une réponse avec gestion des erreurs et fallback.
-        """
+        """Génère une réponse avec gestion des erreurs et fallback."""
         try:
             # Première tentative avec configuration complète
             outputs = self.model.generate(
                 **inputs,
-                generation_config=generation_config
+                generation_config=generation_config,
+                attention_mask=inputs.get("attention_mask", None),
+                # Ajout de stopping_criteria pour éviter une fin prématurée
+                stopping_criteria=None,
+                output_attentions=False,
+                output_hidden_states=False,
+                return_dict_in_generate=False,
             )
             return outputs
+
         except RuntimeError as e:
             if "out of memory" in str(e):
-                # Libération de la mémoire
-                torch.cuda.empty_cache()
                 logger.warning("OOM détecté, tentative avec configuration réduite")
-
+                torch.cuda.empty_cache()
+                
                 # Configuration réduite
                 fallback_config = GenerationConfig(
                     max_new_tokens=min(512, generation_config.max_new_tokens),
                     do_sample=False,
-                    num_beams=1
+                    num_beams=1,
+                    pad_token_id=generation_config.pad_token_id,
+                    eos_token_id=generation_config.eos_token_id,
+                    repetition_penalty=1.0,
+                    length_penalty=1.0
                 )
 
                 return self.model.generate(

@@ -185,11 +185,7 @@ class Settings(BaseSettings):
     Question: {query}
     </|user|>
 
-    <|assistant|>
-    Je vais vous aider avec cette demande.
-
-    {response}
-    </|assistant|>"""
+    {assistant_section}"""
 
     # Rôles système
     SYSTEM_ROLES: Dict[str, str] = {
