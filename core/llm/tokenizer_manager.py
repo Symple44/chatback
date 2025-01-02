@@ -84,16 +84,37 @@ class TokenizerManager:
         )
         return encoded
 
-    def decode_and_clean(self, token_ids: torch.Tensor) -> str:
-        """Décode et nettoie la sortie du modèle."""
+
+    def decode_and_clean(
+        self, 
+        token_ids: torch.Tensor, 
+        skip_special_tokens: bool = True,
+        skip_assistant_token: bool = True
+    ) -> str:
+        """
+        Décode et nettoie la sortie du modèle.
+        
+        Args:
+            token_ids: Tokens à décoder
+            skip_special_tokens: Ignorer les tokens spéciaux
+            skip_assistant_token: Ignorer le token assistant et ne garder que la réponse
+        """
         response = self.tokenizer.decode(
             token_ids,
-            skip_special_tokens=True,
+            skip_special_tokens=skip_special_tokens,
             clean_up_tokenization_spaces=True
         )
-        if "Réponse:" in response:
-            response = response.split("Réponse:")[-1].strip()
-        return response
+
+        # Nettoyage des balises de rôle si demandé
+        if skip_assistant_token:
+            # Supprime tout ce qui précède la balise assistant
+            if "<|assistant|>" in response:
+                response = response.split("<|assistant|>")[-1]
+            # Supprime la balise de fin si présente
+            if "</|assistant|>" in response:
+                response = response.split("</|assistant|>")[0]
+            
+        return response.strip()
 
     async def cleanup(self):
         """Nettoie les ressources."""
