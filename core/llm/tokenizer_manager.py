@@ -1,5 +1,5 @@
 from transformers import AutoTokenizer, GenerationConfig
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import torch
 from core.config import settings
 from core.utils.logger import get_logger
