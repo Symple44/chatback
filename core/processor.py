@@ -7,6 +7,9 @@ from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 
+from api.models.requests import ChatRequest, ChatContext
+from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
+
 logger = get_logger("chat_processor")
 
 class ChatProcessor:
@@ -174,11 +177,18 @@ class ChatProcessor:
 
         return ChatResponse(
             response=clarification_text,
-            session_id=str(chat_session.session_id),
+            session_id=chat_session.session_id,
+            conversation_id=uuid.uuid4(),
             metadata={
                 "needs_clarification": True,
-                "themes": context_analysis.get("themes", [])
-            }
+                "themes": context_analysis.get("themes", []),
+                "source": "model",
+                "timestamp": datetime.utcnow().isoformat(),
+                "session_context": chat_session.session_context
+            },
+            confidence_score=0.0,
+            processing_time=0.0,
+            tokens_used=0
         )
 
     async def _handle_clarification_response(
