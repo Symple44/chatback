@@ -37,6 +37,7 @@ async def process_chat_message(
 
     try:
         with metrics.timer("chat_processing"):
+            model_response = {}
             # 1. Vérification et récupération de l'utilisateur
             async with DatabaseSession() as session:
                 user = await session.execute(

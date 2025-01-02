@@ -251,7 +251,7 @@ Questions suggérées:
             # Génération
             with torch.no_grad():
                 if settings.USE_FP16:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast("cuda"):
                         summary_ids = self.model.generate(
                             **inputs,
                             **self.generation_params
