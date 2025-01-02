@@ -9,6 +9,7 @@ logger = get_logger("tokenizer_manager")
 class TokenizerManager:
     def __init__(self):
         self.tokenizer = None
+        self.max_length = settings.MAX_INPUT_LENGTH 
         self._setup_tokenizer()
 
     def _setup_tokenizer(self):
@@ -53,9 +54,31 @@ class TokenizerManager:
             text,
             max_length=max_length,
             padding=padding,
-            truncation=max_length is not None,
+            truncation=True,
             return_tensors=return_tensors
         )
+        
+    def encode_with_truncation(
+        self, 
+        text: str, 
+        max_length: Optional[int] = None, 
+        return_tensors: str = "pt"
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Encode et tronque le texte avec gestion de la longueur maximale.
+        """
+        if max_length is None:
+            max_length = self.max_length
+
+        # Encode avec troncature
+        encoded = self.tokenizer(
+            text, 
+            truncation=True, 
+            max_length=max_length, 
+            padding=True, 
+            return_tensors=return_tensors
+        )
+        return encoded
 
     def decode_and_clean(self, token_ids: torch.Tensor) -> str:
         """Décode et nettoie la sortie du modèle."""

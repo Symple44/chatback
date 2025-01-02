@@ -97,6 +97,10 @@ class ModelInference:
 
             # Post-initialisation
             model_device = next(self.model.parameters()).device
+
+            # Initialiser TokenizerManager avec le tokenizer
+            self.tokenizer_manager = TokenizerManager()
+            
             logger.info(f"Modèle chargé sur {model_device}")
             logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
             metrics.increment_counter("model_loads")
@@ -198,12 +202,12 @@ class ModelInference:
             with metrics.timer("model_inference"):
                 generation_config = self._get_generation_config(response_type)
                 
-                with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
+                with torch.amp.autocast('cuda', enabled=settings.USE_FP16):
                     with torch.no_grad():
                         # Tokenisation avec gestion de la longueur
                         inputs = self.tokenizer_manager.encode_with_truncation(
                             prompt,
-                            max_length=MAX_INPUT_LENGTH,
+                            max_length=settings.MAX_INPUT_LENGTH,
                             return_tensors="pt"
                         )
                         
