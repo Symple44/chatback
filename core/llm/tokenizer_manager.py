@@ -19,12 +19,17 @@ class TokenizerManager:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 revision=settings.MODEL_REVISION,
-                trust_remote_code=True
+                trust_remote_code=True,
+                padding_side='left'  # Optionnel, mais peut aider
             )
-
-            if self.tokenizer.pad_token_id is None:
-                self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
+            
+            # Gestion intelligente du pad_token
+            if self.tokenizer.pad_token is None:
+                if self.tokenizer.eos_token:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                else:
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            
             self.generation_config = GenerationConfig(
                 do_sample=bool(settings.DO_SAMPLE),
                 temperature=float(settings.TEMPERATURE),
@@ -37,7 +42,6 @@ class TokenizerManager:
             )
             
             logger.info(f"Tokenizer initialisé: {settings.MODEL_NAME}")
-
         except Exception as e:
             logger.error(f"Erreur configuration tokenizer: {e}")
             raise

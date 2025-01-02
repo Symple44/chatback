@@ -211,6 +211,9 @@ class ModelInference:
                             return_tensors="pt"
                         )
                         
+                        # Déplacer les inputs sur le même device que le modèle
+                        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                        
                         # Génération
                         outputs = await self._generate_with_fallback(
                             inputs,
