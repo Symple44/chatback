@@ -249,8 +249,8 @@ class ModelInference:
 
                         response_text = self.tokenizer_manager.decode_and_clean(
                             outputs[0],
-                            skip_special_tokens=True,
-                            clean_up_tokenization_spaces=True
+                            skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False
                         )
                         if not response_text.strip():
                             response_text = "Je m'excuse, je n'ai pas pu générer une réponse appropriée. Pourriez-vous reformuler votre question ?"
