@@ -139,9 +139,7 @@ class CUDAManager:
             "device_map": "auto",
             "torch_dtype": self.config.torch_dtype,
             "max_memory": self.config.max_memory,
-            "offload_folder": self.config.offload_folder,
             "trust_remote_code": True,
-            "attn_implementation": "flash_attention_2" if self.config.use_flash_attention else "sdpa"  # Au lieu de use_flash_attention
         }
 
         # Configuration de la quantification
@@ -156,6 +154,7 @@ class CUDAManager:
             )
             load_params["quantization_config"] = quantization_config
             
+            # Si l'offloading CPU est activé, on ne peut pas utiliser Flash Attention
             if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":
                 logger.info("Activation de l'offloading CPU FP32 pour INT8")
                 load_params["device_map"] = {
@@ -163,6 +162,10 @@ class CUDAManager:
                     "transformer.final_layernorm": "cpu",
                     "lm_head": "cpu"
                 }
+                load_params["attn_implementation"] = "sdpa"  # Utiliser SDPA au lieu de Flash Attention
+            else:
+                # Flash Attention uniquement si pas d'offloading CPU
+                load_params["attn_implementation"] = "flash_attention_2"
 
         elif settings.USE_4BIT:
             from transformers import BitsAndBytesConfig
@@ -174,6 +177,7 @@ class CUDAManager:
                 bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true"
             )
             load_params["quantization_config"] = quantization_config
+            load_params["attn_implementation"] = "flash_attention_2"
 
         return load_params
 
