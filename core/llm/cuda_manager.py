@@ -140,8 +140,8 @@ class CUDAManager:
             "torch_dtype": self.config.torch_dtype,
             "max_memory": self.config.max_memory,
             "offload_folder": self.config.offload_folder,
-            "use_flash_attention": self.config.use_flash_attention,
-            "trust_remote_code": True
+            "trust_remote_code": True,
+            "attn_implementation": "flash_attention_2" if self.config.use_flash_attention else "sdpa"  # Au lieu de use_flash_attention
         }
 
         # Configuration de la quantification
@@ -152,8 +152,7 @@ class CUDAManager:
                 load_in_8bit=True,
                 llm_int8_threshold=float(settings.LLM_INT8_THRESHOLD),
                 llm_int8_enable_fp32_cpu_offload=settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true",
-                llm_int8_skip_modules=None,
-                quant_method="bitsandbytes"  # Spécification explicite de la méthode
+                llm_int8_skip_modules=None
             )
             load_params["quantization_config"] = quantization_config
             
@@ -172,8 +171,7 @@ class CUDAManager:
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE),
                 bnb_4bit_quant_type=settings.BNB_4BIT_QUANT_TYPE,
-                bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true",
-                quant_method="bitsandbytes"
+                bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true"
             )
             load_params["quantization_config"] = quantization_config
 
