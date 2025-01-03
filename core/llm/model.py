@@ -320,14 +320,14 @@ class ModelInference:
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
             
-            # Ajustements spécifiques pour le streaming
+            max_tokens = settings.MAX_NEW_TOKENS if isinstance(settings.MAX_NEW_TOKENS, int) else 1024
             generation_config_dict = {
-                "max_new_tokens": min(int(generation_config.max_new_tokens), 1024),
-                "temperature": float(generation_config.temperature),
-                "top_p": float(generation_config.top_p),
-                "do_sample": bool(generation_config.do_sample),
-                "pad_token_id": int(generation_config.pad_token_id),
-                "eos_token_id": int(generation_config.eos_token_id),
+                "max_new_tokens": max_tokens,
+                "temperature": generation_config.temperature or 0.7,
+                "top_p": generation_config.top_p or 0.9,
+                "do_sample": generation_config.do_sample or True,
+                "pad_token_id": self.tokenizer_manager.tokenizer.pad_token_id,
+                "eos_token_id": self.tokenizer_manager.tokenizer.eos_token_id,
                 "streamer": streamer
             }
 
