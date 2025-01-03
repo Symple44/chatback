@@ -22,20 +22,113 @@ class ElasticsearchIndexManager:
 
     async def setup_indices(self) -> None:
         """Configure tous les indices nécessaires."""
-        indices_config = {
-            "documents": self._get_documents_mapping(),
-            "vectors": self._get_vectors_mapping(),
-            "chunks": self._get_chunks_mapping()
+        base_settings = {
+            "settings": {
+                "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                "number_of_replicas": 0,  # On met 0 réplica puisque c'est un environnement single-node
+                "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
+                "analysis": {
+                    "analyzer": {
+                        "french_analyzer": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": [
+                                "lowercase",
+                                "french_elision",
+                                "french_stop",
+                                "french_stemmer"
+                            ]
+                        }
+                    },
+                    "filter": {
+                        "french_elision": {
+                            "type": "elision",
+                            "articles_case": True,
+                            "articles": ["l", "m", "t", "qu", "n", "s", "j", "d", "c", "jusqu", "quoiqu", "lorsqu", "puisqu"]
+                        },
+                        "french_stop": {
+                            "type": "stop",
+                            "stopwords": "_french_"
+                        },
+                        "french_stemmer": {
+                            "type": "stemmer",
+                            "language": "light_french"
+                        }
+                    }
+                }
+            }
         }
-        
+
+        # Configuration des mappings spécifiques
+        indices_config = {
+            "documents": {
+                **base_settings,
+                "mappings": {
+                    "properties": {
+                        "title": {
+                            "type": "text",
+                            "analyzer": "french_analyzer",
+                            "fields": {
+                                "keyword": {"type": "keyword"},
+                                "suggest": {
+                                    "type": "completion",
+                                    "analyzer": "french_analyzer"
+                                }
+                            }
+                        },
+                        "content": {
+                            "type": "text",
+                            "analyzer": "french_analyzer"
+                        },
+                        "embedding": {
+                            "type": "dense_vector",
+                            "dims": self.embedding_dim,
+                            "similarity": "cosine",
+                            "index": True
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "keyword"},
+                                "language": {"type": "keyword"},
+                                "application": {"type": "keyword"},
+                                "version": {"type": "keyword"},
+                                "last_updated": {"type": "date"},
+                                "tags": {"type": "keyword"},
+                                "category": {"type": "keyword"}
+                            },
+                            "dynamic": True
+                        },
+                        "importance_score": {"type": "float"},
+                        "processed_date": {"type": "date"}
+                    }
+                }
+            }
+        }
+
         for name, config in indices_config.items():
             index_name = f"{self.index_prefix}_{name}"
             try:
-                if not await self.es.indices.exists(index=index_name):
-                    await self.create_index(index_name, config)
+                # Vérifier si l'index existe
+                exists = await self.es.indices.exists(index=index_name)
+                
+                if exists:
+                    logger.info(f"Suppression de l'index existant {index_name}")
+                    await self.es.indices.delete(index=index_name)
+                
+                logger.info(f"Création de l'index {index_name}")
+                await self.es.indices.create(
+                    index=index_name,
+                    body=config,
+                    timeout="30s"
+                )
+                
+                # Vérifier que l'index a été créé correctement
+                if await self.es.indices.exists(index=index_name):
+                    logger.info(f"Index {index_name} créé avec succès")
                 else:
-                    # Vérifier et mettre à jour le mapping si nécessaire
-                    await self.update_mapping_if_needed(index_name, config)
+                    logger.error(f"Échec de la création de l'index {index_name}")
+                    
             except Exception as e:
                 logger.error(f"Erreur configuration index {index_name}: {e}")
                 raise
