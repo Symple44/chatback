@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-from core.llm.cuda_manager import CUDAManager
 import os
 import sys
 from pathlib import Path
+from core.llm.cuda_manager import CUDAManager
+from core.utils.logger import get_logger
 
 def setup_environment():
     """Configure l'environnement complet avant le démarrage."""

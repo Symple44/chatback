@@ -50,11 +50,11 @@ class CUDAManager:
             module_loading=settings.CUDA_MODULE_LOADING,
             max_split_size_mb=int(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[0].split(":")[1]),
             garbage_collection_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
-            benchmark=settings.CUDNN_BENCHMARK.lower() == 'true',
-            deterministic=settings.CUDNN_DETERMINISTIC.lower() == 'true',
+            benchmark=settings.CUDNN_BENCHMARK,
+            deterministic=settings.CUDNN_DETERMINISTIC,
             max_memory=max_memory,
             offload_folder=settings.OFFLOAD_FOLDER,
-            use_flash_attention=settings.USE_FLASH_ATTENTION.lower() == 'true'
+            use_flash_attention=settings.USE_FLASH_ATTENTION
         )
 
     def setup_cuda_environment(self):
