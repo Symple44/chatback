@@ -130,7 +130,46 @@ class ChatProcessor:
                 "context_confidence": 0.0,
                 "error": str(e)
             }
+            
+    async def _handle_clarification_response(
+        self,
+        request: ChatRequest,
+        chat_session: ChatSession,
+        relevant_docs: List[Dict]
+    ) -> ChatResponse:
+        """
+        Traite la réponse de l'utilisateur à une demande de clarification.
+        """
+        original_query = chat_session.session_context.get("original_query", "")
+        context_analysis = chat_session.session_context.get("context_analysis", {})
 
+        # Combiner la requête originale avec la clarification
+        combined_query = f"{original_query} {request.query}"
+
+        # Génération de la réponse avec le contexte enrichi
+        response = await self.components.model.generate_response(
+            query=combined_query,
+            context_docs=relevant_docs,
+            conversation_history=[
+                {"role": "user", "content": original_query},
+                {"role": "assistant", "content": "Demande de clarification..."},
+                {"role": "user", "content": request.query}
+            ]
+        )
+
+        # Réinitialisation du contexte de session
+        await self.components.session_manager.update_session_context(
+            chat_session.session_id,
+            {"pending_clarification": False}
+        )
+
+        return ChatResponse(
+            response=response["response"],
+            session_id=str(chat_session.session_id),
+            confidence_score=response.get("confidence_score", 0.0),
+            metadata={"clarification_handled": True}
+        )
+        
     async def _should_handle_clarification(
         self,
         request: ChatRequest,
