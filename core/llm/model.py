@@ -306,10 +306,10 @@ class ModelInference:
 
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
-            generation_config.update({
-                "streamer": streamer,
-                "max_new_tokens": min(generation_config["max_new_tokens"], 1024)  # Limite pour le streaming
-            })
+            
+            # Modifier directement les attributs de GenerationConfig
+            generation_config.max_new_tokens = min(generation_config.max_new_tokens, 1024)
+            generation_config.streamer = streamer
 
             # Préparation du contexte
             validated_docs = await self._validate_and_prepare_context(context_docs)
