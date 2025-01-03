@@ -247,45 +247,22 @@ class SessionManager:
         """
         async with self.async_session() as session:
             if session_id:
-                try:
-                    str_session_id = str(session_id)
-                    result = await session.execute(
-                        select(ChatSession)
-                        .where(ChatSession.session_id == str_session_id)
-                        .options(selectinload(ChatSession.chat_history))
+                result = await session.execute(
+                    select(ChatSession)
+                    .where(ChatSession.session_id == str(session_id))
+                )
+                existing_session = result.scalar_one_or_none()
+                
+                if existing_session:
+                    # Charger l'historique séparément si nécessaire
+                    history = await session.execute(
+                        select(ChatHistory)
+                        .where(ChatHistory.session_id == existing_session.session_id)
+                        .order_by(ChatHistory.created_at.desc())
+                        .limit(5)
                     )
-                    existing_session = result.scalar_one_or_none()
-                    if existing_session:
-                        # Mise à jour du contexte avec les nouvelles interactions
-                        history = await self.get_session_history(session_id)
-                        current_context = existing_session.session_context or {}
-
-                        # Mise à jour du contexte
-                        updated_context = {
-                            **current_context,
-                            "last_updated": datetime.utcnow().isoformat(),
-                            "history": [
-                                {
-                                    "query": h.query,
-                                    "response": h.response,
-                                    "timestamp": h.created_at.isoformat()
-                                } for h in history
-                            ][-5:],  # Garder les 5 dernières interactions
-                            "metadata": {
-                                **current_context.get("metadata", {}),
-                                **metadata
-                            }
-                        }
-
-                        existing_session.session_context = updated_context
-                        existing_session.updated_at = datetime.utcnow()
-
-                        await session.commit()
-                        return existing_session
-                except Exception as e:
-                    logger.error(f"Erreur de récupération de session: {e}")
-                    logger.error(f"Détails session_id: {session_id}, type: {type(session_id)}")
-                    raise
+                    existing_session.chat_history = history.scalars().all()
+                    return existing_session
 
             # Création d'une nouvelle session
             new_session = ChatSession(
