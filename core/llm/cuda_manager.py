@@ -13,7 +13,7 @@ logger = get_logger("cuda_manager")
 
 @dataclass
 class CUDAConfig:
-    """Configuration CUDA."""
+    """Configuration CUDA avec support INT8."""
     device_id: int = 0
     memory_fraction: float = 0.95
     torch_dtype: torch.dtype = torch.float16
@@ -147,8 +147,18 @@ class CUDAManager:
             load_params["quantization_config"] = {
                 "load_in_8bit": True,
                 "threshold": float(settings.LLM_INT8_THRESHOLD),
-                "skip_modules": None
+                "skip_modules": None,
+                "enable_fp32_cpu_offload": settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true"
             }
+            
+            # Configuration spécifique pour l'offloading CPU en INT8
+            if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":
+                logger.info("Activation de l'offloading CPU FP32 pour INT8")
+                load_params["device_map"] = {
+                    "transformer.word_embeddings": "cpu",
+                    "transformer.final_layernorm": "cpu",
+                    "lm_head": "cpu"
+                }
         elif settings.USE_4BIT:
             load_params["load_in_4bit"] = True
             load_params.update({
