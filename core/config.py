@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
     PROMPT_TEMPERATURE: float = float(os.getenv("PROMPT_TEMPERATURE", "0.7"))
     CONTEXT_TOKENS_LIMIT: int = int(os.getenv("CONTEXT_TOKENS_LIMIT", "2047"))
+    STREAM_TIMEOUT: int = int(os.getenv("STREAM_TIMEOUT", "30"))
     
     #Processeur de chat
     CONFIDENCE_THRESHOLD: float = 0.7
