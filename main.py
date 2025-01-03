@@ -5,6 +5,8 @@ from pathlib import Path
 from core.llm.cuda_manager import CUDAManager
 from core.utils.logger import get_logger
 
+logger = get_logger("main")
+
 def setup_environment():
     """Configure l'environnement complet avant le démarrage."""
     try:
@@ -69,8 +71,6 @@ from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
 from core.storage.google_drive import GoogleDriveManager
 
-# Configuration du logger
-logger = get_logger("main")
 
 class CustomJSONEncoder(json.JSONEncoder):
     """Encodeur JSON personnalisé."""

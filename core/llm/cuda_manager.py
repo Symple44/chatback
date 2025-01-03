@@ -44,17 +44,21 @@ class CUDAManager:
             logger.warning("Erreur parsing MAX_MEMORY, utilisation des valeurs par défaut")
             max_memory = {"0": "22GiB", "cpu": "24GB"}
 
+        # Conversion explicite des strings en booléens
+        def str_to_bool(val: str) -> bool:
+            return str(val).lower() == 'true'
+
         return CUDAConfig(
             device_id=int(settings.CUDA_VISIBLE_DEVICES),
             memory_fraction=float(settings.CUDA_MEMORY_FRACTION),
             module_loading=settings.CUDA_MODULE_LOADING,
             max_split_size_mb=int(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[0].split(":")[1]),
             garbage_collection_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
-            benchmark=settings.CUDNN_BENCHMARK,
-            deterministic=settings.CUDNN_DETERMINISTIC,
+            benchmark=str_to_bool(settings.CUDNN_BENCHMARK),
+            deterministic=str_to_bool(settings.CUDNN_DETERMINISTIC),
             max_memory=max_memory,
             offload_folder=settings.OFFLOAD_FOLDER,
-            use_flash_attention=settings.USE_FLASH_ATTENTION
+            use_flash_attention=str_to_bool(settings.USE_FLASH_ATTENTION)
         )
 
     def setup_cuda_environment(self):
