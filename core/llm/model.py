@@ -16,6 +16,7 @@ from .prompt_system import PromptSystem
 from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
+from core.chat.context_analyzer import context_analyzer
 
 logger = get_logger("model")
 
@@ -401,9 +402,7 @@ class ModelInference:
         docs: List[Dict],
         query: str
     ) -> Dict:
-        """
-        Analyse la pertinence du contexte par rapport à la requête.
-        """
+        """Analyse la pertinence du contexte par rapport à la requête."""
         if not docs:
             return {
                 "has_context": False,
@@ -434,7 +433,17 @@ class ModelInference:
         avg_confidence = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
         total_tokens = sum(doc.get("token_count", 0) for doc in docs)
 
+        # Utilisation du ContextAnalyzer
+        context_analysis = await context_analyzer.analyze_context(
+            query=query,
+            context_docs=docs,
+            context_confidence=avg_confidence,
+            summarizer=self.summarizer if hasattr(self, 'summarizer') else None,
+            embeddings_model=self.embedding_model if hasattr(self, 'embedding_model') else None
+        )
+
         return {
+            **context_analysis,
             "has_context": True,
             "confidence": avg_confidence,
             "relevance_scores": relevance_scores,

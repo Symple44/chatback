@@ -11,6 +11,7 @@ from core.utils.system_optimizer import SystemOptimizer
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from core.chat.context_analyzer import context_analyzer
 
 from api.models.requests import ChatRequest
 from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
@@ -111,67 +112,17 @@ class ChatProcessor:
         relevant_docs: List[Dict],
         context_confidence: float
     ) -> Dict:
-        """Analyse approfondie du contexte pour déterminer le besoin de clarification."""
+        """Analyse le contexte de la conversation."""
+        from core.utils.context_analyzer import context_analyzer
         try:
-            # Analyse via summarizer si disponible
-            if hasattr(self.components.model, 'summarizer'):
-                context_analysis = await self.components.model.summarizer.summarize_documents(relevant_docs)
-            else:
-                context_analysis = {
-                    "needs_clarification": False,
-                    "themes": [],
-                    "questions": []
-                }
-
-            # Extraction et analyse des thèmes
-            themes = set()
-            ambiguity_score = 0.0
-            all_content = ""
-
-            for doc in relevant_docs:
-                if doc.get("score", 0) < 0.5:
-                    continue
-
-                content = doc.get("content", "")
-                all_content += f"\n{content}"
-                doc_themes = self._extract_themes(content)
-                themes.update(doc_themes)
-
-                if len(doc_themes) > 1:
-                    ambiguity_score += 0.2
-
-            # Analyse sémantique de la requête
-            query_analysis = await self._analyze_query(query)
+            context_analysis = await context_analyzer.analyze_context(
+                query=query,
+                context_docs=relevant_docs,
+                context_confidence=context_confidence,
+                summarizer=self.components.model.summarizer if hasattr(self.components.model, 'summarizer') else None
+            )
             
-            # Évaluation du besoin de clarification
-            needs_clarification = any([
-                len(themes) > self.max_themes,
-                ambiguity_score > 0.5,
-                context_confidence < self.confidence_threshold,
-                len(relevant_docs) < self.min_relevant_docs,
-                query_analysis.get("is_ambiguous", False),
-                len(query.split()) < self.min_query_length
-            ])
-
-            return {
-                "needs_clarification": needs_clarification,
-                "context_confidence": context_confidence,
-                "themes": list(themes),
-                "ambiguity_score": ambiguity_score,
-                "query_analysis": query_analysis,
-                "response_type": self._determine_response_type(
-                    query=query,
-                    themes=themes,
-                    confidence=context_confidence,
-                    query_analysis=query_analysis
-                ),
-                "clarification_reason": self._get_clarification_reason(
-                    themes=themes,
-                    confidence=context_confidence,
-                    docs_count=len(relevant_docs),
-                    query_analysis=query_analysis
-                )
-            }
+            return context_analysis
 
         except Exception as e:
             logger.error(f"Erreur analyse contexte: {e}")
@@ -180,81 +131,6 @@ class ChatProcessor:
                 "context_confidence": 0.0,
                 "error": str(e)
             }
-
-    def _get_clarification_reason(
-        self,
-        themes: Set[str],
-        confidence: float,
-        docs_count: int,
-        query_analysis: Dict
-    ) -> str:
-        """Détermine la raison principale nécessitant une clarification."""
-        if len(themes) > self.max_themes:
-            return "multiple_themes"
-        if confidence < self.confidence_threshold:
-            return "low_confidence"
-        if docs_count < self.min_relevant_docs:
-            return "insufficient_context"
-        if query_analysis.get("is_ambiguous", False):
-            return "query_ambiguity"
-        return "general"
-    
-    async def _analyze_query(self, query: str) -> Dict[str, any]:
-        """Analyse sémantique de la requête."""
-        return {
-            "is_ambiguous": self._is_query_ambiguous(query),
-            "type": self._get_query_type(query),
-            "complexity": self._calculate_query_complexity(query),
-            "key_concepts": self._extract_key_concepts(query)
-        }
-
-    def _is_query_ambiguous(self, query: str) -> bool:
-        """Vérifie si une requête est ambiguë."""
-        # Questions trop courtes
-        if len(query.split()) < self.min_query_length:
-            return True
-
-        # Patterns d'ambiguïté
-        ambiguous_patterns = [
-            r"^(que|quoi|comment|pourquoi).{0,20}\?$",  # Questions trop courtes
-            r"\b(tout|tous|general|global)\b",          # Termes trop généraux
-            r"\b(autre|plus|encore)\b\s*\?",            # Demandes ouvertes
-            r"\b(ca|cela|ce|cette)\b",                  # Références vagues
-            r"\b(ils|elles|leur|ces)\b"                 # Pronoms sans contexte
-        ]
-
-        return any(re.search(pattern, query.lower()) for pattern in ambiguous_patterns)
-
-    def _get_query_type(self, query: str) -> str:
-        """Détermine le type de requête."""
-        query_lower = query.lower()
-        
-        if re.search(r"\b(comment|how|faire)\b", query_lower):
-            return "procedural"
-        if re.search(r"\b(pourquoi|why|raison)\b", query_lower):
-            return "explanatory"
-        if re.search(r"\b(différence|versus|vs|compare)\b", query_lower):
-            return "comparative"
-        if re.search(r"\b(est-ce que|est-il|possible)\b", query_lower):
-            return "confirmation"
-        return "informational"
-
-    def _calculate_query_complexity(self, query: str) -> float:
-        """Calcule la complexité d'une requête."""
-        factors = {
-            "length": len(query.split()) / 20,  # Normalisation par 20 mots
-            "technical_terms": len(re.findall(r"\b[A-Z][A-Za-z]*(?:\.[A-Za-z]+)+\b", query)) * 0.2,
-            "conjunctions": len(re.findall(r"\b(et|ou|mais|donc|car)\b", query)) * 0.1,
-            "special_chars": len(re.findall(r"[^\w\s]", query)) * 0.05
-        }
-        return min(sum(factors.values()), 1.0)
-
-    def _extract_key_concepts(self, query: str) -> List[str]:
-        """Extrait les concepts clés d'une requête."""
-        # Suppression des mots vides
-        stop_words = {"le", "la", "les", "un", "une", "des", "est", "sont", "a", "ont"}
-        words = query.lower().split()
-        return [w for w in words if w not in stop_words and len(w) > 3]
 
     async def _should_handle_clarification(
         self,
@@ -298,28 +174,6 @@ class ChatProcessor:
             logger.error(f"Erreur analyse clarification: {e}")
             return {"is_valid": False}
     
-    def _determine_response_type(
-        self,
-        query: str,
-        themes: Set[str],
-        confidence: float,
-        query_analysis: Dict
-    ) -> str:
-        """Détermine le type de réponse approprié."""
-        if query_analysis.get("is_ambiguous") or len(themes) > self.max_themes:
-            return "clarification"
-
-        complexity = query_analysis.get("complexity", 0.5)
-        query_type = query_analysis.get("type", "informational")
-
-        if query_type == "procedural" or complexity > 0.7:
-            return "technical"
-        if query_type == "confirmation" and confidence > 0.8:
-            return "concise"
-        if complexity < 0.3 and confidence > 0.9:
-            return "concise"
-
-        return "comprehensive"
 
     async def _create_clarification_response(
         self,
@@ -520,29 +374,6 @@ class ChatProcessor:
         except Exception as e:
             logger.error(f"Erreur mise à jour contexte session: {e}")
             raise
-
-    async def _extract_themes(self, content: str) -> Set[str]:
-        """Extrait les thèmes principaux d'un contenu."""
-        themes = set()
-        
-        # Patterns de détection de thèmes
-        theme_patterns = [
-            (r"(?i)configuration.*?(?:\.|$)", "Configuration"),
-            (r"(?i)installation.*?(?:\.|$)", "Installation"),
-            (r"(?i)erreur.*?(?:\.|$)", "Résolution d'erreurs"),
-            (r"(?i)mise à jour.*?(?:\.|$)", "Mise à jour"),
-            (r"(?i)sécurité.*?(?:\.|$)", "Sécurité"),
-            (r"(?i)performance.*?(?:\.|$)", "Performance"),
-            (r"(?i)api.*?(?:\.|$)", "API"),
-            (r"(?i)base de données.*?(?:\.|$)", "Base de données"),
-            (r"(?i)authentification.*?(?:\.|$)", "Authentification")
-        ]
-        
-        for pattern, theme in theme_patterns:
-            if re.search(pattern, content, re.MULTILINE):
-                themes.add(theme)
-
-        return themes
 
     async def _generate_query_understanding(self, query: str) -> str:
         """Génère une reformulation de la compréhension de la requête."""
