@@ -93,6 +93,13 @@ async def stream_chat_response(
 ):
     async def event_generator():
         try:
+            try:
+                # Attempt to parse the UUID, adding missing character if needed
+                user_id_fixed = user_id + '0' if len(user_id) == 35 else user_id
+                user_uuid = uuid.UUID(user_id_fixed)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid user ID")
+                
             # Création de la requête de chat
             chat_request = ChatRequest(
                 query=query, 
@@ -103,7 +110,8 @@ async def stream_chat_response(
             # Récupération ou création de la session
             chat_session = await components.session_manager.get_or_create_session(
                 str(session_id) if session_id else None,
-                str(user_id)
+                str(user_id),
+                metadata={}
             )
 
             # Préparation du contexte
