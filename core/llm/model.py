@@ -283,7 +283,7 @@ class ModelInference:
             metrics.increment_counter("generation_errors")
             raise
             
-    async def generate_streaming_response( #non finalisé
+    async def generate_streaming_response(
         self,
         query: str,
         context_docs: Optional[List[Dict]] = None,
@@ -304,21 +304,39 @@ class ModelInference:
                 timeout=settings.STREAM_TIMEOUT
             )
 
+            # Préparation du contexte
+            validated_docs = await self._validate_and_prepare_context(context_docs)
+            context_analysis = await self._analyze_context_relevance(validated_docs, query)
+
+            # Construction du prompt
+            prompt = await self.prompt_system.build_chat_prompt(
+                query=query,
+                context_docs=validated_docs,
+                context_info=context_analysis,
+                response_type=response_type
+            )
+
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
-            
-            # Modifier directement les attributs de GenerationConfig
             generation_config.max_new_tokens = min(generation_config.max_new_tokens, 1024)
             generation_config.streamer = streamer
 
-            # Préparation du contexte
-            validated_docs = await self._validate_and_prepare_context(context_docs)
+            # Tokenisation
+            inputs = self.tokenizer_manager.encode_with_truncation(
+                prompt,
+                max_length=settings.MAX_INPUT_LENGTH,
+                return_tensors="pt"
+            )
+
+            inputs = {
+                "input_ids": inputs["input_ids"].to(self.model.device),
+                "attention_mask": inputs["attention_mask"].to(self.model.device)
+            }
 
             # Démarrage de la génération en arrière-plan
             generation_task = asyncio.create_task(
-                self._generate_streaming_text(
-                    query=query,
-                    context_docs=validated_docs,
+                self._generate_in_background(
+                    inputs=inputs,
                     generation_config=generation_config
                 )
             )
@@ -334,6 +352,24 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur génération streaming: {e}")
             yield f"\nDésolé, une erreur est survenue: {str(e)}"
+
+    async def _generate_in_background(
+        self, 
+        inputs: Dict[str, torch.Tensor], 
+        generation_config: GenerationConfig
+    ) -> None:
+        """
+        Génère le texte en arrière-plan.
+        """
+        try:
+            with torch.no_grad():
+                self.model.generate(
+                    **inputs,
+                    generation_config=generation_config
+                )
+        except Exception as e:
+            logger.error(f"Erreur génération arrière-plan: {e}")
+            raise
             
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
         """Configuration de génération adaptée au type de réponse."""
