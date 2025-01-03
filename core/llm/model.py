@@ -11,7 +11,7 @@ from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager
-from .memory_manager import MemoryManager
+from core.utils.memory_manager import MemoryManager
 from .prompt_system import PromptSystem
 from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
