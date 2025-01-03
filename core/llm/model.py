@@ -320,10 +320,12 @@ class ModelInference:
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
             generation_config_dict = {
-                "max_new_tokens": min(generation_config.max_new_tokens, 1024),
-                "temperature": generation_config.temperature,
-                "top_p": generation_config.top_p,
-                "do_sample": generation_config.do_sample,
+                "max_new_tokens": int(generation_config.max_new_tokens),
+                "temperature": float(generation_config.temperature),
+                "top_p": float(generation_config.top_p),
+                "do_sample": bool(generation_config.do_sample),
+                "pad_token_id": self.tokenizer_manager.tokenizer.pad_token_id,
+                "eos_token_id": self.tokenizer_manager.tokenizer.eos_token_id,
                 "streamer": streamer
             }
 
@@ -332,6 +334,12 @@ class ModelInference:
                 messages=prompt_messages,
                 max_length=settings.MAX_INPUT_LENGTH
             )
+            
+            # Transfert explicite vers le GPU
+            inputs = {
+                "input_ids": inputs["input_ids"].to(self.model.device),
+                "attention_mask": inputs["attention_mask"].to(self.model.device)
+            }
 
             # Démarrage de la génération en arrière-plan
             generation_thread = threading.Thread(
