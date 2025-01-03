@@ -247,12 +247,20 @@ class SessionManager:
         """
         async with self.async_session() as session:
             if session_id:
-                query = select(ChatSession).where(ChatSession.session_id == str(session_id))
-                chat_session = await session.execute(query)
-                chat_session = chat_session.scalar_one_or_none()
+                stmt = select(ChatSession).where(ChatSession.session_id == str(session_id))
+                result = await session.execute(stmt)
+                chat_session = result.scalar_one_or_none()
                 
                 if chat_session:
-                    chat_session.chat_history = []  # On initialise une liste vide
+                    # Expiration manuelle de chat_history pour éviter le lazy loading
+                    session.expunge(chat_session)
+                    chat_session = ChatSession(
+                        id=chat_session.id,
+                        user_id=chat_session.user_id,
+                        session_id=chat_session.session_id,
+                        session_context=chat_session.session_context,
+                        chat_history=[]
+                    )
                     return chat_session
 
             # Création d'une nouvelle session
