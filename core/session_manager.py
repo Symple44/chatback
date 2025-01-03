@@ -247,22 +247,27 @@ class SessionManager:
         """
         async with self.async_session() as session:
             if session_id:
-                result = await session.execute(
+                chat_session = await session.execute(
                     select(ChatSession)
                     .where(ChatSession.session_id == str(session_id))
                 )
-                existing_session = result.scalar_one_or_none()
+                chat_session = chat_session.scalar_one_or_none()
                 
-                if existing_session:
-                    # Charger l'historique séparément si nécessaire
+                if chat_session:
+                    # Récupération simple de l'historique sans les vecteurs
                     history = await session.execute(
-                        select(ChatHistory)
-                        .where(ChatHistory.session_id == existing_session.session_id)
+                        select(
+                            ChatHistory.id,
+                            ChatHistory.query,
+                            ChatHistory.response,
+                            ChatHistory.created_at
+                        )
+                        .where(ChatHistory.session_id == chat_session.session_id)
                         .order_by(ChatHistory.created_at.desc())
                         .limit(5)
                     )
-                    existing_session.chat_history = history.scalars().all()
-                    return existing_session
+                    chat_session.chat_history = history.all()
+                    return chat_session
 
             # Création d'une nouvelle session
             new_session = ChatSession(
