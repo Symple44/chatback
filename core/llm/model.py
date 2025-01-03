@@ -334,32 +334,31 @@ class ModelInference:
             }
 
             # Démarrage de la génération en arrière-plan
-            generation_task = asyncio.create_task(
-                self._generate_in_background(
-                    inputs=inputs,
-                    generation_config=generation_config
-                )
+            generation_thread = threading.Thread(
+                target=self._generate_in_thread,
+                args=(inputs, generation_config)
             )
+            generation_thread.start()
 
             # Stream des tokens
-            async for token in streamer:
+            for token in streamer:
                 if token.strip():
                     yield token
 
             # Attente de la fin de la génération
-            await generation_task
+            generation_thread.join()
 
         except Exception as e:
             logger.error(f"Erreur génération streaming: {e}")
             yield f"\nDésolé, une erreur est survenue: {str(e)}"
 
-    async def _generate_in_background(
+    def _generate_in_thread(
         self, 
         inputs: Dict[str, torch.Tensor], 
         generation_config: GenerationConfig
     ) -> None:
         """
-        Génère le texte en arrière-plan.
+        Génère le texte dans un thread séparé.
         """
         try:
             with torch.no_grad():
@@ -368,7 +367,7 @@ class ModelInference:
                     generation_config=generation_config
                 )
         except Exception as e:
-            logger.error(f"Erreur génération arrière-plan: {e}")
+            logger.error(f"Erreur génération thread: {e}")
             raise
             
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
