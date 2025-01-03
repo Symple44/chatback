@@ -4,7 +4,7 @@ from sqlalchemy import (
     ForeignKey, Text, Index, func, UUID, JSON, ARRAY,
     UniqueConstraint, CheckConstraint
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID, ARRAY, DOUBLE_PRECISION
 from sqlalchemy.orm import relationship, validates, declarative_base
 from sqlalchemy.schema import CheckConstraint
 from sqlalchemy.ext.hybrid import hybrid_property
