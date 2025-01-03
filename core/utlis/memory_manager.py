@@ -1,4 +1,4 @@
-# core/llm/memory_manager.py
+# core/utils/memory_manager.py
 import gc
 import psutil
 import torch
