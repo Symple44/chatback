@@ -1,3 +1,4 @@
+# core/vectorstore/elasticsearch_client.py
 from typing import Dict, List, Optional, Any, Union, Tuple
 from elasticsearch import AsyncElasticsearch
 from elasticsearch.helpers import async_bulk, BulkIndexError
