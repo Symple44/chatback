@@ -123,7 +123,35 @@ class ElasticsearchIndexManager:
         return {
             "settings": {
                 "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS
+                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "analysis": {
+                    "analyzer": {
+                        "french_analyzer": {
+                            "tokenizer": "standard",
+                            "filter": [
+                                "lowercase",
+                                "french_elision",
+                                "french_stop",
+                                "french_stemmer"
+                            ]
+                        }
+                    },
+                    "filter": {
+                        "french_elision": {
+                            "type": "elision",
+                            "articles_case": True,
+                            "articles": ["l", "m", "t", "qu", "n", "s", "j", "d", "c"]
+                        },
+                        "french_stop": {
+                            "type": "stop",
+                            "stopwords": "_french_"
+                        },
+                        "french_stemmer": {
+                            "type": "stemmer",
+                            "language": "light_french"
+                        }
+                    }
+                }
             },
             "mappings": {
                 "properties": {
@@ -149,7 +177,35 @@ class ElasticsearchIndexManager:
         return {
             "settings": {
                 "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS
+                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "analysis": {  # Ajout de la configuration de l'analyseur
+                    "analyzer": {
+                        "french_analyzer": {
+                            "tokenizer": "standard",
+                            "filter": [
+                                "lowercase",
+                                "french_elision",
+                                "french_stop",
+                                "french_stemmer"
+                            ]
+                        }
+                    },
+                    "filter": {
+                        "french_elision": {
+                            "type": "elision",
+                            "articles_case": True,
+                            "articles": ["l", "m", "t", "qu", "n", "s", "j", "d", "c"]
+                        },
+                        "french_stop": {
+                            "type": "stop",
+                            "stopwords": "_french_"
+                        },
+                        "french_stemmer": {
+                            "type": "stemmer",
+                            "language": "light_french"
+                        }
+                    }
+                }
             },
             "mappings": {
                 "properties": {
