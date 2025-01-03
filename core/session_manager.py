@@ -247,37 +247,12 @@ class SessionManager:
         """
         async with self.async_session() as session:
             if session_id:
-                chat_session = await session.execute(
-                    select(ChatSession)
-                    .where(ChatSession.session_id == str(session_id))
-                )
+                query = select(ChatSession).where(ChatSession.session_id == str(session_id))
+                chat_session = await session.execute(query)
                 chat_session = chat_session.scalar_one_or_none()
                 
                 if chat_session:
-                    # Sélection explicite des colonnes sans les vecteurs
-                    history_result = await session.execute(
-                        select(
-                            ChatHistory.id, 
-                            ChatHistory.query,
-                            ChatHistory.response,
-                            ChatHistory.confidence_score,
-                            ChatHistory.created_at
-                        )
-                        .where(ChatHistory.session_id == chat_session.session_id)
-                        .order_by(ChatHistory.created_at.desc())
-                        .limit(5)
-                    )
-                    
-                    chat_session.chat_history = [
-                        ChatHistory(
-                            id=row.id,
-                            session_id=chat_session.session_id,
-                            query=row.query,
-                            response=row.response,
-                            confidence_score=row.confidence_score,
-                            created_at=row.created_at
-                        ) for row in history_result.all()
-                    ]
+                    chat_session.chat_history = []  # On initialise une liste vide
                     return chat_session
 
             # Création d'une nouvelle session
