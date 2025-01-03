@@ -319,8 +319,17 @@ class ModelInference:
 
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
-            generation_config.max_new_tokens = min(generation_config.max_new_tokens, 1024)
-            generation_config.streamer = streamer
+            
+            # Ajustements spécifiques pour le streaming
+            generation_config_dict = {
+                "max_new_tokens": min(generation_config.max_new_tokens, 1024),
+                "temperature": generation_config.temperature,
+                "top_p": generation_config.top_p,
+                "do_sample": generation_config.do_sample,
+                "pad_token_id": generation_config.pad_token_id,
+                "eos_token_id": generation_config.eos_token_id,
+                "streamer": streamer
+            }
 
             # Tokenisation
             inputs = self.tokenizer_manager.encode_with_truncation(
@@ -337,7 +346,7 @@ class ModelInference:
             # Démarrage de la génération en arrière-plan
             generation_thread = threading.Thread(
                 target=self._generate_in_thread,
-                args=(inputs, generation_config)
+                args=(inputs, generation_config_dict)
             )
             generation_thread.start()
 
@@ -356,7 +365,7 @@ class ModelInference:
     def _generate_in_thread(
         self, 
         inputs: Dict[str, torch.Tensor], 
-        generation_config: GenerationConfig
+        generation_config_dict: Dict
     ) -> None:
         """
         Génère le texte dans un thread séparé.
@@ -365,7 +374,7 @@ class ModelInference:
             with torch.no_grad():
                 self.model.generate(
                     **inputs,
-                    generation_config=generation_config
+                    **generation_config_dict
                 )
         except Exception as e:
             logger.error(f"Erreur génération thread: {e}")
