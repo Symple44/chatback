@@ -132,43 +132,34 @@ class ChatProcessor:
             }
             
     async def _handle_clarification_response(
-        self,
-        request: ChatRequest,
-        chat_session: ChatSession,
-        relevant_docs: List[Dict]
+       self,
+       request: ChatRequest, 
+       chat_session: ChatSession,
+       context_analysis: Dict
     ) -> ChatResponse:
-        """
-        Traite la réponse de l'utilisateur à une demande de clarification.
-        """
-        original_query = chat_session.session_context.get("original_query", "")
-        context_analysis = chat_session.session_context.get("context_analysis", {})
+       start_time = datetime.utcnow()
+       query = f"{chat_session.session_context.get('original_query', '')} {request.query}"
+       
+       relevant_docs = await self.components.es_client.search_documents(
+           query=query,
+           size=self.max_context_docs
+       )
 
-        # Combiner la requête originale avec la clarification
-        combined_query = f"{original_query} {request.query}"
+       response = await self._generate_final_response(
+           request=request,
+           chat_session=chat_session, 
+           relevant_docs=relevant_docs,
+           context_analysis=context_analysis,
+           start_time=start_time
+       )
 
-        # Génération de la réponse avec le contexte enrichi
-        response = await self.components.model.generate_response(
-            query=combined_query,
-            context_docs=relevant_docs,
-            conversation_history=[
-                {"role": "user", "content": original_query},
-                {"role": "assistant", "content": "Demande de clarification..."},
-                {"role": "user", "content": request.query}
-            ]
-        )
+       # Reset clarification state
+       await self.components.session_manager.update_session_context(
+           chat_session.session_id,
+           {"pending_clarification": False}
+       )
 
-        # Réinitialisation du contexte de session
-        await self.components.session_manager.update_session_context(
-            chat_session.session_id,
-            {"pending_clarification": False}
-        )
-
-        return ChatResponse(
-            response=response["response"],
-            session_id=str(chat_session.session_id),
-            confidence_score=response.get("confidence_score", 0.0),
-            metadata={"clarification_handled": True}
-        )
+       return response
         
     async def _should_handle_clarification(
         self,
