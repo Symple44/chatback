@@ -181,6 +181,8 @@ class ChatProcessor:
         context_analysis: Dict
     ) -> ChatResponse:
         """Crée une réponse demandant des clarifications."""
+        start_time = datetime.utcnow()
+        
         reason = context_analysis.get("clarification_reason", "general")
         templates = {
             "multiple_themes": (
@@ -230,11 +232,15 @@ class ChatProcessor:
                 }
             )
 
+        # S'assurer que tous les champs requis sont présents
         return ChatResponse(
             response=clarification_text,
             session_id=str(chat_session.session_id) if chat_session else None,
             conversation_id=str(uuid.uuid4()),
             confidence_score=context_analysis.get("context_confidence", 0.0),
+            processing_time=(datetime.utcnow() - start_time).total_seconds(),  # Ajout du processing_time
+            tokens_used=0,  # Valeur par défaut pour tokens_used
+            documents=[],  # Liste vide pour les documents
             metadata={
                 "needs_clarification": True,
                 "clarification_reason": reason,
@@ -393,8 +399,8 @@ class ChatProcessor:
         try:
             response = await self.components.model.generate_response(
                 query=f"Génère 3 interprétations possibles de cette question: {query}",
-                max_tokens=150,
-                temperature=0.4
+                response_type="concise",  
+                language="fr"
             )
             
             interpretations = response.get("response", "").split("\n")
@@ -463,12 +469,15 @@ class ChatProcessor:
             error_data = {
                 "error_type": type(error).__name__,
                 "error_message": str(error),
-                "query": request.query,
-                "user_id": request.user_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "metadata": {
+                "stack_trace": "".join(traceback.format_tb(error.__traceback__)),
+                "component": "chat_processor",
+                "severity": "error",
+                "user_id": str(request.user_id) if request.user_id else None,
+                "session_id": str(request.session_id) if request.session_id else None,
+                "error_metadata": {
+                    "input_query": request.query,
                     "application": request.application,
-                    "session_id": request.session_id
+                    "timestamp": datetime.utcnow().isoformat()
                 }
             }
             

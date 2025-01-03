@@ -358,17 +358,25 @@ class ElasticsearchClient:
                 await self.initialize()
 
             # Construction de la requête de base
-            should_clauses = []
-            must_clauses = []
-            filter_clauses = []
+            query_body = {
+                "size": size,
+                "query": {
+                    "bool": {
+                        "must": [],
+                        "should": [],
+                        "filter": []
+                    }
+                },
+                "_source": ["title", "content", "metadata"]
+            }
 
             # Ajout de la recherche textuelle si présente
             if query:
-                must_clauses.append({
+                query_body["query"]["bool"]["must"].append({
                     "match": {
                         "content": {
                             "query": query,
-                            "operator": "or",
+                            "operator": "and",
                             "fuzziness": "AUTO"
                         }
                     }
@@ -377,39 +385,26 @@ class ElasticsearchClient:
             # Ajout des filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
-                    filter_clauses.append({
+                    query_body["query"]["bool"]["filter"].append({
                         "term": {
-                            f"metadata.{key}": value
+                            f"metadata.{key}.keyword": value
                         }
                     })
 
             # Ajout de la recherche vectorielle si présente
             if vector is not None:
-                should_clauses.append({
+                query_body["query"]["bool"]["should"].append({
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {
-                                "query_vector": vector
-                            }
+                            "source": "cosineSimilarity(params.query_vector, doc['embedding']) + 1.0",
+                            "params": {"query_vector": vector}
                         }
                     }
                 })
 
-            # Construction de la requête finale
-            query_body = {
-                "size": size,
-                "query": {
-                    "bool": {
-                        "must": must_clauses,
-                        "should": should_clauses,
-                        "filter": filter_clauses,
-                        "minimum_should_match": 0
-                    }
-                },
-                "_source": ["title", "content", "metadata"]
-            }
+            # S'assurer qu'au moins une condition doit correspondre
+            query_body["query"]["bool"]["minimum_should_match"] = 1 if vector else 0
 
             logger.debug(f"Query body: {json.dumps(query_body, indent=2)}")
 
@@ -418,6 +413,7 @@ class ElasticsearchClient:
                 body=query_body
             )
 
+            hits = response.get("hits", {}).get("hits", [])
             return [
                 {
                     "title": hit["_source"].get("title", ""),
@@ -425,11 +421,11 @@ class ElasticsearchClient:
                     "score": hit["_score"],
                     "metadata": hit["_source"].get("metadata", {})
                 }
-                for hit in response["hits"]["hits"]
+                for hit in hits
             ]
 
         except Exception as e:
-            logger.error(f"Erreur fatale recherche documents: {e}", exc_info=True)
+            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
             return []
 
     async def delete_document(self, doc_id: str) -> bool:
