@@ -251,7 +251,7 @@ class SessionManager:
                     result = await session.execute(
                         select(ChatSession)
                         .where(ChatSession.session_id == str(session_id))
-                        .options(selectinload(ChatSession.chat_history))
+                        #.options(selectinload(ChatSession.chat_history))
                     )
                     existing_session = result.scalar_one_or_none()
                     if existing_session:
