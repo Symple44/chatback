@@ -344,6 +344,7 @@ class ElasticsearchClient:
             )
             metrics.increment_counter("indexing_errors")
             return False
+            
     async def search_documents(
         self,
         query: str,
@@ -387,6 +388,18 @@ class ElasticsearchClient:
                     }
                 }
     
+            # Ajout de la recherche vectorielle si présente
+            if vector is not None:
+                query_body["query"]["bool"]["should"] = [{
+                    "script_score": {
+                        "query": {"match_all": {}},
+                        "script": {
+                            "source": "cosineSimilarity(params.vector, 'embedding') + 1.0",
+                            "params": {"vector": vector}
+                        }
+                    }
+                }]
+            
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
     
@@ -405,7 +418,7 @@ class ElasticsearchClient:
                     "title": hit.get("_source", {}).get("title", ""),
                     "content": hit.get("_source", {}).get("content", ""),
                     "score": hit.get("_score", 0.0),
-                    "metadata": hit.get("_source", {}).get("metadata", {})
+                    "metadata": hit.get("_source", {}).get("metadata", {}),
                 }
                 for hit in response.get("hits", {}).get("hits", [])
             ]

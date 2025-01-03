@@ -180,10 +180,10 @@ class PDFProcessor:
             # Construction du document
             document = {
                 "title": filename,
-                "content": content,
-                "application": application,  # Stocké au niveau racine
+                "content": content.get("text", ""),
                 "file_path": str(file_path),
                 "metadata": {
+                    "application": application,  # Application dans metadata
                     "page_count": doc_metadata.get("pages", 0),
                     "author": doc_metadata.get("author", ""),
                     "creation_date": doc_metadata.get("creation_date", ""),

@@ -280,7 +280,58 @@ class ModelInference:
             logger.error(f"Erreur génération: {str(e)}", exc_info=True)
             metrics.increment_counter("generation_errors")
             raise
-    
+            
+    async def generate_streaming_response( #non finalisé
+        self,
+        query: str,
+        context_docs: Optional[List[Dict]] = None,
+        response_type: str = "comprehensive"
+    ) -> Generator[str, None, None]:
+        """
+        Génère une réponse en streaming.
+        """
+        try:
+            if not self._initialized:
+                await self.initialize()
+
+            # Configuration du streaming
+            streamer = TextIteratorStreamer(
+                self.tokenizer_manager.tokenizer,
+                skip_prompt=True,
+                timeout=settings.STREAM_TIMEOUT
+            )
+
+            # Configuration de la génération
+            generation_config = self._get_generation_config(response_type)
+            generation_config.update({
+                "streamer": streamer,
+                "max_new_tokens": min(generation_config["max_new_tokens"], 1024)  # Limite pour le streaming
+            })
+
+            # Préparation du contexte
+            validated_docs = await self._validate_and_prepare_context(context_docs)
+
+            # Démarrage de la génération en arrière-plan
+            generation_task = asyncio.create_task(
+                self._generate_streaming_text(
+                    query=query,
+                    context_docs=validated_docs,
+                    generation_config=generation_config
+                )
+            )
+
+            # Stream des tokens
+            async for token in streamer:
+                if token.strip():
+                    yield token
+
+            # Attente de la fin de la génération
+            await generation_task
+
+        except Exception as e:
+            logger.error(f"Erreur génération streaming: {e}")
+            yield f"\nDésolé, une erreur est survenue: {str(e)}"
+            
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
         """Configuration de génération adaptée au type de réponse."""
         # Récupération des paramètres de base depuis les settings

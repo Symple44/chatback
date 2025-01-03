@@ -1,14 +1,18 @@
 # core/chat/processor.py
 from fastapi import HTTPException
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set
 import asyncio
 import uuid
+import re
+import traceback
+from pathlib import Path
+from core.utils.system_optimizer import SystemOptimizer
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 
-from api.models.requests import ChatRequest, ChatContext
+from api.models.requests import ChatRequest
 from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
 from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument
 
@@ -16,9 +20,13 @@ logger = get_logger("chat_processor")
 
 class ChatProcessor:
     def __init__(self, components):
+        """Initialise le processeur de chat."""
         self.components = components
         self.confidence_threshold = 0.7
         self.min_relevant_docs = 2
+        self.max_themes = 2
+        self.max_clarification_attempts = 3
+        self.min_query_length = 3
 
     async def process_message(
         self,
@@ -29,99 +37,73 @@ class ChatProcessor:
         Traite un message chat avec une logique améliorée d'interaction.
         """
         start_time = datetime.utcnow()
+        metrics.increment_counter("chat_requests")
+
         try:
             # 1. Génération du vecteur de requête
-            try:
-                query_vector = await self.components.model.create_embedding(request.query)
-                if not isinstance(query_vector, list) or len(query_vector) == 0:
-                    logger.error("Échec de la création du vecteur de requête")
-                    raise ValueError("Vecteur de requête invalide")
-            except Exception as e:
-                logger.error(f"Erreur création vecteur requête: {e}")
-                raise
+            query_vector = await self.components.model.create_embedding(request.query)
+            if not isinstance(query_vector, list) or len(query_vector) == 0:
+                raise ValueError("Vecteur de requête invalide")
 
             # 2. Recherche des documents pertinents
-            try:
-                relevant_docs = await self.components.es_client.search_documents(
-                    query=request.query,  # Ajout de la requête textuelle
-                    vector=query_vector,
-                    metadata_filter={"application": request.application} if request.application else None,
-                    size=settings.MAX_RELEVANT_DOCS
-                )
-                
-                # Calcul du score de confiance
-                context_confidence = self._calculate_context_confidence(relevant_docs)
-            except Exception as e:
-                logger.error(f"Erreur recherche documents: {e}")
-                relevant_docs = []
-                context_confidence = 0.0
-
-            # 3. Vérification du contexte de session pour les clarifications
-            if chat_session and chat_session.session_context.get("pending_clarification"):
-                return await self._handle_clarification_response(
-                    request, chat_session, relevant_docs
-                )
-
-            # 4. Analyse de contexte
-            context_analysis = await self._analyze_context(
-                request.query,
-                relevant_docs,
-                context_confidence
+            relevant_docs = await self.components.es_client.search_documents(
+                query=request.query,
+                vector=query_vector,
+                metadata_filter={"application": request.application} if request.application else None,
+                size=settings.MAX_RELEVANT_DOCS
             )
 
-            # 5. Génération de la réponse appropriée
-            if context_analysis.get("needs_clarification", False):
-                response = await self._create_clarification_response(
-                    request, chat_session, context_analysis
-                )
-            else:
-                response = await self._generate_final_response(
-                    request,
-                    chat_session,
-                    relevant_docs,
-                    context_analysis,
-                    start_time
-                )
+            # 3. Analyse du contexte actuel
+            context_analysis = await self._analyze_context(
+                query=request.query,
+                relevant_docs=relevant_docs,
+                context_confidence=self._calculate_context_confidence(relevant_docs)
+            )
 
-            # 6. Enrichissement de la réponse avec les vecteurs
-            response.query_vector = query_vector
-            if response.response:
-                try:
-                    response.response_vector = await self.components.model.create_embedding(response.response)
-                except Exception as e:
-                    logger.error(f"Erreur création vecteur réponse: {e}")
-                    response.response_vector = [0.0] * len(query_vector)  # Vecteur par défaut
+            # 4. Vérification du contexte de session pour les clarifications en cours
+            if chat_session and chat_session.session_context.get("pending_clarification"):
+                if await self._should_handle_clarification(request, chat_session):
+                    return await self._handle_clarification_response(
+                        request, chat_session, context_analysis
+                    )
+
+            # 5. Décision: clarification ou réponse directe
+            if context_analysis.get("needs_clarification"):
+                if await self._should_ask_clarification(chat_session):
+                    return await self._create_clarification_response(
+                        request, chat_session, context_analysis
+                    )
+
+            # 6. Génération de la réponse finale
+            response = await self._generate_final_response(
+                request=request,
+                chat_session=chat_session,
+                relevant_docs=relevant_docs,
+                context_analysis=context_analysis,
+                start_time=start_time
+            )
+
+            # 7. Mise à jour du contexte de session
+            if chat_session:
+                await self._update_session_context(
+                    chat_session=chat_session,
+                    request=request,
+                    response=response,
+                    context_analysis=context_analysis
+                )
+            
+            await self._cleanup_session_context(chat_session)
 
             return response
 
         except Exception as e:
             logger.error(f"Erreur traitement message: {e}", exc_info=True)
             metrics.increment_counter("chat_errors")
-            raise
-
-    async def _find_relevant_documents(
-        self,
-        query_vector: List[float],
-        application: Optional[str]
-    ) -> Tuple[List[Dict], float]:
-        """
-        Recherche les documents pertinents et évalue la confiance du contexte.
-        """
-        relevant_docs = await self.components.es_client.search_documents(
-            query="",
-            vector=query_vector,
-            metadata_filter={"application": application} if application else None,
-            size=settings.MAX_RELEVANT_DOCS
-        )
-
-        # Calcul du score de confiance du contexte
-        if not relevant_docs:
-            return [], 0.0
-
-        scores = [doc.get("score", 0.0) for doc in relevant_docs]
-        avg_confidence = sum(scores) / len(scores)
-
-        return relevant_docs, avg_confidence
+            await self._log_error(request, e)
+            raise HTTPException(
+                status_code=500,
+                detail="Une erreur est survenue lors du traitement de votre message."
+            )
 
     async def _analyze_context(
         self,
@@ -129,29 +111,66 @@ class ChatProcessor:
         relevant_docs: List[Dict],
         context_confidence: float
     ) -> Dict:
-        """Analyse le contexte pour déterminer si des clarifications sont nécessaires."""
+        """Analyse approfondie du contexte pour déterminer le besoin de clarification."""
         try:
-            # Analyse du contexte par le summarizer si disponible
+            # Analyse via summarizer si disponible
             if hasattr(self.components.model, 'summarizer'):
                 context_analysis = await self.components.model.summarizer.summarize_documents(relevant_docs)
             else:
                 context_analysis = {
-                    "needs_clarification": context_confidence < self.confidence_threshold,
+                    "needs_clarification": False,
                     "themes": [],
                     "questions": []
                 }
 
-            # Ajout des critères de clarification
-            needs_clarification = (
-                context_confidence < self.confidence_threshold or
-                len(relevant_docs) < self.min_relevant_docs or
-                context_analysis.get("needs_clarification", False)
-            )
+            # Extraction et analyse des thèmes
+            themes = set()
+            ambiguity_score = 0.0
+            all_content = ""
+
+            for doc in relevant_docs:
+                if doc.get("score", 0) < 0.5:
+                    continue
+
+                content = doc.get("content", "")
+                all_content += f"\n{content}"
+                doc_themes = self._extract_themes(content)
+                themes.update(doc_themes)
+
+                if len(doc_themes) > 1:
+                    ambiguity_score += 0.2
+
+            # Analyse sémantique de la requête
+            query_analysis = await self._analyze_query(query)
+            
+            # Évaluation du besoin de clarification
+            needs_clarification = any([
+                len(themes) > self.max_themes,
+                ambiguity_score > 0.5,
+                context_confidence < self.confidence_threshold,
+                len(relevant_docs) < self.min_relevant_docs,
+                query_analysis.get("is_ambiguous", False),
+                len(query.split()) < self.min_query_length
+            ])
 
             return {
-                **context_analysis,
                 "needs_clarification": needs_clarification,
-                "context_confidence": context_confidence
+                "context_confidence": context_confidence,
+                "themes": list(themes),
+                "ambiguity_score": ambiguity_score,
+                "query_analysis": query_analysis,
+                "response_type": self._determine_response_type(
+                    query=query,
+                    themes=themes,
+                    confidence=context_confidence,
+                    query_analysis=query_analysis
+                ),
+                "clarification_reason": self._get_clarification_reason(
+                    themes=themes,
+                    confidence=context_confidence,
+                    docs_count=len(relevant_docs),
+                    query_analysis=query_analysis
+                )
             }
 
         except Exception as e:
@@ -162,115 +181,213 @@ class ChatProcessor:
                 "error": str(e)
             }
 
+    def _get_clarification_reason(
+        self,
+        themes: Set[str],
+        confidence: float,
+        docs_count: int,
+        query_analysis: Dict
+    ) -> str:
+        """Détermine la raison principale nécessitant une clarification."""
+        if len(themes) > self.max_themes:
+            return "multiple_themes"
+        if confidence < self.confidence_threshold:
+            return "low_confidence"
+        if docs_count < self.min_relevant_docs:
+            return "insufficient_context"
+        if query_analysis.get("is_ambiguous", False):
+            return "query_ambiguity"
+        return "general"
+    
+    async def _analyze_query(self, query: str) -> Dict[str, any]:
+        """Analyse sémantique de la requête."""
+        return {
+            "is_ambiguous": self._is_query_ambiguous(query),
+            "type": self._get_query_type(query),
+            "complexity": self._calculate_query_complexity(query),
+            "key_concepts": self._extract_key_concepts(query)
+        }
+
+    def _is_query_ambiguous(self, query: str) -> bool:
+        """Vérifie si une requête est ambiguë."""
+        # Questions trop courtes
+        if len(query.split()) < self.min_query_length:
+            return True
+
+        # Patterns d'ambiguïté
+        ambiguous_patterns = [
+            r"^(que|quoi|comment|pourquoi).{0,20}\?$",  # Questions trop courtes
+            r"\b(tout|tous|general|global)\b",          # Termes trop généraux
+            r"\b(autre|plus|encore)\b\s*\?",            # Demandes ouvertes
+            r"\b(ca|cela|ce|cette)\b",                  # Références vagues
+            r"\b(ils|elles|leur|ces)\b"                 # Pronoms sans contexte
+        ]
+
+        return any(re.search(pattern, query.lower()) for pattern in patterns)
+
+    def _get_query_type(self, query: str) -> str:
+        """Détermine le type de requête."""
+        query_lower = query.lower()
+        
+        if re.search(r"\b(comment|how|faire)\b", query_lower):
+            return "procedural"
+        if re.search(r"\b(pourquoi|why|raison)\b", query_lower):
+            return "explanatory"
+        if re.search(r"\b(différence|versus|vs|compare)\b", query_lower):
+            return "comparative"
+        if re.search(r"\b(est-ce que|est-il|possible)\b", query_lower):
+            return "confirmation"
+        return "informational"
+
+    def _calculate_query_complexity(self, query: str) -> float:
+        """Calcule la complexité d'une requête."""
+        factors = {
+            "length": len(query.split()) / 20,  # Normalisation par 20 mots
+            "technical_terms": len(re.findall(r"\b[A-Z][A-Za-z]*(?:\.[A-Za-z]+)+\b", query)) * 0.2,
+            "conjunctions": len(re.findall(r"\b(et|ou|mais|donc|car)\b", query)) * 0.1,
+            "special_chars": len(re.findall(r"[^\w\s]", query)) * 0.05
+        }
+        return min(sum(factors.values()), 1.0)
+
+    def _extract_key_concepts(self, query: str) -> List[str]:
+        """Extrait les concepts clés d'une requête."""
+        # Suppression des mots vides
+        stop_words = {"le", "la", "les", "un", "une", "des", "est", "sont", "a", "ont"}
+        words = query.lower().split()
+        return [w for w in words if w not in stop_words and len(w) > 3]
+
+    async def _should_handle_clarification(
+        self,
+        request: ChatRequest,
+        chat_session: ChatSession
+    ) -> bool:
+        """Détermine si une réponse de clarification doit être traitée."""
+        context = chat_session.session_context
+        if not context.get("pending_clarification"):
+            return False
+
+        original_query = context.get("original_query")
+        if not original_query:
+            return False
+
+        # Analyse de la réponse à la clarification
+        response_analysis = await self._analyze_clarification_response(
+            original_query=original_query,
+            clarification_response=request.query,
+            context=context
+        )
+
+        return response_analysis.get("is_valid", False)
+
+    async def _analyze_clarification_response(
+        self,
+        original_query: str,
+        clarification_response: str,
+        context: Dict
+    ) -> Dict:
+        """Analyse la réponse à une demande de clarification."""
+        try:
+            return {
+                "is_valid": True if clarification_response else False,
+                "adds_context": len(clarification_response.split()) > len(original_query.split()),
+                "references_original": any(word in clarification_response.lower() 
+                                        for word in original_query.lower().split()),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Erreur analyse clarification: {e}")
+            return {"is_valid": False}
+    
+    def _determine_response_type(
+        self,
+        query: str,
+        themes: Set[str],
+        confidence: float,
+        query_analysis: Dict
+    ) -> str:
+        """Détermine le type de réponse approprié."""
+        if query_analysis.get("is_ambiguous") or len(themes) > self.max_themes:
+            return "clarification"
+
+        complexity = query_analysis.get("complexity", 0.5)
+        query_type = query_analysis.get("type", "informational")
+
+        if query_type == "procedural" or complexity > 0.7:
+            return "technical"
+        if query_type == "confirmation" and confidence > 0.8:
+            return "concise"
+        if complexity < 0.3 and confidence > 0.9:
+            return "concise"
+
+        return "comprehensive"
+
     async def _create_clarification_response(
         self,
         request: ChatRequest,
         chat_session: ChatSession,
         context_analysis: Dict
     ) -> ChatResponse:
-        """
-        Crée une réponse demandant des clarifications à l'utilisateur.
-        """
-        # Construction du message de clarification
-        clarification_reason = context_analysis.get("clarification_reason", "default")
-        
-        clarification_texts = {
-            "confidence_low": (
-                "Je ne suis pas certain de bien comprendre votre demande. "
-                "Pourriez-vous préciser :"
+        """Crée une réponse demandant des clarifications."""
+        reason = context_analysis.get("clarification_reason", "general")
+        templates = {
+            "multiple_themes": (
+                "Votre question touche plusieurs thèmes:\n"
+                "{themes}\n\n"
+                "Sur quel aspect spécifique souhaitez-vous des informations ?"
+            ),
+            "low_confidence": (
+                "Je ne suis pas certain de bien comprendre votre demande.\n"
+                "Voici ce que j'ai compris : {understanding}\n"
+                "Pourriez-vous confirmer ou reformuler ?"
             ),
             "insufficient_context": (
-                "Je n'ai pas trouvé suffisamment d'informations dans mes documents. "
-                "Pourriez-vous reformuler votre question ? "
-                "Voici ce que j'ai compris :"
+                "Je n'ai pas trouvé suffisamment d'informations précises sur ce sujet.\n"
+                "Pourriez-vous :\n"
+                "1. Être plus spécifique sur {key_concepts}\n"
+                "2. Donner un exemple concret\n"
+                "3. Préciser le contexte d'utilisation"
             ),
-            "default": (
-                "J'ai trouvé plusieurs thèmes possibles dans votre demande. "
-                "Pour mieux vous aider, pourriez-vous préciser :"
+            "query_ambiguity": (
+                "Votre question pourrait avoir plusieurs interprétations. "
+                "Voulez-vous dire :\n"
+                "{interpretations}"
             )
         }
-        
-        clarification_text = clarification_texts.get(clarification_reason, clarification_texts["default"])
 
-        # Ajout des questions spécifiques
-        questions = context_analysis.get("questions", [])
-        if questions:
-            clarification_text += f"\n\n{questions[0]}"
-            if len(questions) > 1:
-                clarification_text += "\n\nAutres points à clarifier :\n" + \
-                                    "\n".join(f"- {q}" for q in questions[1:])
+        # Construction du message de clarification
+        clarification_text = templates.get(reason, templates["query_ambiguity"]).format(
+            themes="\n".join(f"- {theme}" for theme in context_analysis.get("themes", [])),
+            understanding=await self._generate_query_understanding(request.query),
+            key_concepts=", ".join(context_analysis["query_analysis"]["key_concepts"]),
+            interpretations="\n".join(
+                f"- {interp}" for interp in await self._generate_query_interpretations(request.query)
+            )
+        )
 
         # Mise à jour du contexte de session
-        await self.components.session_manager.update_session_context(
-            chat_session.session_id,
-            {
-                "pending_clarification": True,
-                "original_query": request.query,
-                "context_analysis": context_analysis
-            }
-        )
+        if chat_session:
+            await self._update_session_context(
+                chat_session=chat_session,
+                request=request,
+                context_update={
+                    "pending_clarification": True,
+                    "original_query": request.query,
+                    "clarification_reason": reason,
+                    "clarification_attempt": chat_session.session_context.get("clarification_attempt", 0) + 1
+                }
+            )
 
         return ChatResponse(
             response=clarification_text,
-            session_id=str(chat_session.session_id),
-            conversation_id=uuid.uuid4(),
+            session_id=str(chat_session.session_id) if chat_session else None,
+            conversation_id=str(uuid.uuid4()),
+            confidence_score=context_analysis.get("context_confidence", 0.0),
             metadata={
                 "needs_clarification": True,
+                "clarification_reason": reason,
                 "themes": context_analysis.get("themes", []),
-                "source": "model",
-                "timestamp": datetime.utcnow().isoformat(),
-                "session_context": chat_session.session_context
-            },
-            confidence_score=0.0,
-            processing_time=0.0,
-            tokens_used=0,
-            documents=[]
-        )
-    
-    def _calculate_context_confidence(self, docs: List[Dict]) -> float:
-        """Calcule le score de confiance moyen des documents."""
-        if not docs:
-            return 0.0
-        scores = [doc.get("score", 0.0) for doc in docs]
-        return sum(scores) / len(scores)
-
-    async def _handle_clarification_response(
-        self,
-        request: ChatRequest,
-        chat_session: ChatSession,
-        relevant_docs: List[Dict]
-    ) -> ChatResponse:
-        """
-        Traite la réponse de l'utilisateur à une demande de clarification.
-        """
-        original_query = chat_session.session_context.get("original_query", "")
-        context_analysis = chat_session.session_context.get("context_analysis", {})
-
-        # Combiner la requête originale avec la clarification
-        combined_query = f"{original_query} {request.query}"
-
-        # Génération de la réponse avec le contexte enrichi
-        response = await self.components.model.generate_response(
-            query=combined_query,
-            context_docs=relevant_docs,
-            conversation_history=[
-                {"role": "user", "content": original_query},
-                {"role": "assistant", "content": "Demande de clarification..."},
-                {"role": "user", "content": request.query}
-            ]
-        )
-
-        # Réinitialisation du contexte de session
-        await self.components.session_manager.update_session_context(
-            chat_session.session_id,
-            {"pending_clarification": False}
-        )
-
-        return ChatResponse(
-            response=response["response"],
-            session_id=str(chat_session.session_id),
-            confidence_score=response.get("confidence_score", 0.0),
-            metadata={"clarification_handled": True}
+                "query_analysis": context_analysis.get("query_analysis", {})
+            }
         )
 
     async def _generate_final_response(
@@ -281,47 +398,254 @@ class ChatProcessor:
         context_analysis: Dict,
         start_time: datetime
     ) -> ChatResponse:
-        """
-        Génère la réponse finale en utilisant le contexte approprié.
-        """
-        if not relevant_docs:
-            # Aucun document pertinent trouvé
-            response = await self.components.model.generate_response(
-                query=request.query,
-                context_docs=[],
-                conversation_history=chat_session.session_context.get("history", [])
-            )
-            
-            response_text = (
-                "Je n'ai pas trouvé de documentation spécifique pour votre question, "
-                "mais voici ce que je peux vous dire :\n\n" + 
-                response["response"]
-            )
-        else:
-            # Génération avec documents pertinents
+        """Génère la réponse finale."""
+        try:
+            # Sélection du type de réponse et configuration
+            response_type = context_analysis.get("response_type", "comprehensive")
+            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
+
+            # Construction du prompt avec style adapté
+            prompt_prefix = response_config.get("style", "")
+
+            # Génération de la réponse
             response = await self.components.model.generate_response(
                 query=request.query,
                 context_docs=relevant_docs,
-                context_summary=context_analysis.get("structured_summary"),
-                conversation_history=chat_session.session_context.get("history", [])
+                conversation_history=chat_session.session_context.get("history", []) if chat_session else [],
+                response_type=response_type,
+                prompt_prefix=prompt_prefix,
+                generation_config={
+                    "temperature": response_config.get("temperature", 0.7),
+                    "max_tokens": response_config.get("max_tokens", 1024)
+                }
             )
-            response_text = response["response"]
 
-        # Génération des identifiants
-        session_id = str(chat_session.session_id)
-        conversation_id = uuid.uuid4()
+            # Construction de la réponse finale
+            final_response = ChatResponse(
+                response=response.get("response", ""),
+                session_id=str(chat_session.session_id) if chat_session else None,
+                conversation_id=str(uuid.uuid4()),
+                documents=[
+                    DocumentReference(
+                        title=doc.get("title", ""),
+                        content=doc.get("content", ""),
+                        page=doc.get("page", 1),
+                        score=float(doc.get("score", 0.0)),
+                        metadata=doc.get("metadata", {})
+                    ) for doc in relevant_docs
+                ],
+                confidence_score=context_analysis.get("context_confidence", 0.0),
+                processing_time=(datetime.utcnow() - start_time).total_seconds(),
+                tokens_used=response.get("tokens_used", {}).get("total", 0),
+                tokens_details=response.get("tokens_used", {}),
+                metadata={
+                    "response_type": response_type,
+                    "themes": context_analysis.get("themes", []),
+                    "context_analysis": context_analysis,
+                    "source": "model",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+            
+            if chat_session:
+                await self._cleanup_session_context(chat_session)
 
-        # Construction de la réponse finale
-        return ChatResponse(
-            response=response_text,
-            session_id=session_id,
-            conversation_id=conversation_id,
-            documents=[DocumentReference(**doc) for doc in relevant_docs],
-            confidence_score=response.get("confidence_score", 0.0),
-            processing_time=(datetime.utcnow() - start_time).total_seconds(),
-            tokens_used=response.get("tokens_used", {}).get("total", 0),
-            metadata={
-                "has_context": bool(relevant_docs),
-                "context_analysis": context_analysis
+            # Mise à jour des métriques
+            metrics.increment_counter("responses_generated")
+            metrics.record_time(
+                "response_generation",
+                (datetime.utcnow() - start_time).total_seconds()
+            )
+
+            return final_response
+
+        except Exception as e:
+            logger.error(f"Erreur génération réponse finale: {e}", exc_info=True)
+            raise
+
+    async def _update_session_context(
+        self,
+        chat_session: ChatSession,
+        request: ChatRequest,
+        context_update: Optional[Dict] = None,
+        response: Optional[ChatResponse] = None,
+        context_analysis: Optional[Dict] = None
+    ) -> None:
+        """Met à jour le contexte de la session."""
+        try:
+            current_context = chat_session.session_context or {}
+
+            # Mise à jour de l'historique
+            history = current_context.get("history", [])
+            if request and response:
+                history.append({
+                    "role": "user",
+                    "content": request.query,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+                history.append({
+                    "role": "assistant",
+                    "content": response.response,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+                # Limiter l'historique aux 5 dernières interactions
+                history = history[-10:]
+
+            # Construction du nouveau contexte
+            new_context = {
+                **current_context,
+                "history": history,
+                "last_interaction": datetime.utcnow().isoformat(),
+                "last_query": request.query if request else None,
+                **(context_update or {}),
             }
-        )
+
+            # Ajout des informations d'analyse si présentes
+            if context_analysis:
+                new_context["analysis"] = {
+                    "themes": context_analysis.get("themes", []),
+                    "confidence": context_analysis.get("context_confidence"),
+                    "response_type": context_analysis.get("response_type"),
+                }
+
+            # Mise à jour de la session
+            chat_session.session_context = new_context
+            chat_session.updated_at = datetime.utcnow()
+
+            # Persistance des changements
+            async with self.components.db.session_factory() as session:
+                session.add(chat_session)
+                await session.commit()
+
+        except Exception as e:
+            logger.error(f"Erreur mise à jour contexte session: {e}")
+            raise
+
+    async def _extract_themes(self, content: str) -> Set[str]:
+        """Extrait les thèmes principaux d'un contenu."""
+        themes = set()
+        
+        # Patterns de détection de thèmes
+        theme_patterns = [
+            (r"(?i)configuration.*?(?:\.|$)", "Configuration"),
+            (r"(?i)installation.*?(?:\.|$)", "Installation"),
+            (r"(?i)erreur.*?(?:\.|$)", "Résolution d'erreurs"),
+            (r"(?i)mise à jour.*?(?:\.|$)", "Mise à jour"),
+            (r"(?i)sécurité.*?(?:\.|$)", "Sécurité"),
+            (r"(?i)performance.*?(?:\.|$)", "Performance"),
+            (r"(?i)api.*?(?:\.|$)", "API"),
+            (r"(?i)base de données.*?(?:\.|$)", "Base de données"),
+            (r"(?i)authentification.*?(?:\.|$)", "Authentification")
+        ]
+        
+        for pattern, theme in theme_patterns:
+            if re.search(pattern, content, re.MULTILINE):
+                themes.add(theme)
+
+        return themes
+
+    async def _generate_query_understanding(self, query: str) -> str:
+        """Génère une reformulation de la compréhension de la requête."""
+        try:
+            # Utilisation du modèle pour reformuler la question
+            response = await self.components.model.generate_response(
+                query=f"Reformule cette question pour vérifier la compréhension: {query}",
+                max_tokens=100,
+                temperature=0.3
+            )
+            return response.get("response", "")
+        except Exception as e:
+            logger.error(f"Erreur génération reformulation: {e}")
+            return f"Vous demandez des informations sur {query}"
+
+    async def _generate_query_interpretations(self, query: str) -> List[str]:
+        """Génère différentes interprétations possibles de la requête."""
+        try:
+            response = await self.components.model.generate_response(
+                query=f"Génère 3 interprétations possibles de cette question: {query}",
+                max_tokens=150,
+                temperature=0.4
+            )
+            
+            interpretations = response.get("response", "").split("\n")
+            return [i.strip() for i in interpretations if i.strip()][:3]
+        except Exception as e:
+            logger.error(f"Erreur génération interprétations: {e}")
+            return []
+
+    def _calculate_context_confidence(self, docs: List[Dict]) -> float:
+        """Calcule le score de confiance moyen des documents."""
+        if not docs:
+            return 0.0
+        scores = [doc.get("score", 0.0) for doc in docs]
+        return sum(scores) / len(scores)
+
+    async def _should_ask_clarification(self, chat_session: Optional[ChatSession]) -> bool:
+        """Détermine si une clarification doit être demandée."""
+        if not chat_session:
+            return True
+
+        context = chat_session.session_context
+        clarification_attempts = context.get("clarification_attempt", 0)
+        
+        # Éviter les boucles de clarification
+        if clarification_attempts >= self.max_clarification_attempts:
+            return False
+
+        # Vérifier le temps depuis la dernière clarification
+        last_clarification = context.get("last_clarification")
+        if last_clarification:
+            last_time = datetime.fromisoformat(last_clarification)
+            if (datetime.utcnow() - last_time).seconds < 300:  # 5 minutes
+                return False
+
+        return True
+        
+    async def _cleanup_session_context(
+        self,
+        chat_session: ChatSession
+    ) -> None:
+        """Nettoie le contexte de session des données temporaires."""
+        if not chat_session or not chat_session.session_context:
+            return
+
+        context = chat_session.session_context
+        # Supprimer les flags temporaires
+        context.pop("pending_clarification", None)
+        context.pop("clarification_attempt", None)
+        context.pop("last_clarification", None)
+        
+        # Mise à jour de la session
+        chat_session.session_context = context
+    
+    async def cleanup(self):
+        """Nettoie les ressources du processeur."""
+        try:
+            # Nettoyage des composants si nécessaire
+            if hasattr(self.components, 'cleanup'):
+                await self.components.cleanup()
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources: {e}")
+
+    async def _log_error(self, request: ChatRequest, error: Exception) -> None:
+        """Log une erreur dans la base de données."""
+        try:
+            error_data = {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "query": request.query,
+                "user_id": request.user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metadata": {
+                    "application": request.application,
+                    "session_id": request.session_id
+                }
+            }
+            
+            async with self.components.db.session_factory() as session:
+                error_log = ErrorLog(**error_data)
+                session.add(error_log)
+                await session.commit()
+                
+        except Exception as e:
+            logger.error(f"Erreur lors du log d'erreur: {e}")
