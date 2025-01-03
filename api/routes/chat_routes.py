@@ -340,8 +340,13 @@ async def save_chat_interaction(
     """Sauvegarde l'interaction dans la base de données."""
     try:
         # Génération du vecteur de réponse
+        
+        query_vector = await components.model.create_embedding(request.query)
         response_vector = await components.model.create_embedding(response_text)
         processing_time = (datetime.utcnow() - start_time).total_seconds()
+        logger.info(request.query)
+        logger.info("------------------")
+        logger.info(response_text)
 
         async with DatabaseSession() as session:
             # Création de l'entrée d'historique de chat
@@ -350,8 +355,8 @@ async def save_chat_interaction(
                 user_id=request.user_id,
                 query=request.query,
                 response=response_text,
-                query_vector=list(map(float, query_vector)) if query_vector is not None else None,
-                response_vector=list(map(float, response_vector)) if response_vector is not None else None,
+                query_vector=query_vector,  
+                response_vector=response_vector,
                 confidence_score=0.0,
                 tokens_used=0,
                 processing_time=processing_time,
