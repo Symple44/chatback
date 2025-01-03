@@ -292,6 +292,7 @@ class ChatProcessor:
         try:
             # Sélection du type de réponse et configuration
             response_type = context_analysis.get("response_type", "comprehensive")
+            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
 
             # Construction du prompt avec style adapté
             prompt_prefix = response_config.get("style", "")
