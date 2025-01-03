@@ -119,13 +119,13 @@ class CUDAManager:
                 "name": torch.cuda.get_device_name(device),
                 "capability": f"{gpu_properties.major}.{gpu_properties.minor}",
                 "total_memory": f"{gpu_properties.total_memory / 1024**3:.2f} GB",
-                "max_clock_rate": f"{gpu_properties.clock_rate / 1000:.0f} MHz",
+                "max_threads_per_block": gpu_properties.max_threads_per_block,
                 "num_multiprocessors": gpu_properties.multi_processor_count,
                 "device_id": device,
                 "cuda_version": torch.version.cuda,
-                "cudnn_version": cudnn.version(),
+                "cudnn_version": torch.backends.cudnn.version(),
                 "memory_allocated": f"{torch.cuda.memory_allocated(device) / 1024**3:.2f} GB",
-                "memory_cached": f"{torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
+                "memory_reserved": f"{torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
             }
 
             logger.info("Configuration GPU:")

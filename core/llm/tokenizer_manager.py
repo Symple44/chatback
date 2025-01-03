@@ -12,6 +12,44 @@ class TokenizerManager:
         self.tokenizer = None
         self.max_length = settings.MAX_INPUT_LENGTH 
         self._setup_tokenizer()
+        
+    async def initialize(self):
+        """Initialise le tokenizer de manière asynchrone."""
+        try:
+            logger.info("Initialisation du tokenizer...")
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                settings.MODEL_NAME,
+                revision=settings.MODEL_REVISION,
+                trust_remote_code=True,
+                padding_side='left'
+            )
+            
+            # Gestion intelligente du pad_token
+            if self.tokenizer.pad_token is None:
+                if self.tokenizer.eos_token:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                else:
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            
+            # Configuration de la génération
+            self.generation_config = GenerationConfig(
+                do_sample=bool(settings.DO_SAMPLE),
+                temperature=float(settings.TEMPERATURE),
+                top_p=float(settings.TOP_P),
+                top_k=int(settings.TOP_K),
+                max_new_tokens=int(settings.MAX_NEW_TOKENS),
+                min_new_tokens=int(settings.MIN_NEW_TOKENS),
+                repetition_penalty=float(settings.REPETITION_PENALTY),
+                pad_token_id=self.tokenizer.pad_token_id
+            )
+            
+            logger.info(f"Tokenizer initialisé: {settings.MODEL_NAME}")
+            return self.tokenizer
+            
+        except Exception as e:
+            logger.error(f"Erreur initialisation tokenizer: {e}")
+            raise
 
     def _setup_tokenizer(self):
         try:

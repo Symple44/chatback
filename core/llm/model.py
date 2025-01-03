@@ -82,8 +82,7 @@ class ModelInference:
             # Ajout des paramètres de mémoire
             load_params.update({
                 "max_memory": max_memory,
-                "offload_folder": settings.OFFLOAD_FOLDER,
-                "tokenizer": self.tokenizer_manager.tokenizer  # Passage du tokenizer
+                "offload_folder": settings.OFFLOAD_FOLDER
             })
 
             # Chargement avec autocast si FP16 est activé
