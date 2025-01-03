@@ -1,3 +1,4 @@
+# core/vectorstore/elasticsearch_client.py
 from typing import Dict, List, Optional, Any, Union
 from elasticsearch import AsyncElasticsearch
 from datetime import datetime
