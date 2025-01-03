@@ -14,7 +14,7 @@ from core.utils.metrics import metrics
 
 from api.models.requests import ChatRequest
 from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
-from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument
+from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument, ErrorLog
 
 logger = get_logger("chat_processor")
 

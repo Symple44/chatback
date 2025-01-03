@@ -356,41 +356,47 @@ class ElasticsearchClient:
         try:
             if not self.initialized:
                 await self.initialize()
-    
+
             # Construction de la requête de base
+            should_clauses = []
+            must_clauses = []
+            filter_clauses = []
+
             query_body = {
                 "size": size,
-                "query": {"match_all": {}}
+                "query": {
+                    "bool": {
+                        "should": should_clauses,
+                        "must": must_clauses,
+                        "filter": filter_clauses,
+                        "minimum_should_match": 0
+                    }
+                }
             }
-    
+
             # Ajout de la recherche textuelle si présente
             if query:
-                query_body["query"] = {
+                must_clauses.append({
                     "match": {
                         "content": {
                             "query": query,
                             "operator": "or"
                         }
                     }
-                }
-    
-            # Ajout du filtre de métadonnées
+                })
+
+            # Ajout des filtres de métadonnées
             if metadata_filter:
-                query_body["query"] = {
-                    "bool": {
-                        "must": [
-                            query_body["query"],
-                            *[
-                                {"term": {f"metadata.{key}.keyword": value}} 
-                                for key, value in metadata_filter.items()
-                            ]
-                        ]
-                    }
-                }
-    
+                for key, value in metadata_filter.items():
+                    filter_clauses.append({
+                        "term": {
+                            f"metadata.{key}": value
+                        }
+                    })
+
             # Ajout de la recherche vectorielle si présente
             if vector is not None:
-                query_body["query"]["bool"]["should"] = [{
+                should_clauses.append({
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
@@ -398,19 +404,17 @@ class ElasticsearchClient:
                             "params": {"vector": vector}
                         }
                     }
-                }]
-            
+                })
+
             # Utilisation de l'index correct
             index = f"{self.index_prefix}_documents"
-    
-            try:
-                response = await self.es.search(
-                    index=index,
-                    body=query_body
-                )
-            except Exception as search_error:
-                logger.error(f"Erreur recherche Elasticsearch: {search_error}")
-                return []
+
+            logger.debug(f"Query body: {query_body}")  # Log pour debug
+
+            response = await self.es.search(
+                index=index,
+                body=query_body
+            )
     
             # Transformation des résultats
             return [
