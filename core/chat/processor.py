@@ -113,7 +113,6 @@ class ChatProcessor:
         context_confidence: float
     ) -> Dict:
         """Analyse le contexte de la conversation."""
-        from core.utils.context_analyzer import context_analyzer
         try:
             context_analysis = await context_analyzer.analyze_context(
                 query=query,

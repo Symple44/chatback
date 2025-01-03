@@ -1,4 +1,4 @@
-# core/utils/context_analyzer.py
+# core/chat/context_analyzer.py
 from typing import List, Dict, Optional, Set
 from datetime import datetime
 import re
