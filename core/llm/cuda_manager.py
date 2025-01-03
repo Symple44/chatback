@@ -146,15 +146,17 @@ class CUDAManager:
 
         # Configuration de la quantification
         if settings.USE_8BIT:
-            # Éviter d'utiliser à la fois load_in_8bit et quantization_config
-            quantization_config = {
-                "threshold": float(settings.LLM_INT8_THRESHOLD),
-                "skip_modules": None,
-                "enable_fp32_cpu_offload": settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true"
-            }
+            from transformers import BitsAndBytesConfig
+            
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=float(settings.LLM_INT8_THRESHOLD),
+                llm_int8_enable_fp32_cpu_offload=settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true",
+                llm_int8_skip_modules=None,
+                quant_method="bitsandbytes"  # Spécification explicite de la méthode
+            )
             load_params["quantization_config"] = quantization_config
             
-            # Configuration spécifique pour l'offloading CPU en INT8
             if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":
                 logger.info("Activation de l'offloading CPU FP32 pour INT8")
                 load_params["device_map"] = {
@@ -162,15 +164,18 @@ class CUDAManager:
                     "transformer.final_layernorm": "cpu",
                     "lm_head": "cpu"
                 }
+
         elif settings.USE_4BIT:
-            load_params["load_in_4bit"] = True
-            load_params.update({
-                "quantization_config": {
-                    "bnb_4bit_compute_dtype": getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE),
-                    "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
-                    "bnb_4bit_use_double_quant": settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true"
-                }
-            })
+            from transformers import BitsAndBytesConfig
+            
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE),
+                bnb_4bit_quant_type=settings.BNB_4BIT_QUANT_TYPE,
+                bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true",
+                quant_method="bitsandbytes"
+            )
+            load_params["quantization_config"] = quantization_config
 
         return load_params
 
