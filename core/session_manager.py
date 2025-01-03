@@ -254,19 +254,13 @@ class SessionManager:
                 chat_session = chat_session.scalar_one_or_none()
                 
                 if chat_session:
-                    # Récupération simple de l'historique sans les vecteurs
-                    history = await session.execute(
-                        select(
-                            ChatHistory.id,
-                            ChatHistory.query,
-                            ChatHistory.response,
-                            ChatHistory.created_at
-                        )
+                    history_result = await session.execute(
+                        select(ChatHistory)
                         .where(ChatHistory.session_id == chat_session.session_id)
                         .order_by(ChatHistory.created_at.desc())
                         .limit(5)
                     )
-                    chat_session.chat_history = history.all()
+                    chat_session.chat_history = history_result.scalars().all()
                     return chat_session
 
             # Création d'une nouvelle session
