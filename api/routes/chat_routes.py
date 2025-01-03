@@ -185,15 +185,8 @@ async def get_chat_history(
     Récupère l'historique des conversations pour une session.
     """
     try:
-        async with DatabaseSession() as session:
-            history = await session.execute(
-                select(ChatHistory)
-                .where(ChatHistory.session_id == session_id)
-                .options(selectinload(ChatHistory.referenced_documents))
-                .order_by(ChatHistory.created_at.desc())
-                .limit(limit)
-            )
-            return [item.to_dict() for item in history.scalars().all()]
+        history = await components.session_manager.get_session_history(session_id, limit)
+        return [h._asdict() for h in history]
     except Exception as e:
         logger.error(f"Erreur récupération historique: {e}")
         raise HTTPException(status_code=500, detail=str(e))
