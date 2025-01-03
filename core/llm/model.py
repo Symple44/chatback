@@ -33,9 +33,8 @@ class ModelInference:
         self.prompt_system = PromptSystem()
         self.summarizer = DocumentSummarizer()
         
-        # Nouveaux paramètres de configuration
-        self.max_context_docs = 6
-        #self.min_confidence_threshold = 0.6
+        # Paramètre de chat
+        self.max_context_docs = settings.MAX_CONTEXT_DOCS
     async def initialize(self):
         """Initialise le modèle de manière asynchrone."""
         if not self._initialized:

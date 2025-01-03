@@ -23,11 +23,12 @@ class ChatProcessor:
     def __init__(self, components):
         """Initialise le processeur de chat."""
         self.components = components
-        self.confidence_threshold = 0.7
-        self.min_relevant_docs = 2
-        self.max_themes = 2
-        self.max_clarification_attempts = 3
-        self.min_query_length = 3
+        self.confidence_threshold = settings.CONFIDENCE_THRESHOLD
+        self.min_relevant_docs = settings.MIN_RELEVANT_DOCS
+        self.max_themes = settings.MAX_THEMES
+        self.max_clarification_attempts = settings.MAX_CLARIFICATION_ATTEMPTS
+        self.min_query_length = settings.MIN_QUERY_LENGTH
+        self.max_context_docs = settings.MAX_CONTEXT_DOCS
 
     async def process_message(
         self,

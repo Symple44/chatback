@@ -150,6 +150,14 @@ class Settings(BaseSettings):
     MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
     PROMPT_TEMPERATURE: float = float(os.getenv("PROMPT_TEMPERATURE", "0.7"))
     CONTEXT_TOKENS_LIMIT: int = int(os.getenv("CONTEXT_TOKENS_LIMIT", "2047"))
+    
+    #Processeur de chat
+    CONFIDENCE_THRESHOLD: float = 0.7
+    MIN_RELEVANT_DOCS: int = 2
+    MAX_THEMES: int = 2
+    MAX_CLARIFICATION_ATTEMPTS: int = 3
+    MIN_QUERY_LENGTH: int = 3
+    MAX_CONTEXT_DOCS: int = 6
 
 
     # Rôles système
