@@ -1,61 +1,43 @@
 #!/usr/bin/env python3
+from core.llm.cuda_manager import CUDAManager
 import os
 import sys
 from pathlib import Path
 
-def setup_cuda_environment():
-    """Configure l'environnement CUDA avant le chargement des bibliothèques."""
-    
-    # Désactive les avertissements TF
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-    
-    # Force l'ordre de chargement CUDA
-    os.environ["CUDA_MODULE_LOADING"] = "LAZY"
-    
-    # Configuration des bibliothèques numériques
-    os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")
-    os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16")
-    os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")
-    os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16")
-    
-    # Configuration CUDA pour la RTX 3090
-    os.environ["CUDA_VISIBLE_DEVICES"] = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    
-    # Configuration de la mémoire PyTorch
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:2048"
-    
-    # Désactive JIT PyTorch pour éviter les conflits
-    os.environ["PYTORCH_JIT"] = "0"
-    
-    # Configuration du provider CUDA pour ONNX
-    os.environ["ONNXRUNTIME_CUDA_PROVIDER_OPTIONS"] = """
-    {
-        "arena_extend_strategy": "kSameAsRequested",
-        "cudnn_conv_use_max_workspace": "1",
-        "do_copy_in_default_stream": "1"
-    }
-    """
-
 def setup_environment():
     """Configure l'environnement complet avant le démarrage."""
-    # Configuration CUDA
-    setup_cuda_environment()
-    
-    # Création des répertoires
-    REQUIRED_DIRS = [
-        "offload_folder",
-        "static",
-        "documents",
-        "model_cache",
-        "logs",
-        "data",
-        "temp"
-    ]
-    for dir_name in REQUIRED_DIRS:
-        path = Path(dir_name)
-        path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o755)  # Permissions sécurisées
+    try:
+        # Configuration CUDA
+        cuda_manager = CUDAManager()
+        cuda_manager.setup_cuda_environment()
+        logger.info("Configuration CUDA initialisée")
+
+        # Configuration des bibliothèques numériques
+        os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")
+        os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16")
+        os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")
+        os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16")
+        
+        # Création des répertoires
+        REQUIRED_DIRS = [
+            "offload_folder",
+            "static",
+            "documents",
+            "model_cache",
+            "logs",
+            "data",
+            "temp"
+        ]
+        for dir_name in REQUIRED_DIRS:
+            path = Path(dir_name)
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o755)  # Permissions sécurisées
+            
+        logger.info("Environnement configuré avec succès")
+            
+    except Exception as e:
+        logger.error(f"Erreur configuration environnement: {e}")
+        raise
 
 # Exécution de la configuration avant tout import
 if __name__ == "__main__":
@@ -361,8 +343,9 @@ if __name__ == "__main__":
             reload=settings.DEBUG,
             workers=1 if settings.DEBUG else int(os.getenv("WORKERS", "1")),
             log_level="info",
-            loop="auto",
+            loop="uvloop",
             timeout_keep_alive=settings.KEEPALIVE,
+            limit_max_requests=10000,
             limit_concurrency=int(os.getenv("MAX_CONCURRENT_REQUESTS", "100")),
             backlog=2048
         )

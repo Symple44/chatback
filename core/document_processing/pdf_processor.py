@@ -163,51 +163,77 @@ class PDFProcessor:
 
     async def index_pdf(self, file_path: str, metadata: Optional[Dict] = None) -> bool:
         try:
-            logger.info(f"Indexation du PDF: {file_path}")
             path = Path(file_path)
             application = path.parent.name
             filename = path.name
-    
-            # Extraction du contenu
-            content = await self.extract_text(file_path)
-            if not content.strip():
-                logger.warning(f"Aucun contenu extrait de {file_path}")
+
+            # Extraction du contenu avec meilleure gestion
+            extracted_content = await self.extract_text(file_path)
+            if not isinstance(extracted_content, dict) or not extracted_content.get("text"):
+                logger.warning(f"Contenu invalide extrait de {file_path}")
                 return False
-    
+
             # Extraction des métadonnées PDF
             doc_metadata = await self._extract_metadata(file_path)
-            
-            # Construction du document
+
+            # Prétraitement du contenu
+            processed_content = self.preprocessor.preprocess_document({
+                "content": extracted_content["text"],
+                "metadata": doc_metadata,
+                "title": filename,
+                "doc_id": str(file_path)
+            })
+
+            # Construction du document avec métadonnées bien structurées
             document = {
                 "title": filename,
-                "content": content.get("text", ""),
+                "content": processed_content["content"],
                 "file_path": str(file_path),
                 "metadata": {
-                    "application": application,  # Application dans metadata
-                    "page_count": doc_metadata.get("pages", 0),
+                    "application": application,
+                    "document_type": "pdf",
+                    "page_count": extracted_content.get("total_pages", 0),
                     "author": doc_metadata.get("author", ""),
                     "creation_date": doc_metadata.get("creation_date", ""),
                     "indexed_at": datetime.utcnow().isoformat(),
+                    "last_modified": doc_metadata.get("modification_date", ""),
                     "sync_date": metadata.get("sync_date") if metadata else None,
-                    **doc_metadata  # Autres métadonnées
+                    "source": "pdf_processor",
+                    "processing_info": {
+                        "chunks": len(processed_content.get("sections", [])),
+                        "processing_date": datetime.utcnow().isoformat(),
+                        "preprocessor_version": "1.0"
+                    }
                 }
             }
-    
-            # Génération du vecteur si le modèle est disponible
-            if self.embedding_model:
+
+            # Génération du vecteur
+            if hasattr(self, 'embedding_model') and self.embedding_model:
                 try:
-                    document["embedding"] = await self.embedding_model.generate_embedding(content)
+                    document["embedding"] = await self.embedding_model.create_embedding(
+                        processed_content["content"]
+                    )
                 except Exception as e:
                     logger.error(f"Erreur génération embedding pour {filename}: {e}")
-    
-            # Indexation
-            success = await self.es_client.index_document(**document)
-            
+
+            # Indexation avec retry
+            success = False
+            retries = 3
+            for attempt in range(retries):
+                try:
+                    success = await self.es_client.index_document(**document)
+                    if success:
+                        break
+                except Exception as e:
+                    if attempt == retries - 1:
+                        raise
+                    await asyncio.sleep(1 * (2 ** attempt))
+
             if success:
                 logger.info(f"PDF {filename} indexé avec succès pour l'application {application}")
             
             return success
-    
+
         except Exception as e:
             logger.error(f"Erreur indexation PDF {file_path}: {e}", exc_info=True)
             return False

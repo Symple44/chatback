@@ -65,45 +65,55 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
 
-            # Récupération de la configuration mémoire depuis settings via memory_manager
-            max_memory = self.memory_manager.get_optimal_memory_config()
+            # Initialisation du tokenizer avant le modèle
+            self.tokenizer_manager = TokenizerManager()
+            await self.tokenizer_manager.initialize()
+
+            # Configuration de la mémoire maximale
+            try:
+                max_memory = json.loads(settings.MAX_MEMORY)
+            except (json.JSONDecodeError, AttributeError):
+                logger.warning("Erreur parsing MAX_MEMORY, utilisation des valeurs par défaut")
+                max_memory = {"0": "22GiB", "cpu": "24GB"}
+
+            # Récupération des paramètres CUDA optimisés
+            load_params = self.cuda_manager.get_model_load_parameters()
             
-            # Paramètres de chargement en utilisant les settings
-            load_params = {
-                "pretrained_model_name_or_path": settings.MODEL_NAME,
-                "revision": settings.MODEL_REVISION,
-                "device_map": "auto",
+            # Ajout des paramètres de mémoire
+            load_params.update({
                 "max_memory": max_memory,
-                "trust_remote_code": True
-            }
+                "offload_folder": settings.OFFLOAD_FOLDER,
+                "tokenizer": self.tokenizer_manager.tokenizer  # Passage du tokenizer
+            })
 
-            # Configuration du type de données en fonction des settings
-            if settings.USE_FP16:
-                load_params["torch_dtype"] = torch.float16
-            elif settings.USE_8BIT:
-                load_params["load_in_8bit"] = True
-            elif settings.USE_4BIT:
-                load_params["load_in_4bit"] = True
-                if hasattr(settings, "BNB_4BIT_COMPUTE_DTYPE"):
-                    load_params["bnb_4bit_compute_dtype"] = getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE)
-
-            logger.info(f"Configuration de chargement: {load_params}")
-
-            # Chargement du modèle avec autocast si FP16 est activé
+            # Chargement avec autocast si FP16 est activé
             if settings.USE_FP16:
                 with torch.amp.autocast('cuda'):
-                    self.model = AutoModelForCausalLM.from_pretrained(**load_params)
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        settings.MODEL_NAME,
+                        revision=settings.MODEL_REVISION,
+                        **load_params
+                    )
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(**load_params)
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    settings.MODEL_NAME,
+                    revision=settings.MODEL_REVISION,
+                    **load_params
+                )
 
-            # Post-initialisation
-            model_device = next(self.model.parameters()).device
-
-            # Initialiser TokenizerManager avec le tokenizer
-            self.tokenizer_manager = TokenizerManager()
+            # Configuration post-initialisation
+            device = self.cuda_manager.device
+            self.model = self.model.to(device)
             
-            logger.info(f"Modèle chargé sur {model_device}")
+            # Log des informations importantes
+            logger.info(f"Modèle chargé sur {device}")
             logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
+            logger.info(f"Statistiques mémoire: {self.cuda_manager.memory_stats()}")
+            logger.info(f"Configuration mémoire max: {max_memory}")
+            
+            if hasattr(self.model, 'hf_device_map'):
+                logger.info(f"Device map: {self.model.hf_device_map}")
+
             metrics.increment_counter("model_loads")
 
         except Exception as e:

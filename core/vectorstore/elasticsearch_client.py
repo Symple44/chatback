@@ -163,7 +163,7 @@ class ElasticsearchClient:
             if not self.initialized:
                 await self.initialize()
 
-            # Construction de la requête
+            # Construction de la requête plus robuste
             query_body = {
                 "size": size,
                 "min_score": min_score,
@@ -171,37 +171,44 @@ class ElasticsearchClient:
                     "bool": {
                         "must": [],
                         "should": [],
-                        "filter": []
+                        "filter": [],
+                        "minimum_should_match": 1
                     }
+                },
+                "_source": {
+                    "excludes": ["embedding"]  # Optimisation: ne pas retourner les vecteurs
                 }
             }
 
-            # Recherche textuelle
+            # Recherche textuelle avec meilleure analyse
             if query:
                 query_body["query"]["bool"]["must"].append({
-                    "match": {
-                        "content": {
-                            "query": query,
-                            "operator": "and",
-                            "analyzer": "french_analyzer",
-                            "fuzziness": "AUTO",
-                            "prefix_length": 2
-                        }
+                    "multi_match": {
+                        "query": query,
+                        "fields": ["title^2", "content"],
+                        "type": "most_fields",
+                        "operator": "and",
+                        "fuzziness": "AUTO",
+                        "prefix_length": 2
                     }
                 })
 
-            # Filtres de métadonnées
+            # Filtres de métadonnées plus robustes
             if metadata_filter:
                 for key, value in metadata_filter.items():
-                    query_body["query"]["bool"]["filter"].append({
-                        "term": {
-                            f"metadata.{key}.keyword": value
+                    if value is not None:  # Ignore les valeurs None
+                        filter_clause = {
+                            "term": {
+                                f"metadata.{key}.keyword": value
+                            }
                         }
-                    })
+                        query_body["query"]["bool"]["filter"].append(filter_clause)
 
-            # Recherche vectorielle
+            # Recherche vectorielle améliorée
             if vector is not None:
-                if len(vector) == self.embedding_dim:
+                if len(vector) != self.embedding_dim:
+                    logger.warning(f"Dimension du vecteur incorrecte: {len(vector)}")
+                else:
                     query_body["query"]["bool"]["should"].append({
                         "script_score": {
                             "query": {"match_all": {}},
@@ -211,18 +218,20 @@ class ElasticsearchClient:
                             }
                         }
                     })
-                else:
-                    logger.warning(f"Dimension du vecteur incorrecte: {len(vector)} != {self.embedding_dim}")
 
-            # Debug de la requête
-            logger.debug(f"Requête ES: {json.dumps(query_body, indent=2)}")
-
-            # Exécution de la recherche
-            response = await self.es.search(
-                index=f"{self.index_prefix}_documents",
-                body=query_body,
-                request_timeout=30
-            )
+            # Exécution de la recherche avec retry
+            for attempt in range(3):
+                try:
+                    response = await self.es.search(
+                        index=f"{self.index_prefix}_documents",
+                        body=query_body,
+                        request_timeout=30
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(1 * (2 ** attempt))
 
             hits = response["hits"]["hits"]
             results = []
@@ -232,12 +241,13 @@ class ElasticsearchClient:
                     "title": hit["_source"]["title"],
                     "content": hit["_source"]["content"],
                     "score": hit["_score"],
-                    "metadata": hit["_source"].get("metadata", {})
+                    "metadata": hit["_source"].get("metadata", {}),
+                    "application": hit["_source"].get("metadata", {}).get("application", "unknown")
                 }
                 results.append(doc)
 
-            logger.debug(f"Nombre de résultats: {len(results)}")
             return results
+
 
         except Exception as e:
             logger.error(f"Erreur recherche documents: {e}", exc_info=True)

@@ -23,10 +23,10 @@ class SystemOptimizer:
             
             # Configuration des variables d'environnement
             os.environ.update({
-                'NUMEXPR_MAX_THREADS': '8',
-                'OMP_NUM_THREADS': '8',
-                'MKL_NUM_THREADS': '8',
-                'OPENBLAS_NUM_THREADS': '8'
+                'NUMEXPR_MAX_THREADS': '16',
+                'OMP_NUM_THREADS': '16',
+                'MKL_NUM_THREADS': '16',
+                'OPENBLAS_NUM_THREADS': '16'
             })
             
             # Création des répertoires nécessaires
