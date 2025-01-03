@@ -310,7 +310,7 @@ class ModelInference:
             context_analysis = await self._analyze_context_relevance(validated_docs, query)
 
             # Construction du prompt
-            prompt = await self.prompt_system.build_chat_prompt(
+            prompt_messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=validated_docs,
                 context_info=context_analysis,
@@ -319,29 +319,19 @@ class ModelInference:
 
             # Configuration de la génération
             generation_config = self._get_generation_config(response_type)
-            
-            max_tokens = settings.MAX_NEW_TOKENS if isinstance(settings.MAX_NEW_TOKENS, int) else 1024
             generation_config_dict = {
-                "max_new_tokens": max_tokens,
-                "temperature": generation_config.temperature or 0.7,
-                "top_p": generation_config.top_p or 0.9,
-                "do_sample": generation_config.do_sample or True,
-                "pad_token_id": self.tokenizer_manager.tokenizer.pad_token_id,
-                "eos_token_id": self.tokenizer_manager.tokenizer.eos_token_id,
+                "max_new_tokens": min(generation_config.max_new_tokens, 1024),
+                "temperature": generation_config.temperature,
+                "top_p": generation_config.top_p,
+                "do_sample": generation_config.do_sample,
                 "streamer": streamer
             }
 
             # Tokenisation
             inputs = self.tokenizer_manager.encode_with_truncation(
-                prompt,
-                max_length=settings.MAX_INPUT_LENGTH,
-                return_tensors="pt"
+                messages=prompt_messages,
+                max_length=settings.MAX_INPUT_LENGTH
             )
-
-            inputs = {
-                "input_ids": inputs["input_ids"].to(self.model.device),
-                "attention_mask": inputs["attention_mask"].to(self.model.device)
-            }
 
             # Démarrage de la génération en arrière-plan
             generation_thread = threading.Thread(
@@ -373,7 +363,8 @@ class ModelInference:
         try:
             with torch.no_grad():
                 self.model.generate(
-                    **inputs,
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
                     **generation_config_dict
                 )
         except Exception as e:
