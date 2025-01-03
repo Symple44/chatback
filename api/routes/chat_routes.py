@@ -91,27 +91,27 @@ async def stream_chat_response(
     language: str = "fr",
     components=Depends(get_components)
 ):
-    """
-    Stream une réponse de chat en utilisant Server-Sent Events.
-    """
     async def event_generator():
         try:
-            # Notification de début
-            yield {
-                "event": "start",
-                "data": json.dumps({
-                    "status": "started",
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-            }
+            # Création de la requête de chat
+            chat_request = ChatRequest(
+                query=query, 
+                user_id=user_id, 
+                session_id=session_id
+            )
+
+            # Récupération ou création de la session
+            chat_session = await components.session_manager.get_or_create_session(
+                str(session_id) if session_id else None,
+                str(user_id)
+            )
 
             # Préparation du contexte
             query_vector = await components.model.create_embedding(query)
             relevant_docs = await components.es_client.search_documents(
                 query=query,
                 vector=query_vector,
-                size=settings.MAX_RELEVANT_DOCS,
-                metadata_filter={"application": request.application} if request.application else None
+                size=settings.MAX_RELEVANT_DOCS
             )
 
             # Streaming de la réponse
@@ -141,7 +141,7 @@ async def stream_chat_response(
             }
 
         except Exception as e:
-            logger.error(f"Erreur streaming: {e}")
+            logger.error(f"Erreur streaming: {e}", exc_info=True)
             yield {
                 "event": "error",
                 "data": json.dumps({
