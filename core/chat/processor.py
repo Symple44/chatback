@@ -292,7 +292,6 @@ class ChatProcessor:
         try:
             # Sélection du type de réponse et configuration
             response_type = context_analysis.get("response_type", "comprehensive")
-            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
 
             # Construction du prompt avec style adapté
             prompt_prefix = response_config.get("style", "")
@@ -303,11 +302,7 @@ class ChatProcessor:
                 context_docs=relevant_docs,
                 conversation_history=chat_session.session_context.get("history", []) if chat_session else [],
                 response_type=response_type,
-                prompt_prefix=prompt_prefix,
-                generation_config={
-                    "temperature": response_config.get("temperature", 0.7),
-                    "max_tokens": response_config.get("max_tokens", 1024)
-                }
+                prompt_prefix=prompt_prefix
             )
 
             # Construction de la réponse finale
