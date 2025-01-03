@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import torch
 import asyncio
 import re
+import threading
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, GenerationConfig
 from sentence_transformers import SentenceTransformer
 from core.config import settings
