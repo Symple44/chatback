@@ -248,11 +248,11 @@ class SessionManager:
         async with self.async_session() as session:
             if session_id:
                 try:
+                    str_session_id = str(session_id)
                     result = await session.execute(
                         select(ChatSession)
-                        .where(ChatSession.session_id == str(session_id))
-                        .options(joinedload(ChatSession.chat_history))
-                        #.options(selectinload(ChatSession.chat_history))
+                        .where(ChatSession.session_id == str_session_id)
+                        .options(selectinload(ChatSession.chat_history))
                     )
                     existing_session = result.scalar_one_or_none()
                     if existing_session:
