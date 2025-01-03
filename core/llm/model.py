@@ -287,6 +287,7 @@ class ModelInference:
         self,
         query: str,
         context_docs: Optional[List[Dict]] = None,
+        language: str = "fr",
         response_type: str = "comprehensive"
     ) -> Generator[str, None, None]:
         """
