@@ -135,11 +135,13 @@ class CUDAManager:
 
     def get_model_load_parameters(self) -> Dict[str, Any]:
         """Retourne les paramètres optimaux pour le chargement du modèle."""
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        
         load_params = {
-            "device_map": "auto",
+            "device_map": "balanced" if torch.cuda.is_available() else None,
             "torch_dtype": self.config.torch_dtype,
             "max_memory": self.config.max_memory,
-            "trust_remote_code": True,
+            "trust_remote_code": True
         }
 
         # Configuration de la quantification
@@ -150,22 +152,24 @@ class CUDAManager:
                 load_in_8bit=True,
                 llm_int8_threshold=float(settings.LLM_INT8_THRESHOLD),
                 llm_int8_enable_fp32_cpu_offload=settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true",
-                llm_int8_skip_modules=None
+                llm_int8_skip_modules=None,
+                llm_int8_has_fp16_weight=True  # Ajout pour meilleure compatibilité
             )
             load_params["quantization_config"] = quantization_config
             
-            # Si l'offloading CPU est activé, on ne peut pas utiliser Flash Attention
+            # Configuration de l'offloading et du device_map
             if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":
                 logger.info("Activation de l'offloading CPU FP32 pour INT8")
                 load_params["device_map"] = {
-                    "transformer.word_embeddings": "cpu",
-                    "transformer.final_layernorm": "cpu",
-                    "lm_head": "cpu"
+                    "model.embed_tokens": device,  # Force les embeddings sur GPU
+                    "model.norm": device,          # Force la normalisation sur GPU
+                    "lm_head": device,            # Force la tête du modèle sur GPU
+                    "transformer": "auto"          # Laisse le reste être distribué automatiquement
                 }
-                load_params["attn_implementation"] = "sdpa"  # Utiliser SDPA au lieu de Flash Attention
+                load_params["low_cpu_mem_usage"] = True
+                load_params["offload_state_dict"] = True
             else:
-                # Flash Attention uniquement si pas d'offloading CPU
-                load_params["attn_implementation"] = "flash_attention_2"
+                load_params["device_map"] = "auto"
 
         elif settings.USE_4BIT:
             from transformers import BitsAndBytesConfig
@@ -177,7 +181,22 @@ class CUDAManager:
                 bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true"
             )
             load_params["quantization_config"] = quantization_config
-            load_params["attn_implementation"] = "flash_attention_2"
+            load_params["device_map"] = "auto"
+
+        # Configuration de l'attention
+        if torch.cuda.is_available():
+            if not settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD:
+                load_params["attn_implementation"] = "flash_attention_2"
+                logger.info("Flash Attention 2.0 activé")
+            else:
+                load_params["attn_implementation"] = "sdpa"
+                logger.info("SDPA activé en raison de l'offloading CPU")
+
+        # Ajout de paramètres pour la gestion de la mémoire
+        load_params.update({
+            "low_cpu_mem_usage": True,
+            "offload_folder": settings.OFFLOAD_FOLDER if hasattr(settings, "OFFLOAD_FOLDER") else None
+        })
 
         return load_params
 
