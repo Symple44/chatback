@@ -163,7 +163,8 @@ class ModelInference:
         context_summary: Optional[Dict] = None,
         conversation_history: Optional[List[Dict]] = None,
         language: str = "fr",
-        response_type: str = "comprehensive"
+        response_type: str = "comprehensive",
+        prompt_prefix: str = ""
     ) -> Dict:
         """
         Génère une réponse en tenant compte du contexte et de l'historique.
@@ -219,7 +220,8 @@ class ModelInference:
                 conversation_history=conversation_history,
                 context_info=context_info,
                 language=language,
-                response_type=response_type
+                response_type=response_type,
+                prompt_prefix=prompt_prefix
             )
             
             #logger.info(prompt)

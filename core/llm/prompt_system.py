@@ -36,6 +36,7 @@ class PromptSystem:
         context_summary: Optional[Union[str, Dict]] = None,
         conversation_history: Optional[List[Dict]] = None,
         context_info: Optional[Dict] = None,
+        prompt_prefix: Optional[str] = None,
         language: str = "fr",
         response_type: str = "comprehensive"
     ) -> str:
@@ -46,13 +47,19 @@ class PromptSystem:
             
             # 1. Message système
             system_content = [
-                f"Je suis {settings.APP_NAME}, votre assistant IA spécialisé.",
+                f"Je suis {settings.APP_NAME}, votre assistant IA spécialisé dans le logiciel 2CM Manager pour le métier de la charpente métallique, serrurerie et métallerie.",
                 "Je fournis des réponses précises basées sur la documentation disponible."
             ]
             messages.append({
                 "role": "system",
                 "content": "\n".join(system_content)
             })
+            #  Ajout du prefix personnalisé s'il existe
+            if prompt_prefix:
+                messages.append({
+                    "role": "system", 
+                    "content": prompt_prefix
+                })
 
             # 2. Message de contexte (comme système également)
             if context_docs or context_summary:
