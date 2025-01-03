@@ -144,14 +144,15 @@ class CUDAManager:
             "trust_remote_code": True
         }
 
+        # Configuration de la quantification
         if settings.USE_8BIT:
-            load_params["load_in_8bit"] = True
-            load_params["quantization_config"] = {
-                "load_in_8bit": True,
+            # Éviter d'utiliser à la fois load_in_8bit et quantization_config
+            quantization_config = {
                 "threshold": float(settings.LLM_INT8_THRESHOLD),
                 "skip_modules": None,
                 "enable_fp32_cpu_offload": settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true"
             }
+            load_params["quantization_config"] = quantization_config
             
             # Configuration spécifique pour l'offloading CPU en INT8
             if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":

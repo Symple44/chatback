@@ -66,7 +66,7 @@ class ModelInference:
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
 
-            # Initialisation du tokenizer avant le modèle
+            # Initialisation du tokenizer
             self.tokenizer_manager = TokenizerManager()
             await self.tokenizer_manager.initialize()
 
@@ -79,12 +79,6 @@ class ModelInference:
 
             # Récupération des paramètres CUDA optimisés
             load_params = self.cuda_manager.get_model_load_parameters()
-            
-            # Ajout des paramètres de mémoire
-            load_params.update({
-                "max_memory": max_memory,
-                "offload_folder": settings.OFFLOAD_FOLDER
-            })
 
             # Chargement avec autocast si FP16 est activé
             if settings.USE_FP16:
@@ -103,18 +97,12 @@ class ModelInference:
 
             # Configuration post-initialisation
             device = self.cuda_manager.device
-            self.model = self.model.to(device)
-            
-            # Log des informations importantes
             logger.info(f"Modèle chargé sur {device}")
             logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
             logger.info(f"Statistiques mémoire: {self.cuda_manager.memory_stats()}")
-            logger.info(f"Configuration mémoire max: {max_memory}")
             
             if hasattr(self.model, 'hf_device_map'):
                 logger.info(f"Device map: {self.model.hf_device_map}")
-
-            metrics.increment_counter("model_loads")
 
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
