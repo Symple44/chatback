@@ -1,5 +1,5 @@
 # core/vectorstore/indexation.py
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import time
 import json
