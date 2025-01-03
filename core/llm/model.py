@@ -6,6 +6,7 @@ import torch
 import asyncio
 import re
 import threading
+import json
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, GenerationConfig
 from sentence_transformers import SentenceTransformer
 from core.config import settings
