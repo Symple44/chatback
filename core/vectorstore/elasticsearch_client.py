@@ -1,12 +1,13 @@
-# core/vectorstore/elasticsearch_client.py
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 from elasticsearch import AsyncElasticsearch
+from elasticsearch.helpers import async_bulk, BulkIndexError
 from datetime import datetime
-import logging
 import json
+import logging
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
+from .indexation import ElasticsearchIndexManager
 
 logger = get_logger(__name__)
 
@@ -17,6 +18,7 @@ class ElasticsearchClient:
         self.index_prefix = settings.ELASTICSEARCH_INDEX_PREFIX
         self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
         self.initialized = False
+        self.index_manager = None
 
     def _initialize_client(self) -> AsyncElasticsearch:
         """Initialise le client avec SSL."""
@@ -44,12 +46,15 @@ class ElasticsearchClient:
             try:
                 if not await self.check_connection():
                     raise ConnectionError("Impossible de se connecter à Elasticsearch")
-
-                # Configuration des indices
-                await self.setup_indices()
                 
-                # Vérification du mapping
-                await self.verify_mapping()
+                # Initialiser le gestionnaire d'index
+                self.index_manager = ElasticsearchIndexManager(
+                    es_client=self.es,
+                    index_prefix=self.index_prefix
+                )
+                
+                # Configuration des indices
+                await self.index_manager.setup_indices()
                 
                 self.initialized = True
                 logger.info("Elasticsearch initialisé avec succès")
@@ -57,125 +62,6 @@ class ElasticsearchClient:
             except Exception as e:
                 logger.error(f"Erreur initialisation ES: {e}")
                 raise
-
-    async def setup_indices(self):
-        """Configure les indices avec mapping optimisé."""
-        try:
-            template = {
-                "index_patterns": [f"{self.index_prefix}_*"],
-                "priority": 100,
-                "template": {
-                    "settings": {
-                        "analysis": {
-                            "analyzer": {
-                                "content_analyzer": {
-                                    "type": "custom",
-                                    "tokenizer": "standard",
-                                    "filter": [
-                                        "lowercase",
-                                        "asciifolding",
-                                        "word_delimiter_graph",
-                                        "fr_stop",
-                                        "fr_stemmer"
-                                    ]
-                                }
-                            },
-                            "filter": {
-                                "fr_stop": {
-                                    "type": "stop",
-                                    "stopwords": "_french_"
-                                },
-                                "fr_stemmer": {
-                                    "type": "stemmer",
-                                    "language": "light_french"
-                                }
-                            }
-                        },
-                        "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                        "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
-                        "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
-                        "index": {
-                            "similarity": {
-                                "scripted_tfidf": {
-                                    "type": "scripted",
-                                    "script": {
-                                        "source": "double tf = Math.sqrt(doc.freq); double idf = Math.log((field.docCount+1.0)/(term.docFreq+1.0)) + 1.0; return query.boost * tf * idf;"
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "mappings": {
-                        "properties": {
-                            "title": {
-                                "type": "text",
-                                "analyzer": "content_analyzer",
-                                "fields": {
-                                    "keyword": {"type": "keyword"},
-                                    "suggest": {
-                                        "type": "completion",
-                                        "analyzer": "content_analyzer"
-                                    }
-                                }
-                            },
-                            "content": {
-                                "type": "text",
-                                "analyzer": "content_analyzer",
-                                "term_vector": "with_positions_offsets",
-                                "similarity": "scripted_tfidf"
-                            },
-                            "embedding": {
-                                "type": "dense_vector",
-                                "dims": self.embedding_dim,
-                                "similarity": "cosine",
-                                "index": True
-                            },
-                            "metadata": {
-                                "type": "object",
-                                "dynamic": True,
-                                "properties": {
-                                    "source": {"type": "keyword"},
-                                    "last_updated": {"type": "date"},
-                                    "confidence": {"type": "float"},
-                                    "tags": {"type": "keyword"},
-                                    "application": {"type": "keyword"},
-                                    "language": {"type": "keyword"},
-                                    "version": {"type": "keyword"}
-                                }
-                            },
-                            "processed_date": {"type": "date"},
-                            "importance_score": {"type": "float"}
-                        }
-                    }
-                }
-            }
-
-            # Création du template
-            template_name = f"{self.index_prefix}_template"
-            try:
-                await self.es.indices.delete_index_template(name=template_name)
-            except Exception:
-                pass
-
-            await self.es.indices.put_index_template(
-                name=template_name,
-                body=template
-            )
-
-            # Création des indices nécessaires
-            indices = [
-                f"{self.index_prefix}_documents",
-                f"{self.index_prefix}_vectors"
-            ]
-
-            for index in indices:
-                if not await self.es.indices.exists(index=index):
-                    await self.es.indices.create(index=index)
-                    logger.info(f"Index {index} créé")
-
-        except Exception as e:
-            logger.error(f"Erreur configuration indices: {e}")
-            raise
 
     async def check_connection(self) -> bool:
         """Vérifie la connexion à Elasticsearch."""
@@ -185,148 +71,63 @@ class ElasticsearchClient:
             logger.error(f"Erreur connexion ES: {e}")
             return False
 
-    async def verify_mapping(self):
-        """Vérifie et corrige le mapping si nécessaire."""
-        try:
-            index = f"{self.index_prefix}_documents"
-            mapping = await self.es.indices.get_mapping(index=index)
-            
-            # Vérifie si le champ embedding existe avec les bonnes propriétés
-            if not mapping.get(index, {}).get("mappings", {}).get("properties", {}).get("embedding"):
-                logger.warning("Mapping incorrect - recréation de l'index")
-                
-                # Sauvegarde des données
-                docs = await self._backup_documents(index)
-                
-                # Recréation de l'index
-                await self.es.indices.delete(index=index)
-                await self.setup_indices()
-                
-                # Restauration des données
-                if docs:
-                    await self._restore_documents(index, docs)
-
-        except Exception as e:
-            logger.error(f"Erreur vérification mapping: {e}")
-            raise
-
-    async def _backup_documents(self, index: str) -> List[Dict]:
-        """Sauvegarde les documents d'un index."""
-        try:
-            docs = []
-            async for hit in self.es.scan(
-                index=index,
-                query={"match_all": {}}
-            ):
-                docs.append(hit["_source"])
-            return docs
-        except Exception as e:
-            logger.error(f"Erreur sauvegarde documents: {e}")
-            return []
-
-    async def _restore_documents(self, index: str, documents: List[Dict]):
-        """Restaure les documents dans un index."""
-        try:
-            for doc in documents:
-                await self.es.index(
-                    index=index,
-                    document=doc,
-                    refresh=True
-                )
-            logger.info(f"{len(documents)} documents restaurés")
-        except Exception as e:
-            logger.error(f"Erreur restauration documents: {e}")
-            raise
-
     async def index_document(
         self,
         title: str,
         content: str,
-        vector: Optional[List[float]] = None,
+        embedding: Optional[List[float]] = None,
         metadata: Optional[Dict] = None,
-        importance_score: float = 1.0,
+        doc_id: Optional[str] = None,
         refresh: bool = True
     ) -> bool:
         """
-        Indexe un document avec prétraitement et gestion améliorée des métadonnées.
+        Indexe un document dans Elasticsearch.
         
         Args:
             title: Titre du document
             content: Contenu du document
-            vector: Vecteur d'embedding optionnel
+            embedding: Vecteur d'embedding (optionnel)
             metadata: Métadonnées additionnelles
-            importance_score: Score d'importance du document
+            doc_id: ID du document (optionnel)
             refresh: Rafraîchir l'index immédiatement
             
         Returns:
             bool: Succès de l'indexation
         """
         try:
-            # Prétraitement du document
-            processed_doc = self.preprocessor.preprocess_document({
-                "content": content,
-                "metadata": metadata or {},
-                "title": title,
-                "doc_id": hashlib.sha256(f"{title}-{content}".encode()).hexdigest()
-            })
+            if not self.initialized:
+                await self.initialize()
 
-            # Construction du document enrichi
+            # Préparation du document
             doc = {
                 "title": title,
                 "content": content,
-                "processed_content": {
-                    "sections": processed_doc["sections"],
-                    "importance_scores": [s.importance_score for s in processed_doc["sections"]]
-                },
-                "metadata": {
-                    **(metadata or {}),
-                    "word_count": len(content.split()),
-                    "processed_sections": len(processed_doc["sections"]),
-                    "language": processed_doc.get("metadata", {}).get("language", "fr"),
-                    "revision": processed_doc.get("metadata", {}).get("revision", "1"),
-                    "source": processed_doc.get("metadata", {}).get("source", "unknown"),
-                    "processing_info": {
-                        "processor_version": "1.0",
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                },
-                "processed_date": datetime.utcnow().isoformat(),
-                "importance_score": importance_score,
-                "indexing_status": {
-                    "version": 1,
-                    "last_update": datetime.utcnow().isoformat(),
-                    "has_embedding": vector is not None
-                }
+                "metadata": metadata or {},
+                "processed_date": datetime.utcnow().isoformat()
             }
 
-            # Ajout du vecteur si fourni et valide
-            if vector is not None:
-                if len(vector) != self.embedding_dim:
-                    logger.warning(
-                        f"Dimension du vecteur incorrecte: {len(vector)} != {self.embedding_dim}"
-                    )
-                else:
-                    doc["embedding"] = vector
+            # Ajout de l'embedding s'il est fourni
+            if embedding is not None:
+                if len(embedding) != self.embedding_dim:
+                    raise ValueError(f"Dimension d'embedding incorrecte: {len(embedding)}, attendu: {self.embedding_dim}")
+                doc["embedding"] = embedding
 
-            # Indexation avec retry en cas d'erreur
+            # Indexation avec retry
+            index_name = f"{self.index_prefix}_documents"
             for attempt in range(3):
                 try:
                     response = await self.es.index(
-                        index=f"{self.index_prefix}_documents",
+                        index=index_name,
                         document=doc,
-                        refresh=refresh,
-                        pipeline="document_processing",  # Pipeline de traitement optionnel
-                        timeout="30s"
+                        id=doc_id,
+                        refresh=refresh
                     )
                     
-                    successful = bool(response.get("_shards", {}).get("successful", 0))
-                    if successful:
+                    success = response.get("result") in ["created", "updated"]
+                    if success:
                         metrics.increment_counter("documents_indexed")
-                        logger.info(
-                            f"Document indexé avec succès: {title} "
-                            f"({len(processed_doc['sections'])} sections)"
-                        )
-                    return successful
+                        logger.info(f"Document indexé avec succès: {title}")
+                    return success
 
                 except Exception as e:
                     if attempt == 2:  # Dernière tentative
@@ -335,55 +136,60 @@ class ElasticsearchClient:
                     await asyncio.sleep(1 * (2 ** attempt))  # Backoff exponentiel
 
         except Exception as e:
-            logger.error(
-                f"Erreur indexation document {title}: {e}",
-                extra={
-                    "document_title": title,
-                    "error": str(e),
-                    "has_vector": vector is not None
-                }
-            )
-            metrics.increment_counter("indexing_errors")
+            logger.error(f"Erreur indexation document {title}: {e}")
+            metrics.increment_counter("indexation_errors")
             return False
-            
+
     async def search_documents(
         self,
         query: str,
         vector: Optional[List[float]] = None,
         metadata_filter: Optional[Dict] = None,
-        size: int = 5
+        size: int = 5,
+        min_score: float = 0.1
     ) -> List[Dict]:
-        """Recherche des documents avec gestion robuste des erreurs."""
+        """
+        Recherche des documents.
+        
+        Args:
+            query: Requête textuelle
+            vector: Vecteur de recherche optionnel
+            metadata_filter: Filtres sur les métadonnées
+            size: Nombre maximum de résultats
+            min_score: Score minimum pour les résultats
+        """
         try:
             if not self.initialized:
                 await self.initialize()
 
-            # Construction de la requête de base
+            # Construction de la requête
             query_body = {
                 "size": size,
+                "min_score": min_score,
                 "query": {
                     "bool": {
                         "must": [],
                         "should": [],
                         "filter": []
                     }
-                },
-                "_source": ["title", "content", "metadata"]
+                }
             }
 
-            # Ajout de la recherche textuelle si présente
+            # Recherche textuelle
             if query:
                 query_body["query"]["bool"]["must"].append({
                     "match": {
                         "content": {
                             "query": query,
                             "operator": "and",
-                            "fuzziness": "AUTO"
+                            "analyzer": "french_analyzer",
+                            "fuzziness": "AUTO",
+                            "prefix_length": 2
                         }
                     }
                 })
 
-            # Ajout des filtres de métadonnées
+            # Filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     query_body["query"]["bool"]["filter"].append({
@@ -392,85 +198,92 @@ class ElasticsearchClient:
                         }
                     })
 
-            # Ajout de la recherche vectorielle si présente
+            # Recherche vectorielle
             if vector is not None:
-                query_body["query"]["bool"]["should"].append({
-                    "script_score": {
-                        "query": {"match_all": {}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, doc['embedding']) + 1.0",
-                            "params": {"query_vector": vector}
+                if len(vector) == self.embedding_dim:
+                    query_body["query"]["bool"]["should"].append({
+                        "script_score": {
+                            "query": {"match_all": {}},
+                            "script": {
+                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                                "params": {"query_vector": vector}
+                            }
                         }
-                    }
-                })
+                    })
+                else:
+                    logger.warning(f"Dimension du vecteur incorrecte: {len(vector)} != {self.embedding_dim}")
 
-            # S'assurer qu'au moins une condition doit correspondre
-            query_body["query"]["bool"]["minimum_should_match"] = 1 if vector else 0
+            # Debug de la requête
+            logger.debug(f"Requête ES: {json.dumps(query_body, indent=2)}")
 
-            logger.debug(f"Query body: {json.dumps(query_body, indent=2)}")
-
+            # Exécution de la recherche
             response = await self.es.search(
                 index=f"{self.index_prefix}_documents",
-                body=query_body
+                body=query_body,
+                request_timeout=30
             )
 
-            hits = response.get("hits", {}).get("hits", [])
-            return [
-                {
-                    "title": hit["_source"].get("title", ""),
-                    "content": hit["_source"].get("content", ""),
+            hits = response["hits"]["hits"]
+            results = []
+            
+            for hit in hits:
+                doc = {
+                    "title": hit["_source"]["title"],
+                    "content": hit["_source"]["content"],
                     "score": hit["_score"],
                     "metadata": hit["_source"].get("metadata", {})
                 }
-                for hit in hits
-            ]
+                results.append(doc)
+
+            logger.debug(f"Nombre de résultats: {len(results)}")
+            return results
 
         except Exception as e:
             logger.error(f"Erreur recherche documents: {e}", exc_info=True)
+            if "details" in vars(e):
+                logger.error(f"Détails de l'erreur ES: {e.details}")
+            metrics.increment_counter("search_errors")
             return []
 
     async def delete_document(self, doc_id: str) -> bool:
-        """Supprime un document."""
+        """Supprime un document par son ID."""
         try:
-            await self.es.delete(
+            response = await self.es.delete(
                 index=f"{self.index_prefix}_documents",
                 id=doc_id,
                 refresh=True
             )
-            return True
+            return response["result"] == "deleted"
         except Exception as e:
             logger.error(f"Erreur suppression document: {e}")
             return False
 
     async def update_document(self, doc_id: str, update_fields: Dict) -> bool:
-        """Met à jour un document."""
+        """Met à jour un document existant."""
         try:
-            await self.es.update(
+            response = await self.es.update(
                 index=f"{self.index_prefix}_documents",
                 id=doc_id,
                 body={"doc": update_fields},
                 refresh=True
             )
-            return True
+            return response["result"] == "updated"
         except Exception as e:
             logger.error(f"Erreur mise à jour document: {e}")
             return False
 
-    async def get_document(self, doc_id: str) -> Optional[Dict]:
-        """Récupère un document par son ID."""
-        try:
-            response = await self.es.get(
-                index=f"{self.index_prefix}_documents",
-                id=doc_id
-            )
-            return response["_source"]
-        except Exception as e:
-            logger.error(f"Erreur récupération document: {e}")
-            return None
+    async def bulk_index_documents(self, documents: List[Dict]) -> Tuple[int, List[Dict]]:
+        """Indexe plusieurs documents en masse."""
+        return await self.index_manager.bulk_index_documents(documents)
 
     async def cleanup(self):
         """Nettoie les ressources."""
-        if self.es:
-            await self.es.close()
+        try:
+            if self.index_manager:
+                await self.index_manager.cleanup()
+            if self.es:
+                await self.es.close()
             self.initialized = False
             logger.info("Ressources Elasticsearch nettoyées")
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources ES: {e}")
