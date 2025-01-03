@@ -11,7 +11,7 @@ from sqlalchemy import (
     create_engine
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, selectinload
+from sqlalchemy.orm import sessionmaker, selectinload, joinedload
 from datetime import datetime, timedelta
 import json
 import uuid
@@ -251,6 +251,7 @@ class SessionManager:
                     result = await session.execute(
                         select(ChatSession)
                         .where(ChatSession.session_id == str(session_id))
+                        .options(joinedload(ChatSession.chat_history))
                         #.options(selectinload(ChatSession.chat_history))
                     )
                     existing_session = result.scalar_one_or_none()
