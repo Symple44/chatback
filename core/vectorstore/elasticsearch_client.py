@@ -362,25 +362,14 @@ class ElasticsearchClient:
             must_clauses = []
             filter_clauses = []
 
-            query_body = {
-                "size": size,
-                "query": {
-                    "bool": {
-                        "should": should_clauses,
-                        "must": must_clauses,
-                        "filter": filter_clauses,
-                        "minimum_should_match": 0
-                    }
-                }
-            }
-
             # Ajout de la recherche textuelle si présente
             if query:
                 must_clauses.append({
                     "match": {
                         "content": {
                             "query": query,
-                            "operator": "or"
+                            "operator": "or",
+                            "fuzziness": "AUTO"
                         }
                     }
                 })
@@ -400,33 +389,45 @@ class ElasticsearchClient:
                     "script_score": {
                         "query": {"match_all": {}},
                         "script": {
-                            "source": "cosineSimilarity(params.vector, 'embedding') + 1.0",
-                            "params": {"vector": vector}
+                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                            "params": {
+                                "query_vector": vector
+                            }
                         }
                     }
                 })
 
-            # Utilisation de l'index correct
-            index = f"{self.index_prefix}_documents"
+            # Construction de la requête finale
+            query_body = {
+                "size": size,
+                "query": {
+                    "bool": {
+                        "must": must_clauses,
+                        "should": should_clauses,
+                        "filter": filter_clauses,
+                        "minimum_should_match": 0
+                    }
+                },
+                "_source": ["title", "content", "metadata"]
+            }
 
-            logger.debug(f"Query body: {query_body}")  # Log pour debug
+            logger.debug(f"Query body: {json.dumps(query_body, indent=2)}")
 
             response = await self.es.search(
-                index=index,
+                index=f"{self.index_prefix}_documents",
                 body=query_body
             )
-    
-            # Transformation des résultats
+
             return [
                 {
-                    "title": hit.get("_source", {}).get("title", ""),
-                    "content": hit.get("_source", {}).get("content", ""),
-                    "score": hit.get("_score", 0.0),
-                    "metadata": hit.get("_source", {}).get("metadata", {}),
+                    "title": hit["_source"].get("title", ""),
+                    "content": hit["_source"].get("content", ""),
+                    "score": hit["_score"],
+                    "metadata": hit["_source"].get("metadata", {})
                 }
-                for hit in response.get("hits", {}).get("hits", [])
+                for hit in response["hits"]["hits"]
             ]
-    
+
         except Exception as e:
             logger.error(f"Erreur fatale recherche documents: {e}", exc_info=True)
             return []

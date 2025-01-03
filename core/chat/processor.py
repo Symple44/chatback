@@ -223,7 +223,7 @@ class ChatProcessor:
             r"\b(ils|elles|leur|ces)\b"                 # Pronoms sans contexte
         ]
 
-        return any(re.search(pattern, query.lower()) for pattern in patterns)
+        return any(re.search(pattern, query.lower()) for pattern in ambiguous_patterns)
 
     def _get_query_type(self, query: str) -> str:
         """Détermine le type de requête."""
@@ -550,8 +550,8 @@ class ChatProcessor:
             # Utilisation du modèle pour reformuler la question
             response = await self.components.model.generate_response(
                 query=f"Reformule cette question pour vérifier la compréhension: {query}",
-                max_tokens=100,
-                temperature=0.3
+                response_type="concise",  # Utilisation du type de réponse au lieu de max_tokens
+                language="fr"
             )
             return response.get("response", "")
         except Exception as e:
