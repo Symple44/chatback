@@ -1,235 +1,269 @@
 # core/llm/cuda_manager.py
-from typing import Dict, Any
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
 import torch
 import torch.cuda
 import torch.backends.cudnn as cudnn
-from dataclasses import dataclass
-import logging
+import os
 import json
+import psutil
+from enum import Enum
 from core.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("cuda_manager")
 
+class DeviceType(Enum):
+    CPU = "cpu"
+    CUDA = "cuda"
+    AUTO = "auto"
+
 @dataclass
 class CUDAConfig:
-    """Configuration CUDA avec support INT8."""
+    """Configuration CUDA complète."""
+    device_type: DeviceType = DeviceType.AUTO
     device_id: int = 0
     memory_fraction: float = 0.95
-    torch_dtype: torch.dtype = torch.float16
+    compute_dtype: torch.dtype = torch.float16
     module_loading: str = "LAZY"
-    launch_blocking: bool = False
-    enable_timing: bool = False
     max_split_size_mb: int = 4096
-    garbage_collection_threshold: float = 0.9
+    gc_threshold: float = 0.9
     enable_tf32: bool = True
-    allow_fp16_reduced_precision: bool = True
+    allow_fp16: bool = True
     deterministic: bool = False
     benchmark: bool = True
-    max_memory: Dict[str, str] = None
-    offload_folder: str = None
+    max_memory: Optional[Dict[str, str]] = None
+    offload_folder: Optional[str] = None
     use_flash_attention: bool = True
+    quantization_config: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self):
+        if self.device_type == DeviceType.AUTO:
+            self.device_type = DeviceType.CUDA if torch.cuda.is_available() else DeviceType.CPU
 
 class CUDAManager:
     def __init__(self):
         """Initialise le gestionnaire CUDA."""
         self.config = self._load_config()
-        self.setup_cuda_environment()
+        self.device = self._setup_device()
+        self._initialized = False
+        self.memory_stats = {}
 
     def _load_config(self) -> CUDAConfig:
-        """Charge la configuration CUDA depuis les settings."""
+        """Charge et valide la configuration CUDA."""
         try:
-            max_memory = json.loads(settings.MAX_MEMORY) if hasattr(settings, 'MAX_MEMORY') else None
-        except json.JSONDecodeError:
-            logger.warning("Erreur parsing MAX_MEMORY, utilisation des valeurs par défaut")
-            max_memory = {"0": "22GiB", "cpu": "24GB"}
+            # Chargement de la configuration mémoire
+            try:
+                max_memory = json.loads(settings.MAX_MEMORY)
+            except (json.JSONDecodeError, AttributeError):
+                max_memory = {"0": "22GiB", "cpu": "24GB"}
 
-        # Conversion explicite des strings en booléens
-        def str_to_bool(val: str) -> bool:
-            return str(val).lower() == 'true'
+            # Configuration de la quantization
+            quantization_config = None
+            if settings.USE_8BIT or settings.USE_4BIT:
+                quantization_config = {
+                    "load_in_8bit": settings.USE_8BIT,
+                    "load_in_4bit": settings.USE_4BIT,
+                    "bnb_4bit_compute_dtype": getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE, "float16"),
+                    "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
+                    "bnb_4bit_use_double_quant": settings.BNB_4BIT_USE_DOUBLE_QUANT
+                }
 
-        return CUDAConfig(
-            device_id=int(settings.CUDA_VISIBLE_DEVICES),
-            memory_fraction=float(settings.CUDA_MEMORY_FRACTION),
-            module_loading=settings.CUDA_MODULE_LOADING,
-            max_split_size_mb=int(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[0].split(":")[1]),
-            garbage_collection_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
-            benchmark=str_to_bool(settings.CUDNN_BENCHMARK),
-            deterministic=str_to_bool(settings.CUDNN_DETERMINISTIC),
-            max_memory=max_memory,
-            offload_folder=settings.OFFLOAD_FOLDER,
-            use_flash_attention=str_to_bool(settings.USE_FLASH_ATTENTION)
-        )
-
-    def setup_cuda_environment(self):
-        """Configure l'environnement CUDA de manière optimale."""
-        try:
-            if not torch.cuda.is_available():
-                logger.warning("CUDA non disponible - utilisation du CPU")
-                return
-
-            # Configuration du device
-            torch.cuda.set_device(self.config.device_id)
-            
-            # Optimisation de la mémoire
-            torch.cuda.empty_cache()
-            if hasattr(torch.cuda, 'memory_stats'):
-                logger.info(f"Statistiques mémoire initiales: {torch.cuda.memory_stats()}")
-
-            # Configuration de cuDNN
-            cudnn.enabled = True
-            cudnn.benchmark = self.config.benchmark
-            cudnn.deterministic = self.config.deterministic
-            cudnn.allow_tf32 = self.config.enable_tf32
-
-            # Configuration des opérations tensorielles
-            torch.backends.cuda.matmul.allow_tf32 = self.config.enable_tf32
-            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = (
-                self.config.allow_fp16_reduced_precision
+            return CUDAConfig(
+                device_type=DeviceType.AUTO,
+                device_id=int(settings.CUDA_VISIBLE_DEVICES),
+                memory_fraction=float(settings.CUDA_MEMORY_FRACTION),
+                compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
+                module_loading=settings.CUDA_MODULE_LOADING,
+                max_split_size_mb=int(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[0].split(":")[1]),
+                gc_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
+                enable_tf32=True,
+                allow_fp16=settings.USE_FP16,
+                deterministic=settings.CUDNN_DETERMINISTIC.lower() == "true",
+                benchmark=settings.CUDNN_BENCHMARK.lower() == "true",
+                max_memory=max_memory,
+                offload_folder=settings.OFFLOAD_FOLDER,
+                use_flash_attention=settings.USE_FLASH_ATTENTION.lower() == "true",
+                quantization_config=quantization_config
             )
+        except Exception as e:
+            logger.error(f"Erreur chargement config CUDA: {e}")
+            raise
 
+    def _setup_device(self) -> torch.device:
+        """Configure le device PyTorch."""
+        if self.config.device_type == DeviceType.CPU:
+            return torch.device("cpu")
+            
+        if not torch.cuda.is_available():
+            logger.warning("CUDA non disponible - utilisation du CPU")
+            return torch.device("cpu")
+            
+        try:
+            # Sélection et configuration du GPU
+            torch.cuda.set_device(self.config.device_id)
+            device = torch.device(f"cuda:{self.config.device_id}")
+            
             # Configuration de la mémoire
             if self.config.memory_fraction < 1.0:
                 torch.cuda.set_per_process_memory_fraction(
-                    self.config.memory_fraction,
+                    self.config.memory_fraction, 
                     self.config.device_id
                 )
-
-            # Activation du garbage collector CUDA
-            if hasattr(torch.cuda, 'memory_stats'):
-                torch.cuda.memory_stats(device=self.config.device_id)
             
-            # Configuration des streams
-            torch.cuda.Stream(device=self.config.device_id)
-            
-            # Logging des informations GPU
-            self._log_gpu_info()
+            return device
             
         except Exception as e:
-            logger.error(f"Erreur configuration CUDA: {e}")
+            logger.error(f"Erreur setup device CUDA: {e}")
+            return torch.device("cpu")
+
+    async def initialize(self):
+        """Initialise l'environnement CUDA de manière asynchrone."""
+        if self._initialized:
+            return
+
+        try:
+            # Nettoyage initial
+            self.cleanup_memory()
+
+            # Configuration CUDA
+            if self.config.device_type == DeviceType.CUDA:
+                # Configuration cuDNN
+                cudnn.enabled = True
+                cudnn.benchmark = self.config.benchmark
+                cudnn.deterministic = self.config.deterministic
+                cudnn.allow_tf32 = self.config.enable_tf32
+
+                # Configuration des opérations tensorielles
+                torch.backends.cuda.matmul.allow_tf32 = self.config.enable_tf32
+                torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = self.config.allow_fp16
+
+                # Création du dossier d'offload si nécessaire
+                if self.config.offload_folder:
+                    os.makedirs(self.config.offload_folder, exist_ok=True)
+
+            # Configuration des threads CPU
+            torch.set_num_threads(int(settings.MKL_NUM_THREADS))
+            
+            self._initialized = True
+            self.update_memory_stats()
+            self._log_system_info()
+            
+        except Exception as e:
+            logger.error(f"Erreur initialisation CUDA: {e}")
             raise
 
-    def _log_gpu_info(self):
-        """Log les informations détaillées sur le GPU."""
-        try:
-            device = torch.cuda.current_device()
-            gpu_properties = torch.cuda.get_device_properties(device)
-
-            info = {
-                "name": torch.cuda.get_device_name(device),
-                "compute_capability": f"{gpu_properties.major}.{gpu_properties.minor}",
-                "total_memory": f"{gpu_properties.total_memory / 1024**3:.2f} GB",
-                "multi_processor_count": gpu_properties.multi_processor_count,
-                "device_id": device,
-                "cuda_version": torch.version.cuda,
-                "memory_allocated": f"{torch.cuda.memory_allocated(device) / 1024**3:.2f} GB",
-                "memory_reserved": f"{torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
-            }
-
-            logger.info("Configuration GPU:")
-            for key, value in info.items():
-                logger.info(f"  {key}: {value}")
-
-        except Exception as e:
-            logger.error(f"Erreur logging GPU: {e}")
-
-    def get_model_load_parameters(self) -> Dict[str, Any]:
-        """Retourne les paramètres optimaux pour le chargement du modèle."""
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    def get_model_load_parameters(self, model_name: str) -> Dict[str, Any]:
+        """
+        Retourne les paramètres optimaux pour le chargement du modèle.
         
+        Args:
+            model_name: Nom du modèle à charger
+        """
         load_params = {
-            "device_map": "balanced" if torch.cuda.is_available() else None,
-            "torch_dtype": self.config.torch_dtype,
-            "max_memory": self.config.max_memory,
+            "torch_dtype": self.config.compute_dtype,
             "trust_remote_code": True
         }
 
-        # Configuration de la quantification
-        if settings.USE_8BIT:
-            from transformers import BitsAndBytesConfig
-            
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                llm_int8_threshold=float(settings.LLM_INT8_THRESHOLD),
-                llm_int8_enable_fp32_cpu_offload=settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true",
-                llm_int8_skip_modules=None,
-                llm_int8_has_fp16_weight=True  # Ajout pour meilleure compatibilité
-            )
-            load_params["quantization_config"] = quantization_config
-            
-            # Configuration de l'offloading et du device_map
-            if settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD.lower() == "true":
-                logger.info("Activation de l'offloading CPU FP32 pour INT8")
+        if self.config.device_type == DeviceType.CUDA:
+            # Configuration du device mapping
+            if self.config.quantization_config and self.config.quantization_config.get("load_in_8bit"):
                 load_params["device_map"] = {
-                    "model.embed_tokens": device,  # Force les embeddings sur GPU
-                    "model.norm": device,          # Force la normalisation sur GPU
-                    "lm_head": device,            # Force la tête du modèle sur GPU
-                    "transformer": "auto"          # Laisse le reste être distribué automatiquement
+                    "model.embed_tokens": self.device,
+                    "model.norm": self.device,
+                    "lm_head": self.device,
+                    "model": "auto"
                 }
-                load_params["low_cpu_mem_usage"] = True
-                load_params["offload_state_dict"] = True
+                load_params["quantization_config"] = self.config.quantization_config
             else:
                 load_params["device_map"] = "auto"
 
-        elif settings.USE_4BIT:
-            from transformers import BitsAndBytesConfig
-            
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE),
-                bnb_4bit_quant_type=settings.BNB_4BIT_QUANT_TYPE,
-                bnb_4bit_use_double_quant=settings.BNB_4BIT_USE_DOUBLE_QUANT.lower() == "true"
-            )
-            load_params["quantization_config"] = quantization_config
-            load_params["device_map"] = "auto"
-
-        # Configuration de l'attention
-        if torch.cuda.is_available():
-            if not settings.LLM_INT8_ENABLE_FP32_CPU_OFFLOAD:
+            # Configuration de l'attention
+            if self.config.use_flash_attention and not self.config.quantization_config:
                 load_params["attn_implementation"] = "flash_attention_2"
-                logger.info("Flash Attention 2.0 activé")
-            else:
-                load_params["attn_implementation"] = "sdpa"
-                logger.info("SDPA activé en raison de l'offloading CPU")
-
-        # Ajout de paramètres pour la gestion de la mémoire
-        load_params.update({
-            "low_cpu_mem_usage": True,
-            "offload_folder": settings.OFFLOAD_FOLDER if hasattr(settings, "OFFLOAD_FOLDER") else None
-        })
+            
+            # Configuration de la mémoire
+            if self.config.max_memory:
+                load_params["max_memory"] = self.config.max_memory
+                
+            load_params.update({
+                "low_cpu_mem_usage": True,
+                "offload_folder": self.config.offload_folder
+            })
 
         return load_params
 
-    async def cleanup(self):
-        """Nettoie les ressources CUDA."""
-        if torch.cuda.is_available():
+    def cleanup_memory(self):
+        """Nettoie la mémoire CUDA."""
+        if self.config.device_type == DeviceType.CUDA:
             try:
-                # Libération de la mémoire CUDA
                 torch.cuda.empty_cache()
-                
-                # Synchronisation des streams
-                torch.cuda.current_stream().synchronize()
-                
-                # Reset du device
-                torch.cuda.device(self.config.device_id).empty_cache()
-                
-                logger.info("Ressources CUDA nettoyées")
-                
+                torch.cuda.synchronize()
             except Exception as e:
-                logger.error(f"Erreur nettoyage CUDA: {e}")
+                logger.error(f"Erreur nettoyage mémoire CUDA: {e}")
+
+    def update_memory_stats(self):
+        """Met à jour les statistiques de mémoire."""
+        try:
+            self.memory_stats = {
+                "cuda": {
+                    "allocated": f"{torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB",
+                    "reserved": f"{torch.cuda.memory_reserved(self.device) / 1024**3:.2f} GB",
+                    "max_allocated": f"{torch.cuda.max_memory_allocated(self.device) / 1024**3:.2f} GB"
+                } if self.config.device_type == DeviceType.CUDA else {},
+                "ram": {
+                    "total": f"{psutil.virtual_memory().total / 1024**3:.2f} GB",
+                    "available": f"{psutil.virtual_memory().available / 1024**3:.2f} GB",
+                    "used": f"{psutil.virtual_memory().used / 1024**3:.2f} GB",
+                    "percent": f"{psutil.virtual_memory().percent}%"
+                }
+            }
+        except Exception as e:
+            logger.error(f"Erreur mise à jour stats mémoire: {e}")
+
+    def _log_system_info(self):
+        """Log les informations système détaillées."""
+        try:
+            if self.config.device_type == DeviceType.CUDA:
+                device = torch.cuda.current_device()
+                gpu_properties = torch.cuda.get_device_properties(device)
+                
+                cuda_info = {
+                    "name": torch.cuda.get_device_name(device),
+                    "compute_capability": f"{gpu_properties.major}.{gpu_properties.minor}",
+                    "total_memory": f"{gpu_properties.total_memory / 1024**3:.2f} GB",
+                    "multi_processor_count": gpu_properties.multi_processor_count,
+                    "device_id": device,
+                    "cuda_version": torch.version.cuda
+                }
+
+                logger.info("Configuration GPU:")
+                for key, value in cuda_info.items():
+                    logger.info(f"  {key}: {value}")
+
+            logger.info("Configuration mémoire:")
+            for device_type, stats in self.memory_stats.items():
+                for key, value in stats.items():
+                    logger.info(f"  {device_type}.{key}: {value}")
+
+        except Exception as e:
+            logger.error(f"Erreur logging système: {e}")
+
+    async def cleanup(self):
+        """Nettoie les ressources."""
+        try:
+            self.cleanup_memory()
+            self._initialized = False
+            logger.info("Ressources CUDA nettoyées")
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources: {e}")
 
     @property
-    def device(self) -> torch.device:
-        """Retourne le device courant."""
-        return torch.device(f"cuda:{self.config.device_id}" if torch.cuda.is_available() else "cpu")
+    def is_initialized(self) -> bool:
+        """Retourne l'état d'initialisation."""
+        return self._initialized
 
-    def memory_stats(self) -> Dict[str, Any]:
-        """Retourne les statistiques de mémoire actuelles."""
-        if not torch.cuda.is_available():
-            return {}
-            
-        return {
-            "allocated": f"{torch.cuda.memory_allocated() / 1024**3:.2f} GB",
-            "cached": f"{torch.cuda.memory_reserved() / 1024**3:.2f} GB",
-            "max_allocated": f"{torch.cuda.max_memory_allocated() / 1024**3:.2f} GB"
-        }
+    @property
+    def current_device(self) -> torch.device:
+        """Retourne le device courant."""
+        return self.device
