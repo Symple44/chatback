@@ -1,6 +1,6 @@
 # core/llm/cuda_manager.py
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 import torch
 import torch.cuda
 import torch.backends.cudnn as cudnn
