@@ -1,7 +1,7 @@
 # core/llm/summarizer.py
-from typing import List, Dict, Optional, Tuple
 import torch
 import re
+from typing import List, Dict, Optional, Tuple
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from collections import defaultdict
 from core.config import settings
@@ -18,25 +18,9 @@ class DocumentSummarizer:
         self.model = None
         self._initialized = False
         
-        # Templates pour les résumés
-        self.summary_template = """
-Thèmes principaux identifiés:
-{themes}
-
-Résumé du contexte:
-{summary}
-
-Points nécessitant clarification:
-{clarifications}
-
-Questions suggérées:
-{questions}
-"""
-
         self.max_length = 512
         self.min_length = 50
         
-        # Configuration de génération
         self.generation_params = {
             "max_length": self.max_length,
             "min_length": self.min_length,
@@ -44,8 +28,8 @@ Questions suggérées:
             "length_penalty": 2.0,
             "early_stopping": True,
             "no_repeat_ngram_size": 3,
-            "do_sample": False,  
-            "temperature": 1.0  
+            "do_sample": False,
+            "temperature": 1.0
         }
 
     async def initialize(self):
@@ -56,27 +40,37 @@ Questions suggérées:
         try:
             logger.info(f"Initialisation du résumeur de contexte: {self.model_name}")
             
+            # Configuration du tokenizer avec padding côté gauche pour optimiser le traitement batch
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                model_max_length=self.max_length
+                model_max_length=self.max_length,
+                padding_side='left'
             )
 
-            # Chargement du modèle
+            # Configuration optimisée pour l'inférence
             model_config = {
-                "torch_dtype": torch.float16 if settings.USE_FP16 else torch.float32,
-                "low_cpu_mem_usage": True
+                "torch_dtype": torch.bfloat16,  # Utilisation de bfloat16 pour la cohérence
+                "low_cpu_mem_usage": True,
+                "device_map": "auto",
+                "max_memory": {0: "4GiB", "cpu": "24GB"}  # Allocation mémoire réduite
             }
 
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.model_name,
-                **model_config
-            )
+            # Chargement du modèle avec autocast pour bfloat16
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self.model_name,
+                    **model_config
+                )
 
-            # Optimisations GPU
+            # Force le modèle en mode évaluation
+            self.model.eval()
+
+            # Configuration CUDA si disponible
             if torch.cuda.is_available() and not settings.USE_CPU_ONLY:
-                self.model = self.model.to("cuda")
-                if settings.USE_FP16:
-                    self.model = self.model.half()
+                if not hasattr(self.model, "device_map"):  # Si pas de device_map auto
+                    self.model = self.model.to("cuda")
+                # Activation de la fusion des kernels cuDNN
+                torch.backends.cudnn.benchmark = True
 
             self._initialized = True
             logger.info("Résumeur de contexte initialisé")
@@ -85,19 +79,8 @@ Questions suggérées:
             logger.error(f"Erreur initialisation summarizer: {e}")
             raise
 
-    async def summarize_documents(
-        self,
-        documents: List[Dict]
-    ) -> Dict[str, str]:
-        """
-        Crée un résumé structuré avec analyse thématique des documents.
-        
-        Args:
-            documents: Liste des documents à analyser
-            
-        Returns:
-            Dict contenant le résumé structuré avec thèmes et questions
-        """
+    async def summarize_documents(self, documents: List[Dict]) -> Dict[str, str]:
+        """Crée un résumé structuré avec analyse thématique des documents."""
         if not self._initialized:
             await self.initialize()
 
@@ -105,26 +88,16 @@ Questions suggérées:
             with metrics.timer("context_analysis"):
                 # Analyse des documents par application/thème
                 grouped_docs = self._group_documents(documents)
-                
-                # Analyse des thèmes et ambiguïtés
                 themes, clarifications = self._analyze_themes(grouped_docs)
                 
-                # Génération du résumé principal
+                # Génération du résumé principal avec gestion mémoire optimisée
                 main_summary = await self._generate_summary(documents)
-                
-                # Génération des questions pertinentes
                 questions = self._generate_clarifying_questions(themes, clarifications)
                 
-                # Construction du résumé structuré
-                structured_summary = self.summary_template.format(
-                    themes=self._format_themes(themes),
-                    summary=main_summary,
-                    clarifications=self._format_clarifications(clarifications),
-                    questions=self._format_questions(questions)
-                )
-
                 return {
-                    "structured_summary": structured_summary,
+                    "structured_summary": self._format_structured_summary(
+                        main_summary, themes, clarifications, questions
+                    ),
                     "themes": themes,
                     "clarifications_needed": bool(clarifications),
                     "questions": questions,
@@ -134,13 +107,83 @@ Questions suggérées:
         except Exception as e:
             logger.error(f"Erreur génération résumé: {e}")
             metrics.increment_counter("summarization_errors")
-            return {
-                "structured_summary": "",
-                "themes": [],
-                "clarifications_needed": False,
-                "questions": [],
-                "raw_summary": ""
-            }
+            return self._get_default_summary()
+
+    async def _generate_summary(self, documents: List[Dict]) -> str:
+        """Génère le résumé principal des documents avec optimisation CUDA."""
+        try:
+            content_to_summarize = self._prepare_content(documents)
+            if not content_to_summarize:
+                return ""
+
+            # Tokenisation optimisée
+            inputs = self.tokenizer(
+                content_to_summarize,
+                max_length=1024,
+                truncation=True,
+                padding=True,
+                return_tensors="pt"
+            )
+
+            # Envoi sur GPU si disponible
+            device = next(self.model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            # Génération avec autocast bfloat16
+            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                summary_ids = self.model.generate(
+                    **inputs,
+                    **self.generation_params
+                )
+
+            # Décodage optimisé
+            summary = self.tokenizer.decode(
+                summary_ids[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+
+            # Nettoyage mémoire explicite
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            return summary.strip()
+
+        except Exception as e:
+            logger.error(f"Erreur génération résumé principal: {e}")
+            return ""
+
+    def _format_structured_summary(
+        self,
+        main_summary: str,
+        themes: List[str],
+        clarifications: List[str],
+        questions: List[str]
+    ) -> str:
+        """Formate le résumé structuré."""
+        return f"""
+Thèmes principaux identifiés:
+{self._format_themes(themes)}
+
+Résumé du contexte:
+{main_summary}
+
+Points nécessitant clarification:
+{self._format_clarifications(clarifications)}
+
+Questions suggérées:
+{self._format_questions(questions)}
+""".strip()
+
+    def _get_default_summary(self) -> Dict[str, str]:
+        """Retourne un résumé par défaut en cas d'erreur."""
+        return {
+            "structured_summary": "Une erreur est survenue lors de la génération du résumé.",
+            "themes": [],
+            "clarifications_needed": False,
+            "questions": [],
+            "raw_summary": ""
+        }
 
     def _group_documents(self, documents: List[Dict]) -> Dict[str, List[Dict]]:
         """Groupe les documents par application/thème."""
@@ -225,58 +268,6 @@ Questions suggérées:
                 questions.append(f"Pouvez-vous préciser le thème spécifique concernant {app} ?")
         
         return questions
-
-    async def _generate_summary(self, documents: List[Dict]) -> str:
-        """Génère le résumé principal des documents."""
-        try:
-            content_to_summarize = self._prepare_content(documents)
-            
-            if not content_to_summarize:
-                return ""
-
-            # Tokenisation
-            inputs = self.tokenizer(
-                content_to_summarize,
-                max_length=1024,  # Plus long pour l'entrée
-                truncation=True,
-                padding=True,
-                return_tensors="pt"
-            )
-
-            # Déplacement vers GPU si disponible
-            if torch.cuda.is_available():
-                inputs = inputs.to("cuda")
-                self.model = self.model.to("cuda")
-
-            # Génération
-            with torch.no_grad():
-                if settings.USE_FP16:
-                    with torch.amp.autocast("cuda"):
-                        summary_ids = self.model.generate(
-                            **inputs,
-                            **self.generation_params
-                        )
-                else:
-                    summary_ids = self.model.generate(
-                        **inputs,
-                        **self.generation_params
-                    )
-
-            # Décodage
-            summary = self.tokenizer.decode(
-                summary_ids[0],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
-            )
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            return summary
-
-        except Exception as e:
-            logger.error(f"Erreur génération résumé principal: {e}")
-            return ""
 
     def _prepare_content(self, documents: List[Dict]) -> str:
         """Prépare le contenu pour la génération du résumé."""
