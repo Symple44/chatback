@@ -1,5 +1,6 @@
 # core/llm/summarizer.py
 import torch
+import torch.amp
 import re
 from typing import List, Dict, Optional, Tuple
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -56,7 +57,7 @@ class DocumentSummarizer:
             }
 
             # Chargement du modèle avec autocast pour bfloat16
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 self.model = AutoModelForSeq2SeqLM.from_pretrained(
                     self.model_name,
                     **model_config
@@ -130,7 +131,7 @@ class DocumentSummarizer:
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             # Génération avec autocast bfloat16
-            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 summary_ids = self.model.generate(
                     **inputs,
                     **self.generation_params
