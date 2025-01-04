@@ -1,15 +1,8 @@
 # core/business/steel/processeur.py
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List
 from datetime import datetime
 from core.chat.base_processor import BaseProcessor
 from .analyseur import AnalyseurConstructionMetallique
-from .constantes import (
-    PROCESSUS_METIER,
-    MATERIAUX,
-    NORMES,
-    TRAITEMENTS_SURFACE,
-    DOCUMENTS_REGLEMENTAIRES
-)
 from core.utils.logger import get_logger
 
 logger = get_logger("processeur_steel")
@@ -28,11 +21,9 @@ class ProcesseurSteel(BaseProcessor):
         request: Dict,
         context: Optional[Dict] = None
     ) -> Dict:
-        """
-        Traite un message dans le contexte de la construction métallique.
-        """
+        """Traite un message dans le contexte de la construction métallique."""
         try:
-            start_time = datetime.utcnow()
+            # Extraction de la requête
             query = request["query"]
             metadata = request.get("metadata", {})
 
@@ -47,11 +38,11 @@ class ProcesseurSteel(BaseProcessor):
             )
 
             # Si besoin de clarification
-            if analyse_metier.besoin_clarification:
+            if analyse_metier.get("besoin_clarification", False):
                 return await self._generer_reponse_clarification(
                     analyse_metier,
                     request,
-                    start_time
+                    relevant_docs
                 )
 
             # Génération de la réponse avec contexte métier
@@ -64,21 +55,20 @@ class ProcesseurSteel(BaseProcessor):
 
             return {
                 "response": response.get("response"),
-                "confidence_score": analyse_metier.confiance,
+                "confidence_score": analyse_metier.get("confiance", 0.0),
                 "documents": relevant_docs,
                 "tokens_used": response.get("tokens_used", {}),
                 "metadata": {
                     "processor_type": "steel",
-                    "process_type": analyse_metier.type_demande,
-                    "technical_context": analyse_metier.specifications,
-                    "business_context": analyse_metier.contexte_supplementaire,
+                    "process_type": analyse_metier.get("type_demande"),
+                    "technical_context": analyse_metier.get("specifications", {}),
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
 
         except Exception as e:
             logger.error(f"Erreur traitement message steel: {e}")
-            raise
+            return self._generer_reponse_erreur()
 
     async def _rechercher_documents_contexte(
         self,
@@ -94,12 +84,8 @@ class ProcesseurSteel(BaseProcessor):
                 "document_type": analyse.get("type_demande"),
             }
 
-            # Ajout des filtres spécifiques
-            if "type_ouvrage" in metadata:
+            if metadata.get("type_ouvrage"):
                 filtre_metier["type_ouvrage"] = metadata["type_ouvrage"]
-
-            if analyse.get("specifications", {}).get("materiaux"):
-                filtre_metier["materiaux"] = analyse["specifications"]["materiaux"]
 
             # Recherche dans Elasticsearch
             return await self.es_client.search_documents(
@@ -121,16 +107,17 @@ class ProcesseurSteel(BaseProcessor):
     ) -> Dict:
         """Génère une réponse adaptée au contexte métier."""
         try:
-            # Préparation du prompt avec contexte métier
-            prompt_metier = self._construire_prompt_metier(
-                query=query,
-                analyse=analyse,
-                documents=documents
-            )
+            # Construction du prompt enrichi
+            prompt = f"""
+En tant qu'assistant spécialisé en construction métallique, 
+pour une demande de type '{analyse.get('type_demande', 'général')}', 
+{self._construire_contexte_technique(analyse)}
+Comment répondre à la question: {query}
+            """
 
             # Génération de la réponse
             response = await self.model.generate_response(
-                query=prompt_metier,
+                query=prompt,
                 context_docs=documents,
                 language=langue,
                 response_type=self._determiner_type_reponse(analyse)
@@ -140,42 +127,19 @@ class ProcesseurSteel(BaseProcessor):
 
         except Exception as e:
             logger.error(f"Erreur génération réponse: {e}")
-            raise
+            return self._generer_reponse_erreur()
 
-    def _construire_prompt_metier(
-        self,
-        query: str,
-        analyse: Dict,
-        documents: List[Dict]
-    ) -> str:
-        """Construit un prompt enrichi avec le contexte métier."""
-        type_demande = analyse.get("type_demande", "")
+    def _construire_contexte_technique(self, analyse: Dict) -> str:
+        """Construit le contexte technique pour le prompt."""
+        contexte = []
         specs = analyse.get("specifications", {})
 
-        # Base du prompt
-        prompt_parts = [
-            f"En tant qu'assistant spécialisé en construction métallique, ",
-            f"pour une demande de type '{type_demande}', "
-        ]
+        if "elements_identifies" in specs:
+            elements = ", ".join(specs["elements_identifies"])
+            if elements:
+                contexte.append(f"concernant les éléments suivants : {elements}")
 
-        # Ajout du contexte technique si présent
-        if specs.get("materiaux"):
-            mats = ", ".join(mat["type"] for mat in specs["materiaux"])
-            prompt_parts.append(f"concernant les matériaux suivants: {mats}, ")
-
-        if specs.get("traitements"):
-            traitement = ", ".join(specs["traitements"])
-            prompt_parts.append(f"avec traitement {traitement}, ")
-
-        # Ajout des normes applicables
-        if analyse.get("normes_applicables"):
-            normes = ", ".join(analyse["normes_applicables"])
-            prompt_parts.append(f"en respectant les normes {normes}, ")
-
-        # Ajout de la question
-        prompt_parts.append(f"\nComment répondre à la question: {query}")
-
-        return "".join(prompt_parts)
+        return "\n".join(contexte) if contexte else ""
 
     def _determiner_type_reponse(self, analyse: Dict) -> str:
         """Détermine le type de réponse approprié."""
@@ -192,34 +156,29 @@ class ProcesseurSteel(BaseProcessor):
         self,
         analyse: Dict,
         request: Dict,
-        start_time: datetime
+        documents: List[Dict]
     ) -> Dict:
         """Génère une réponse de demande de clarification."""
         points_clarification = analyse.get("points_clarification", [])
+        
         template_clarification = """
 Pour mieux vous aider avec votre demande en construction métallique, j'ai besoin de quelques précisions :
 
 {points}
 
-{context_specifique}
-
-{references_utiles}
+{suggestions}
         """
 
-        # Contexte spécifique selon le type de demande
-        context_specifique = self._get_contexte_specifique(analyse)
-        
         # Construction de la réponse
         response_text = template_clarification.format(
             points="\n".join(f"- {point}" for point in points_clarification),
-            context_specifique=context_specifique,
-            references_utiles=self._get_references_utiles(analyse)
+            suggestions=self._generer_suggestions(analyse)
         )
 
         return {
             "response": response_text.strip(),
             "confidence_score": analyse.get("confiance", 0.0),
-            "documents": [],
+            "documents": documents,
             "metadata": {
                 "needs_clarification": True,
                 "clarification_points": points_clarification,
@@ -228,28 +187,35 @@ Pour mieux vous aider avec votre demande en construction métallique, j'ai besoi
             }
         }
 
-    def _get_references_utiles(self, analyse: Dict) -> str:
-        """Retourne les références utiles selon le contexte."""
-        references = []
+    def _generer_suggestions(self, analyse: Dict) -> str:
+        """Génère des suggestions selon le contexte."""
         type_demande = analyse.get("type_demande", "").lower()
-        
+        suggestions = []
+
         if type_demande == "creation":
-            references.extend(DOCUMENTS_REGLEMENTAIRES.get("TECHNIQUE", []))
-        elif "normes_applicables" in analyse:
-            for norme in analyse["normes_applicables"]:
-                if norme in NORMES["CONSTRUCTION"]:
-                    references.append(f"- {norme}: {NORMES['CONSTRUCTION'][norme]}")
+            suggestions.extend([
+                "- Pouvez-vous préciser le type d'ouvrage (charpente, serrurerie, etc.) ?",
+                "- Avez-vous des spécifications techniques particulières ?",
+                "- Y a-t-il des contraintes de délai ?"
+            ])
+        elif type_demande == "consultation":
+            suggestions.extend([
+                "- Quel type d'information recherchez-vous spécifiquement ?",
+                "- Dans quel contexte avez-vous besoin de ces informations ?"
+            ])
 
-        if references:
-            return "\nRéférences utiles :\n" + "\n".join(references)
-        return ""
+        return "\nSuggestions pour clarifier votre demande :\n" + "\n".join(suggestions) if suggestions else ""
 
-    def _get_contexte_specifique(self, analyse: Dict) -> str:
-        """Retourne le contexte spécifique selon le type de demande."""
-        type_demande = analyse.get("type_demande", "").lower()
-        
-        if type_demande in PROCESSUS_METIER:
-            process = PROCESSUS_METIER[type_demande]
-            return f"\nPour les {process['nom']}, nous avons besoin des documents suivants :\n" + \
-                   "\n".join(f"- {doc}" for doc in process['documents'])
-        return ""
+    def _generer_reponse_erreur(self) -> Dict:
+        """Génère une réponse d'erreur standard."""
+        return {
+            "response": "Je suis désolé, une erreur est survenue lors du traitement de votre demande. "
+                      "Pouvez-vous reformuler ou préciser votre question ?",
+            "confidence_score": 0.0,
+            "documents": [],
+            "metadata": {
+                "error": True,
+                "processor_type": "steel",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        }
