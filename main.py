@@ -8,12 +8,13 @@ from core.utils.logger import get_logger
 
 logger = get_logger("main")
 
-def setup_environment():
+async def setup_environment():
     """Configure l'environnement complet avant le démarrage."""
     try:
         # Configuration CUDA
         cuda_manager = CUDAManager()
         await cuda_manager.initialize()
+        await asyncio.sleep(1)  # Petit délai pour s'assurer que tout est initialisé
         logger.info("Configuration CUDA initialisée")
 
         # Configuration des bibliothèques numériques
@@ -48,7 +49,7 @@ if __name__ == "__main__":
     setup_environment()
     
 # Import des dépendances après la configuration
-import asyncio
+await setup_environment()
 import uvicorn
 from datetime import datetime
 from contextlib import asynccontextmanager
