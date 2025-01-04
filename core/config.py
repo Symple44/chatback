@@ -156,11 +156,11 @@ class Settings(BaseSettings):
     STREAM_TIMEOUT: int = int(os.getenv("STREAM_TIMEOUT", "30"))
     
     #Processeur de chat
-    CONFIDENCE_THRESHOLD: float = 0.7
-    MIN_RELEVANT_DOCS: int = 2
-    MAX_THEMES: int = 2
+    CONFIDENCE_THRESHOLD: float = 0.5
+    MIN_RELEVANT_DOCS: int = 1
+    MAX_THEMES: int = 3
     MAX_CLARIFICATION_ATTEMPTS: int = 3
-    MIN_QUERY_LENGTH: int = 3
+    MIN_QUERY_LENGTH: int = 2
     MAX_CONTEXT_DOCS: int = 6
 
 

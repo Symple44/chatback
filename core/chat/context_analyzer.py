@@ -12,10 +12,10 @@ class ContextAnalyzer:
     """Classe utilitaire pour l'analyse de contexte."""
     
     def __init__(self):
-        self.min_query_length = 3
-        self.max_themes = 2
-        self.confidence_threshold = 0.7
-        self.min_relevant_docs = 2
+        self.min_query_length = settings.MIN_QUERY_LENGTH
+        self.max_themes = settings.MAX_THEMES
+        self.confidence_threshold = settings.CONFIDENCE_THRESHOLD
+        self.min_relevant_docs = settings.MIN_RELEVANT_DOCS
 
     async def analyze_context(
         self,
@@ -140,16 +140,17 @@ class ContextAnalyzer:
         }
 
     def _is_query_ambiguous(self, query: str) -> bool:
-        """Vérifie si une requête est ambiguë."""
-        if len(query.split()) < self.min_query_length:
-            return True
+        """Version moins stricte de la détection d'ambiguïté."""
+        # La requête n'est pas ambiguë si elle contient des mots-clés spécifiques
+        specific_keywords = ["créer", "modifier", "supprimer", "ajouter", "commande", "devis"]
+        if any(keyword in query.lower() for keyword in specific_keywords):
+            return False
 
+        # Patterns d'ambiguïté réduits
         ambiguous_patterns = [
-            r"^(que|quoi|comment|pourquoi).{0,20}\?$",  # Questions trop courtes
-            r"\b(tout|tous|general|global)\b",          # Termes trop généraux
-            r"\b(autre|plus|encore)\b\s*\?",            # Demandes ouvertes
-            r"\b(ca|cela|ce|cette)\b",                  # Références vagues
-            r"\b(ils|elles|leur|ces)\b"                 # Pronoms sans contexte
+            r"^(ca|cela|ce|cette)\s*\?$",  # Questions très courtes avec démonstratifs
+            r"^\s*\?\s*$",                  # Juste un point d'interrogation
+            r"^[a-zA-Z]{1,2}\s*\?$"        # Une ou deux lettres suivies d'un point d'interrogation
         ]
 
         return any(re.search(pattern, query.lower()) for pattern in ambiguous_patterns)
