@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     CUDA_VISIBLE_DEVICES: str = os.getenv("CUDA_VISIBLE_DEVICES", "0")
     CUDA_MEMORY_FRACTION: float = float(os.getenv("CUDA_MEMORY_FRACTION", "0.85"))
     CUDNN_BENCHMARK: bool = os.getenv("CUDNN_BENCHMARK", "false").lower() == "true"
+    CUDNN_DETERMINISTIC: bool = os.getenv("CUDNN_DETERMINISTIC", "false").lower() == "true"
+    USE_FLASH_ATTENTION: bool = os.getenv("USE_FLASH_ATTENTION", "true").lower() == "true"
     GPU_MEMORY_FRACTION: float = float(os.getenv("GPU_MEMORY_FRACTION", "0.9"))
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
     USE_8BIT: bool = os.getenv("USE_8BIT", "false").lower() == "true"
