@@ -88,7 +88,7 @@ class ChatRequest(BaseModel):
         description="Contexte de la conversation"
     )
     business: BusinessType = Field(
-        default=BusinessType.STEEL,
+        default=None,
         description="Type de métier (steel, generic)"
     )
     language: str = Field(
