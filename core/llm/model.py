@@ -65,45 +65,66 @@ class ModelInference:
         """Configure et charge le modèle."""
         try:
             logger.info(f"Chargement du modèle {settings.MODEL_NAME}")
-
+    
             # Initialisation du tokenizer
             self.tokenizer_manager = TokenizerManager()
             await self.tokenizer_manager.initialize()
-
-            # Configuration de la mémoire maximale
+    
+            # Initialisation du CUDA manager
+            await self.cuda_manager.initialize()
+            device = self.cuda_manager.current_device
+    
+            # Récupération des paramètres de chargement optimisés
+            load_params = self.cuda_manager.get_model_load_parameters(settings.MODEL_NAME)
+            logger.info(f"Configuration de chargement: {load_params}")
+    
+            # Chargement du modèle avec gestion des erreurs
             try:
-                max_memory = json.loads(settings.MAX_MEMORY)
-            except (json.JSONDecodeError, AttributeError):
-                logger.warning("Erreur parsing MAX_MEMORY, utilisation des valeurs par défaut")
-                max_memory = {"0": "22GiB", "cpu": "24GB"}
-
-            # Récupération des paramètres CUDA optimisés
-            load_params = self.cuda_manager.get_model_load_parameters()
-
-            # Chargement avec autocast si FP16 est activé
-            if settings.USE_FP16:
-                with torch.amp.autocast('cuda'):
+                if settings.USE_FP16:
+                    with torch.amp.autocast('cuda'):
+                        self.model = AutoModelForCausalLM.from_pretrained(
+                            settings.MODEL_NAME,
+                            revision=settings.MODEL_REVISION,
+                            **load_params
+                        )
+                else:
                     self.model = AutoModelForCausalLM.from_pretrained(
                         settings.MODEL_NAME,
                         revision=settings.MODEL_REVISION,
                         **load_params
                     )
-            else:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    settings.MODEL_NAME,
-                    revision=settings.MODEL_REVISION,
-                    **load_params
-                )
-
-            # Configuration post-initialisation
-            device = self.cuda_manager.device
-            logger.info(f"Modèle chargé sur {device}")
-            logger.info(f"Type de données: {next(self.model.parameters()).dtype}")
-            logger.info(f"Statistiques mémoire: {self.cuda_manager.memory_stats()}")
-            
-            if hasattr(self.model, 'hf_device_map'):
-                logger.info(f"Device map: {self.model.hf_device_map}")
-
+    
+                # Vérification du chargement
+                if self.model is None:
+                    raise ValueError("Échec du chargement du modèle")
+    
+                # Log des informations de device et mémoire
+                self.cuda_manager.update_memory_stats()
+                device_info = {
+                    "model_device": next(self.model.parameters()).device,
+                    "dtype": next(self.model.parameters()).dtype,
+                    "memory_stats": self.cuda_manager.memory_stats
+                }
+                
+                logger.info("État du modèle après chargement:")
+                for key, value in device_info.items():
+                    logger.info(f"  {key}: {value}")
+    
+                if hasattr(self.model, 'hf_device_map'):
+                    logger.info(f"Device map: {self.model.hf_device_map}")
+    
+                metrics.increment_counter("model_loads")
+    
+            except torch.cuda.OutOfMemoryError:
+                logger.error("Erreur mémoire GPU lors du chargement")
+                await self.cuda_manager.cleanup()
+                raise
+    
+            except Exception as e:
+                logger.error(f"Erreur inattendue lors du chargement: {e}")
+                await self.cuda_manager.cleanup()
+                raise
+    
         except Exception as e:
             logger.error(f"Erreur chargement modèle: {e}")
             raise
