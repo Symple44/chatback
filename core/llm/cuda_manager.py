@@ -52,12 +52,18 @@ class CUDAManager:
     def _load_config(self) -> CUDAConfig:
         """Charge et valide la configuration CUDA."""
         try:
+            # Parse des valeurs booléennes
+            def parse_bool(val) -> bool:
+                if isinstance(val, bool):
+                    return val
+                return str(val).lower() == "true"
+
             # Configuration de la quantization
             quantization_config = None
             if settings.USE_8BIT or settings.USE_4BIT:
                 quantization_config = {
-                    "load_in_8bit": settings.USE_8BIT,
-                    "load_in_4bit": settings.USE_4BIT,
+                    "load_in_8bit": parse_bool(settings.USE_8BIT),
+                    "load_in_4bit": parse_bool(settings.USE_4BIT),
                     "bnb_4bit_compute_dtype": "float16",
                     "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
                     "bnb_4bit_use_double_quant": True
@@ -67,38 +73,38 @@ class CUDAManager:
                 device_type=DeviceType.AUTO,
                 device_id=int(settings.CUDA_VISIBLE_DEVICES),
                 memory_fraction=float(settings.CUDA_MEMORY_FRACTION),
-                compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
+                compute_dtype=torch.float16 if parse_bool(settings.USE_FP16) else torch.float32,
                 module_loading=settings.CUDA_MODULE_LOADING,
                 max_split_size_mb=int(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[0].split(":")[1]),
                 gc_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
                 enable_tf32=True,
-                allow_fp16=settings.USE_FP16,
-                deterministic=settings.CUDNN_DETERMINISTIC,
+                allow_fp16=parse_bool(settings.USE_FP16),
+                deterministic=False,
                 benchmark=settings.CUDNN_BENCHMARK,
                 max_memory=self._parse_memory_config(),
                 offload_folder=settings.OFFLOAD_FOLDER,
-                use_flash_attention=settings.USE_FLASH_ATTENTION,
+                use_flash_attention=parse_bool(settings.USE_FLASH_ATTENTION) if hasattr(settings, 'USE_FLASH_ATTENTION') else True,
                 quantization_config=quantization_config
             )
         except Exception as e:
             logger.error(f"Erreur chargement config CUDA: {e}")
             raise
 
-    def _parse_memory_config(self) -> Dict[str, str]:
+    def _parse_memory_config(self) -> Dict[Union[int, str], str]:
         """Parse la configuration mémoire."""
         try:
             config = json.loads(settings.MAX_MEMORY)
             corrected_config = {}
             
             for key, value in config.items():
-                # Convertir les clés cuda:X en entiers
-                if key.startswith("cuda:"):
-                    dev_id = int(key.split(":")[1])
-                    corrected_config[dev_id] = value
-                else:
+                if key.isdigit():  # Pour les GPUs, convertir en int
+                    corrected_config[int(key)] = value
+                else:  # Pour 'cpu', 'disk', etc. garder en str
                     corrected_config[key] = value
                     
             return corrected_config
+        except json.JSONDecodeError:
+            return {0: "22GiB", "cpu": "24GB"}
         except json.JSONDecodeError:
             return {0: "22GiB", "cpu": "24GB"}
 
