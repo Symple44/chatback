@@ -20,6 +20,9 @@ from core.database.models import User, ChatSession, ChatHistory, ReferencedDocum
 from core.database.base import DatabaseSession
 from core.database.manager import DatabaseManager
 from core.config import settings
+from core.chat.processor_factory import ProcessorFactory
+
+#A supprimer
 from core.chat.processor import ChatProcessor
 
 logger = get_logger("chat_routes")
