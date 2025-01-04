@@ -1,6 +1,7 @@
 # core/chat/processor_factory.py
 from typing import Dict, Optional
 from core.utils.logger import get_logger
+from .generic_processor import GenericProcessor
 
 logger = get_logger("processor_factory")
 
@@ -10,33 +11,37 @@ class ProcessorFactory:
     _processors: Dict[str, object] = {}
     
     @classmethod
-    async def get_processor(cls, business_type: Optional[str], components) -> 'BaseProcessor':
+    async def get_processor(cls, business_type: Optional[str], components) -> 'GenericProcessor':
         """Récupère ou crée un processeur approprié."""
-        
-        # Si pas de type métier spécifié, utiliser le processeur générique
-        processor_type = business_type or "generic"
-        
-        # Réutiliser le processeur existant s'il existe
-        if processor_type in cls._processors:
-            return cls._processors[processor_type]
-            
         try:
-            if processor_type == "generic":
-                from .generic_processor import GenericProcessor
-                processor = GenericProcessor(components)
-            else:
-                # Import dynamique du processeur métier
-                module_name = f"core.business.{processor_type}.processeur"
-                class_name = f"Processeur{processor_type.capitalize()}"
-                
-                module = __import__(module_name, fromlist=[class_name])
-                processor_class = getattr(module, class_name)
-                processor = processor_class(components)
-                
-            cls._processors[processor_type] = processor
-            return processor
+            # Si pas de type métier ou type générique, utiliser le processeur générique
+            if not business_type or business_type == "generic":
+                if "generic" not in cls._processors:
+                    cls._processors["generic"] = GenericProcessor(components)
+                return cls._processors["generic"]
+
+            # Pour un type métier spécifique
+            if business_type not in cls._processors:
+                try:
+                    # Import dynamique du processeur métier
+                    module_name = f"core.business.{business_type.lower()}.processeur"
+                    class_name = f"Processeur{business_type.capitalize()}"
+                    
+                    module = __import__(module_name, fromlist=[class_name])
+                    processor_class = getattr(module, class_name)
+                    cls._processors[business_type] = processor_class(components)
+                    
+                except ImportError:
+                    logger.warning(f"Module métier {business_type} non trouvé, utilisation du processeur générique")
+                    if "generic" not in cls._processors:
+                        cls._processors["generic"] = GenericProcessor(components)
+                    return cls._processors["generic"]
+                    
+            return cls._processors[business_type]
             
-        except ImportError:
-            logger.warning(f"Module métier {processor_type} non trouvé, utilisation du processeur générique")
-            from .generic_processor import GenericProcessor
-            return GenericProcessor(components)
+        except Exception as e:
+            logger.error(f"Erreur création processeur: {e}")
+            # Fallback vers processeur générique
+            if "generic" not in cls._processors:
+                cls._processors["generic"] = GenericProcessor(components)
+            return cls._processors["generic"]
