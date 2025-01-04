@@ -51,6 +51,12 @@ class ChatContext(BaseModel):
     last_interaction: Optional[datetime] = None
     source_documents: List[str] = Field(default_factory=list)
 
+class BusinessType(str, Enum):
+    STEEL = "steel"
+    WOOD = "wood"
+    ALUMINUM = "aluminum"
+    GENERIC = "generic"
+    
 class ChatRequest(BaseModel):
     """Modèle pour les requêtes de chat."""
     model_config = ConfigDict(
@@ -59,6 +65,7 @@ class ChatRequest(BaseModel):
                 "user_id": "123e4567-e89b-12d3-a456-426614174000",
                 "session_id": "987fcdeb-51d3-a456-426614174000",
                 "query": "Comment puis-je vous aider?",
+                "business": "steel",
                 "language": "fr"
             }
         }
@@ -78,6 +85,10 @@ class ChatRequest(BaseModel):
     context: Optional[ChatContext] = Field(
         default=None,
         description="Contexte de la conversation"
+    )
+    business: BusinessType = Field(
+        default=BusinessType.STEEL,
+        description="Type de métier (steel, generic)"
     )
     language: str = Field(
         default="fr",

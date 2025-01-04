@@ -53,10 +53,21 @@ async def process_chat_message(
             str(request.user_id),
             request.metadata
         )
-
+        
+        # Obtention du processeur approprié
+        processor = await ProcessorFactory.get_processor(
+            business_type=request.business,
+            components=components
+        )
+        
         # 3. Traitement du message avec le nouveau processeur
-        chat_processor = ChatProcessor(components)
-        response = await chat_processor.process_message(request, chat_session)
+        #chat_processor = ChatProcessor(components)
+        #response = await chat_processor.process_message(request, chat_session)
+        
+        # Traitement du message
+        response = await processor.process_message(
+            request=request.dict(exclude_unset=True)
+        )
 
         # 4. Sauvegarde en arrière-plan
         background_tasks.add_task(

@@ -140,20 +140,32 @@ class ContextAnalyzer:
         }
 
     def _is_query_ambiguous(self, query: str) -> bool:
-        """Version moins stricte de la détection d'ambiguïté."""
-        # La requête n'est pas ambiguë si elle contient des mots-clés spécifiques
-        specific_keywords = ["créer", "modifier", "supprimer", "ajouter", "commande", "devis"]
-        if any(keyword in query.lower() for keyword in specific_keywords):
+        """Détection d'ambiguïté."""
+        query_lower = query.lower()
+        
+        # Liste de verbes d'action spécifiques qui indiquent une intention claire
+        clear_intent_verbs = {
+            "créer", "modifier", "supprimer", "ajouter", "afficher",
+            "commencer", "démarrer", "ouvrir", "fermer", "enregistrer"
+        }
+        
+        # Si la requête commence par un verbe d'action clair, elle n'est pas ambiguë
+        if any(query_lower.startswith(verb) for verb in clear_intent_verbs):
+            return False
+            
+        # Si la requête commence par "comment" et contient un verbe d'action, elle n'est pas ambiguë
+        if query_lower.startswith("comment") and any(verb in query_lower for verb in clear_intent_verbs):
             return False
 
         # Patterns d'ambiguïté réduits
         ambiguous_patterns = [
             r"^(ca|cela|ce|cette)\s*\?$",  # Questions très courtes avec démonstratifs
             r"^\s*\?\s*$",                  # Juste un point d'interrogation
-            r"^[a-zA-Z]{1,2}\s*\?$"        # Une ou deux lettres suivies d'un point d'interrogation
+            r"^[a-zA-Z]{1,2}\s*\?$",        # Une ou deux lettres suivies d'un point d'interrogation
+            r"^qu(?:e|oi)\s+(?:est-ce|faire)\s*\?$"  # Questions très générales
         ]
 
-        return any(re.search(pattern, query.lower()) for pattern in ambiguous_patterns)
+        return any(re.search(pattern, query_lower) for pattern in ambiguous_patterns)
 
     def _get_query_type(self, query: str) -> str:
         """Détermine le type de requête."""
@@ -170,13 +182,20 @@ class ContextAnalyzer:
         return "informational"
 
     def _calculate_query_complexity(self, query: str) -> float:
-        """Calcule la complexité d'une requête."""
+        """Calcul de la complexité d'une requête."""
+        words = query.split()
+        
+        # Facteurs de complexité ajustés
         factors = {
-            "length": len(query.split()) / 20,  # Normalisation par 20 mots
-            "technical_terms": len(re.findall(r"\b[A-Z][A-Za-z]*(?:\.[A-Za-z]+)+\b", query)) * 0.2,
-            "conjunctions": len(re.findall(r"\b(et|ou|mais|donc|car)\b", query)) * 0.1,
-            "special_chars": len(re.findall(r"[^\w\s]", query)) * 0.05
+            "length": min(len(words) / 10, 1.0),  # Normalisé pour être plus permissif
+            "technical_terms": len(re.findall(r"\b[A-Z][A-Za-z]*(?:\.[A-Za-z]+)+\b", query)) * 0.1,
+            "specific_terms": len([w for w in words if w.lower() in {"comment", "créer", "modifier", "supprimer"}]) * 0.2,
         }
+        
+        # Si la requête contient des mots clés spécifiques, réduire la complexité
+        if any(term in query.lower() for term in ["créer", "comment créer"]):
+            return min(0.5, sum(factors.values()))
+            
         return min(sum(factors.values()), 1.0)
 
     def _extract_key_concepts(self, query: str) -> List[str]:
