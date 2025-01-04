@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     MAX_THREADS: int = int(os.getenv("MAX_THREADS", "16"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "16"))
     MAX_PARALLEL_PROCESSES: int = int(os.getenv("MAX_PARALLEL_PROCESSES", "8"))
-    MAX_MEMORY: str = os.getenv("MAX_MEMORY", '{"0":"20GiB","cpu":"24GB"}')
+    MAX_MEMORY: str = os.getenv("MAX_MEMORY", '{"cuda:0":"22GiB","cpu":"24GB"}')
     MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "51200"))
     OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
 
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
                 raise ValueError("MAX_MEMORY doit être un dictionnaire JSON")
             
             # Vérification des clés et valeurs
-            valid_keys = set(['cpu', 'disk']) | {str(i) for i in range(8)}  # Accepte 'cpu', 'disk' et '0'-'7'
+            valid_keys = {'cpu', 'disk'} | {f'cuda:{i}' for i in range(8)} | {str(i) for i in range(8)}
             for key in config.keys():
                 if key not in valid_keys:
                     raise ValueError(f"Clé invalide dans MAX_MEMORY: {key}")
