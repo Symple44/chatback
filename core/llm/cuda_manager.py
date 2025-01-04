@@ -159,8 +159,16 @@ class CUDAManager:
             logger.error(f"Erreur initialisation CUDA: {e}")
             raise
 
-    def get_model_load_parameters(self) -> Dict[str, Any]:
-        """Retourne les paramètres optimaux pour le chargement du modèle."""
+    def get_model_load_parameters(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Retourne les paramètres optimaux pour le chargement du modèle.
+        
+        Args:
+            model_name: Nom du modèle à charger (optionnel)
+            
+        Returns:
+            Dict contenant les paramètres de chargement
+        """
         # Conversion du format de la mémoire
         try:
             max_memory_config = json.loads(settings.MAX_MEMORY)
@@ -203,6 +211,15 @@ class CUDAManager:
                 "low_cpu_mem_usage": True,
                 "offload_folder": self.config.offload_folder
             })
+
+            # Configuration spécifique selon le modèle
+            if model_name:
+                if "llama" in model_name.lower():
+                    load_params["use_safetensors"] = True
+                    if not self.config.quantization_config:
+                        load_params["torch_dtype"] = torch.bfloat16
+                elif "mixtral" in model_name.lower():
+                    load_params["use_flash_attention_2"] = True
 
         return load_params
 
