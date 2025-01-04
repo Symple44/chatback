@@ -1,5 +1,5 @@
 # core/llm/cuda_manager.py
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Optional
 import torch
 import torch.cuda
@@ -45,34 +45,22 @@ class CUDAManager:
     def __init__(self):
         """Initialise le gestionnaire CUDA."""
         self.config = self._load_config()
-        self.device = self._setup_device()
+        self.device = None
         self._initialized = False
         self.memory_stats = {}
 
     def _load_config(self) -> CUDAConfig:
         """Charge et valide la configuration CUDA."""
-        def str_to_bool(val) -> bool:
-            """Convertit une string ou un booléen en booléen."""
-            if isinstance(val, bool):
-                return val
-            return str(val).lower() == "true"
-            
         try:
-            # Chargement de la configuration mémoire
-            try:
-                max_memory = json.loads(settings.MAX_MEMORY)
-            except (json.JSONDecodeError, AttributeError):
-                max_memory = {"0": "22GiB", "cpu": "24GB"}
-
             # Configuration de la quantization
             quantization_config = None
             if settings.USE_8BIT or settings.USE_4BIT:
                 quantization_config = {
                     "load_in_8bit": settings.USE_8BIT,
                     "load_in_4bit": settings.USE_4BIT,
-                    "bnb_4bit_compute_dtype": getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE, "float16"),
+                    "bnb_4bit_compute_dtype": "float16",
                     "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
-                    "bnb_4bit_use_double_quant": str_to_bool(settings.BNB_4BIT_USE_DOUBLE_QUANT)
+                    "bnb_4bit_use_double_quant": True
                 }
 
             return CUDAConfig(
@@ -85,43 +73,34 @@ class CUDAManager:
                 gc_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
                 enable_tf32=True,
                 allow_fp16=settings.USE_FP16,
-                deterministic=str_to_bool(settings.CUDNN_DETERMINISTIC),
-                benchmark=str_to_bool(settings.CUDNN_BENCHMARK),
-                max_memory=max_memory,
+                deterministic=settings.CUDNN_DETERMINISTIC.lower() == "true",
+                benchmark=settings.CUDNN_BENCHMARK.lower() == "true",
+                max_memory=self._parse_memory_config(),
                 offload_folder=settings.OFFLOAD_FOLDER,
-                use_flash_attention=str_to_bool(settings.USE_FLASH_ATTENTION),
+                use_flash_attention=settings.USE_FLASH_ATTENTION.lower() == "true",
                 quantization_config=quantization_config
             )
         except Exception as e:
             logger.error(f"Erreur chargement config CUDA: {e}")
             raise
 
-    def _setup_device(self) -> torch.device:
-        """Configure le device PyTorch."""
-        if self.config.device_type == DeviceType.CPU:
-            return torch.device("cpu")
-            
-        if not torch.cuda.is_available():
-            logger.warning("CUDA non disponible - utilisation du CPU")
-            return torch.device("cpu")
-            
+    def _parse_memory_config(self) -> Dict[str, str]:
+        """Parse la configuration mémoire."""
         try:
-            # Sélection et configuration du GPU
-            torch.cuda.set_device(self.config.device_id)
-            device = torch.device(f"cuda:{self.config.device_id}")
+            config = json.loads(settings.MAX_MEMORY)
+            corrected_config = {}
             
-            # Configuration de la mémoire
-            if self.config.memory_fraction < 1.0:
-                torch.cuda.set_per_process_memory_fraction(
-                    self.config.memory_fraction, 
-                    self.config.device_id
-                )
-            
-            return device
-            
-        except Exception as e:
-            logger.error(f"Erreur setup device CUDA: {e}")
-            return torch.device("cpu")
+            for key, value in config.items():
+                # Convertir les clés cuda:X en entiers
+                if key.startswith("cuda:"):
+                    dev_id = int(key.split(":")[1])
+                    corrected_config[dev_id] = value
+                else:
+                    corrected_config[key] = value
+                    
+            return corrected_config
+        except json.JSONDecodeError:
+            return {0: "22GiB", "cpu": "24GB"}
 
     async def initialize(self):
         """Initialise l'environnement CUDA de manière asynchrone."""
@@ -131,6 +110,9 @@ class CUDAManager:
         try:
             # Nettoyage initial
             self.cleanup_memory()
+            
+            # Configuration du device
+            self.device = self._setup_device()
 
             # Configuration CUDA
             if self.config.device_type == DeviceType.CUDA:
@@ -159,29 +141,34 @@ class CUDAManager:
             logger.error(f"Erreur initialisation CUDA: {e}")
             raise
 
-    def get_model_load_parameters(self, model_name: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Retourne les paramètres optimaux pour le chargement du modèle.
-        
-        Args:
-            model_name: Nom du modèle à charger (optionnel)
+    def _setup_device(self) -> torch.device:
+        """Configure le device PyTorch."""
+        if self.config.device_type == DeviceType.CPU:
+            return torch.device("cpu")
             
-        Returns:
-            Dict contenant les paramètres de chargement
-        """
-        # Conversion du format de la mémoire
+        if not torch.cuda.is_available():
+            logger.warning("CUDA non disponible - utilisation du CPU")
+            return torch.device("cpu")
+            
         try:
-            max_memory_config = json.loads(settings.MAX_MEMORY)
-            # Convertir les clés pour utiliser le format correct de device
-            corrected_memory = {}
-            for k, v in max_memory_config.items():
-                if k.isdigit():
-                    corrected_memory[f"cuda:{k}"] = v
-                else:
-                    corrected_memory[k] = v
-        except (json.JSONDecodeError, AttributeError):
-            corrected_memory = {"cuda:0": "22GiB", "cpu": "24GB"}
+            # Sélection et configuration du GPU
+            torch.cuda.set_device(self.config.device_id)
+            
+            # Configuration de la mémoire
+            if self.config.memory_fraction < 1.0:
+                torch.cuda.set_per_process_memory_fraction(
+                    self.config.memory_fraction, 
+                    self.config.device_id
+                )
+            
+            return torch.device(self.config.device_id)
+            
+        except Exception as e:
+            logger.error(f"Erreur setup device CUDA: {e}")
+            return torch.device("cpu")
 
+    def get_model_load_parameters(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Retourne les paramètres optimaux pour le chargement du modèle."""
         load_params = {
             "torch_dtype": self.config.compute_dtype,
             "trust_remote_code": True
@@ -205,8 +192,9 @@ class CUDAManager:
                 load_params["attn_implementation"] = "flash_attention_2"
             
             # Configuration de la mémoire
-            load_params["max_memory"] = corrected_memory
+            load_params["max_memory"] = self.config.max_memory
                 
+            # Configuration de base
             load_params.update({
                 "low_cpu_mem_usage": True,
                 "offload_folder": self.config.offload_folder
@@ -287,11 +275,6 @@ class CUDAManager:
             logger.info("Ressources CUDA nettoyées")
         except Exception as e:
             logger.error(f"Erreur nettoyage ressources: {e}")
-
-    @property
-    def is_initialized(self) -> bool:
-        """Retourne l'état d'initialisation."""
-        return self._initialized
 
     @property
     def current_device(self) -> torch.device:
