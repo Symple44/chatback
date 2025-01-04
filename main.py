@@ -12,7 +12,7 @@ def setup_environment():
     try:
         # Configuration CUDA
         cuda_manager = CUDAManager()
-        cuda_manager.setup_cuda_environment()
+        await cuda_manager.initialize()
         logger.info("Configuration CUDA initialisée")
 
         # Configuration des bibliothèques numériques
@@ -340,12 +340,12 @@ if __name__ == "__main__":
         config = uvicorn.Config(
             "main:app",
             host="0.0.0.0",
-            port=settings.PORT,
-            reload=settings.DEBUG,
+            port=int(os.getenv("PORT", "8000")),
+            reload=os.getenv("DEBUG", "false").lower() == "true",
             workers=1 if settings.DEBUG else int(os.getenv("WORKERS", "1")),
             log_level="info",
             loop="uvloop",
-            timeout_keep_alive=settings.KEEPALIVE,
+            timeout_keep_alive=int(os.getenv("KEEPALIVE", "5")),
             limit_max_requests=10000,
             limit_concurrency=int(os.getenv("MAX_CONCURRENT_REQUESTS", "100")),
             backlog=2048
