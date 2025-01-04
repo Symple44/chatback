@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+import asyncio
 from core.llm.cuda_manager import CUDAManager
 from core.utils.logger import get_logger
 
