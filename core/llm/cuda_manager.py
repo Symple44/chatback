@@ -73,11 +73,11 @@ class CUDAManager:
                 gc_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
                 enable_tf32=True,
                 allow_fp16=settings.USE_FP16,
-                deterministic=settings.CUDNN_DETERMINISTIC.lower() == "true",
-                benchmark=settings.CUDNN_BENCHMARK.lower() == "true",
+                deterministic=settings.CUDNN_DETERMINISTIC,
+                benchmark=settings.CUDNN_BENCHMARK,
                 max_memory=self._parse_memory_config(),
                 offload_folder=settings.OFFLOAD_FOLDER,
-                use_flash_attention=settings.USE_FLASH_ATTENTION.lower() == "true",
+                use_flash_attention=settings.USE_FLASH_ATTENTION,
                 quantization_config=quantization_config
             )
         except Exception as e:
