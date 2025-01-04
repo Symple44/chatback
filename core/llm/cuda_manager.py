@@ -51,6 +51,12 @@ class CUDAManager:
 
     def _load_config(self) -> CUDAConfig:
         """Charge et valide la configuration CUDA."""
+        def str_to_bool(val) -> bool:
+            """Convertit une string ou un booléen en booléen."""
+            if isinstance(val, bool):
+                return val
+            return str(val).lower() == "true"
+            
         try:
             # Chargement de la configuration mémoire
             try:
@@ -66,7 +72,7 @@ class CUDAManager:
                     "load_in_4bit": settings.USE_4BIT,
                     "bnb_4bit_compute_dtype": getattr(torch, settings.BNB_4BIT_COMPUTE_DTYPE, "float16"),
                     "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
-                    "bnb_4bit_use_double_quant": settings.BNB_4BIT_USE_DOUBLE_QUANT
+                    "bnb_4bit_use_double_quant": str_to_bool(settings.BNB_4BIT_USE_DOUBLE_QUANT)
                 }
 
             return CUDAConfig(
@@ -79,11 +85,11 @@ class CUDAManager:
                 gc_threshold=float(settings.PYTORCH_CUDA_ALLOC_CONF.split(",")[1].split(":")[1]),
                 enable_tf32=True,
                 allow_fp16=settings.USE_FP16,
-                deterministic=settings.CUDNN_DETERMINISTIC.lower() == "true",
-                benchmark=settings.CUDNN_BENCHMARK.lower() == "true",
+                deterministic=str_to_bool(settings.CUDNN_DETERMINISTIC),
+                benchmark=str_to_bool(settings.CUDNN_BENCHMARK),
                 max_memory=max_memory,
                 offload_folder=settings.OFFLOAD_FOLDER,
-                use_flash_attention=settings.USE_FLASH_ATTENTION.lower() == "true",
+                use_flash_attention=str_to_bool(settings.USE_FLASH_ATTENTION),
                 quantization_config=quantization_config
             )
         except Exception as e:
