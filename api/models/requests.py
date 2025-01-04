@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, EmailStr, validator, UUID4, constr, Confi
 from typing import Optional, Dict, List, Union, Any
 from datetime import datetime
 import re
+from enum import Enum
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
