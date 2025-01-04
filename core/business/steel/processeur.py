@@ -1,214 +1,110 @@
 # core/business/steel/processeur.py
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, List, Any
 from datetime import datetime
-import logging
-from .analyseur import AnalyseurConstructionMetallique, AnalyseMetier
+from core.chat.base_processor import BaseProcessor
+from .analyseur import AnalyseurConstructionMetallique
 from .constantes import (
     PROCESSUS_METIER,
     MATERIAUX,
     NORMES,
-    TRAITEMENTS_SURFACE
-)
-from .modeles import (
-    TypeOuvrage,
-    StatutDocument,
-    SpecificationMatiere,
-    SpecificationTechnique
+    TRAITEMENTS_SURFACE,
+    DOCUMENTS_REGLEMENTAIRES
 )
 from core.utils.logger import get_logger
 
 logger = get_logger("processeur_steel")
 
-class ProcesseurConstructionMetallique:
-    """Processeur métier pour la construction métallique."""
+class ProcesseurSteel(BaseProcessor):
+    """Processeur spécialisé pour la construction métallique."""
 
     def __init__(self, components):
-        self.components = components
+        super().__init__(components)
         self.analyseur = AnalyseurConstructionMetallique()
-        self._charger_templates_reponses()
+        self.model = components.model
+        self.es_client = components.es_client
 
-    def _charger_templates_reponses(self):
-        """Charge les templates de réponses métier."""
-        self.templates = {
-            "creation_devis": """
-Pour créer un devis de {type_ouvrage}, voici la procédure dans 2CM Manager :
-
-1. Accès
-   - Menu "Devis" > "Nouveau devis"
-   - Sélection du type : {type_ouvrage}
-
-2. Informations client
-   - Sélection du client ou création si nouveau
-   - Vérification des conditions commerciales
-
-3. Spécifications techniques
-   {specs_techniques}
-
-4. Documents nécessaires
-   {documents_requis}
-
-5. Points de vigilance
-   {points_vigilance}
-
-6. Normes applicables
-   {normes}
-
-Besoin de précisions sur un point particulier ?
-            """,
-
-            "consultation_technique": """
-Spécifications techniques pour {type_ouvrage} :
-
-1. Matériaux
-   {specs_materiaux}
-
-2. Normes applicables
-   {normes}
-
-3. Exigences qualité
-   {exigences_qualite}
-
-4. Traitements
-   {traitements}
-
-5. Documents associés
-   {documents}
-            """,
-
-            "clarification": """
-Pour mieux vous aider, j'ai besoin de précisions sur les points suivants :
-
-{points_clarification}
-
-Questions spécifiques :
-{questions_specifiques}
-
-Références utiles :
-{references}
-            """
-        }
-
-    async def traiter_requete(
+    async def process_message(
         self,
-        requete: str,
-        contexte_session: Optional[Dict] = None
+        request: Dict,
+        context: Optional[Dict] = None
     ) -> Dict:
-        """Traite une requête métier."""
+        """
+        Traite un message dans le contexte de la construction métallique.
+        """
         try:
-            # Analyse de la requête avec le contexte métier
-            analyse = await self.analyseur.analyser_requete(requete, contexte_session)
+            start_time = datetime.utcnow()
+            query = request["query"]
+            metadata = request.get("metadata", {})
 
-            # Si clarification nécessaire
-            if analyse.besoin_clarification:
-                return await self._generer_reponse_clarification(analyse)
+            # Analyse métier de la requête
+            analyse_metier = await self.analyseur.analyser_requete(query)
 
-            # Traitement selon le type de demande
-            if analyse.type_demande == "creation":
-                return await self._traiter_creation(analyse)
-            elif analyse.type_demande == "consultation":
-                return await self._traiter_consultation(analyse)
-            elif analyse.type_demande == "modification":
-                return await self._traiter_modification(analyse)
-            else:
-                return await self._traiter_demande_generique(analyse)
-
-        except Exception as e:
-            logger.error(f"Erreur traitement requête: {e}")
-            return self._generer_reponse_erreur()
-
-    async def _traiter_creation(self, analyse: AnalyseMetier) -> Dict:
-        """Traite une demande de création."""
-        try:
-            # Détermination du type d'ouvrage
-            type_ouvrage = self._determiner_type_ouvrage(analyse)
-
-            # Récupération des documents pertinents
-            docs_techniques = await self._rechercher_documents_techniques(
-                type_ouvrage=type_ouvrage,
-                specifications=analyse.specifications
+            # Recherche de documents avec contexte métier
+            relevant_docs = await self._rechercher_documents_contexte(
+                query=query,
+                analyse=analyse_metier,
+                metadata=metadata
             )
 
-            # Construction des spécifications techniques
-            specs_techniques = self._formater_specifications_techniques(
-                analyse.specifications,
-                analyse.normes_applicables
+            # Si besoin de clarification
+            if analyse_metier.besoin_clarification:
+                return await self._generer_reponse_clarification(
+                    analyse_metier,
+                    request,
+                    start_time
+                )
+
+            # Génération de la réponse avec contexte métier
+            response = await self._generer_reponse_metier(
+                query=query,
+                analyse=analyse_metier,
+                documents=relevant_docs,
+                langue=request.get("language", "fr")
             )
 
-            # Préparation des points de vigilance
-            points_vigilance = self._identifier_points_vigilance(
-                type_ouvrage=type_ouvrage,
-                specifications=analyse.specifications,
-                contexte=analyse.contexte_supplementaire
-            )
-
-            # Formatage de la réponse
             return {
-                "type_reponse": "creation",
-                "contenu": self.templates["creation_devis"].format(
-                    type_ouvrage=type_ouvrage,
-                    specs_techniques=specs_techniques,
-                    documents_requis=self._formater_documents_requis(type_ouvrage),
-                    points_vigilance=points_vigilance,
-                    normes=self._formater_normes(analyse.normes_applicables)
-                ),
-                "documents_techniques": docs_techniques,
-                "confiance": analyse.confiance
+                "response": response.get("response"),
+                "confidence_score": analyse_metier.confiance,
+                "documents": relevant_docs,
+                "tokens_used": response.get("tokens_used", {}),
+                "metadata": {
+                    "processor_type": "steel",
+                    "process_type": analyse_metier.type_demande,
+                    "technical_context": analyse_metier.specifications,
+                    "business_context": analyse_metier.contexte_supplementaire,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
             }
 
         except Exception as e:
-            logger.error(f"Erreur traitement création: {e}")
-            return self._generer_reponse_erreur()
+            logger.error(f"Erreur traitement message steel: {e}")
+            raise
 
-    async def _traiter_consultation(self, analyse: AnalyseMetier) -> Dict:
-        """Traite une demande de consultation."""
-        try:
-            # Recherche des documents pertinents
-            docs_pertinents = await self._rechercher_documents_techniques(
-                specifications=analyse.specifications,
-                contexte=analyse.contexte_supplementaire
-            )
-
-            # Extraction des informations techniques
-            specs = self._extraire_specifications_techniques(docs_pertinents)
-
-            return {
-                "type_reponse": "consultation",
-                "contenu": self.templates["consultation_technique"].format(
-                    type_ouvrage=specs.get("type_ouvrage", "non spécifié"),
-                    specs_materiaux=self._formater_specifications_materiaux(specs),
-                    normes=self._formater_normes(analyse.normes_applicables),
-                    exigences_qualite=self._formater_exigences_qualite(specs),
-                    traitements=self._formater_traitements(specs),
-                    documents=self._formater_documents_associes(docs_pertinents)
-                ),
-                "documents_references": docs_pertinents,
-                "confiance": analyse.confiance
-            }
-
-        except Exception as e:
-            logger.error(f"Erreur traitement consultation: {e}")
-            return self._generer_reponse_erreur()
-
-    async def _rechercher_documents_techniques(
+    async def _rechercher_documents_contexte(
         self,
-        type_ouvrage: Optional[str] = None,
-        specifications: Optional[Dict] = None,
-        contexte: Optional[Dict] = None
+        query: str,
+        analyse: Dict,
+        metadata: Dict
     ) -> List[Dict]:
-        """Recherche les documents techniques pertinents."""
+        """Recherche des documents avec contexte métier."""
         try:
-            # Construction du filtre de recherche
-            filtre = {}
-            if type_ouvrage:
-                filtre["type_ouvrage"] = type_ouvrage
-            if specifications:
-                filtre.update(self._construire_filtre_specs(specifications))
-            if contexte:
-                filtre.update(self._construire_filtre_contexte(contexte))
+            # Construction du filtre métier
+            filtre_metier = {
+                "domain": "steel",
+                "document_type": analyse.get("type_demande"),
+            }
+
+            # Ajout des filtres spécifiques
+            if "type_ouvrage" in metadata:
+                filtre_metier["type_ouvrage"] = metadata["type_ouvrage"]
+
+            if analyse.get("specifications", {}).get("materiaux"):
+                filtre_metier["materiaux"] = analyse["specifications"]["materiaux"]
 
             # Recherche dans Elasticsearch
-            return await self.components.es_client.search_documents(
-                metadata_filter=filtre,
+            return await self.es_client.search_documents(
+                query=query,
+                metadata_filter=filtre_metier,
                 size=5
             )
 
@@ -216,95 +112,144 @@ Références utiles :
             logger.error(f"Erreur recherche documents: {e}")
             return []
 
-    def _construire_filtre_specs(self, specifications: Dict) -> Dict:
-        """Construit le filtre de recherche pour les spécifications."""
-        filtre = {}
-        if "materiaux" in specifications:
-            filtre["materiaux.type"] = specifications["materiaux"][0]["type"]
-        if "traitements" in specifications:
-            filtre["traitement_surface"] = specifications["traitements"][0]
-        return filtre
-
-    def _construire_filtre_contexte(self, contexte: Dict) -> Dict:
-        """Construit le filtre de recherche pour le contexte."""
-        filtre = {}
-        if "environnement" in contexte:
-            filtre["environnement"] = contexte["environnement"][0]
-        if "localisation" in contexte:
-            filtre["localisation"] = contexte["localisation"][0]
-        return filtre
-
-    def _formater_specifications_techniques(
+    async def _generer_reponse_metier(
         self,
-        specifications: Dict,
-        normes: List[str]
+        query: str,
+        analyse: Dict,
+        documents: List[Dict],
+        langue: str = "fr"
+    ) -> Dict:
+        """Génère une réponse adaptée au contexte métier."""
+        try:
+            # Préparation du prompt avec contexte métier
+            prompt_metier = self._construire_prompt_metier(
+                query=query,
+                analyse=analyse,
+                documents=documents
+            )
+
+            # Génération de la réponse
+            response = await self.model.generate_response(
+                query=prompt_metier,
+                context_docs=documents,
+                language=langue,
+                response_type=self._determiner_type_reponse(analyse)
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Erreur génération réponse: {e}")
+            raise
+
+    def _construire_prompt_metier(
+        self,
+        query: str,
+        analyse: Dict,
+        documents: List[Dict]
     ) -> str:
-        """Formate les spécifications techniques."""
-        sections = []
-        
-        # Matériaux
-        if "materiaux" in specifications:
-            sections.append("Matériaux requis:")
-            for materiau in specifications["materiaux"]:
-                sections.append(f"- {materiau['type']} {materiau.get('valeur', '')}")
+        """Construit un prompt enrichi avec le contexte métier."""
+        type_demande = analyse.get("type_demande", "")
+        specs = analyse.get("specifications", {})
 
-        # Dimensions
-        if "dimensions" in specifications:
-            sections.append("\nDimensions:")
-            for dim in specifications["dimensions"]:
-                sections.append(f"- {dim['valeur']} {dim['unite']}")
-
-        # Traitements
-        if "traitements" in specifications:
-            sections.append("\nTraitements:")
-            for traitement in specifications["traitements"]:
-                sections.append(f"- {traitement}")
-
-        # Assemblages
-        if "assemblages" in specifications:
-            sections.append("\nAssemblages:")
-            for assemblage in specifications["assemblages"]:
-                sections.append(f"- {assemblage}")
-
-        return "\n".join(sections)
-
-    def _formater_documents_requis(self, type_ouvrage: str) -> str:
-        """Formate la liste des documents requis."""
-        docs_base = [
-            "Plans d'exécution",
-            "Note de calcul",
-            "Nomenclature matériaux"
+        # Base du prompt
+        prompt_parts = [
+            f"En tant qu'assistant spécialisé en construction métallique, ",
+            f"pour une demande de type '{type_demande}', "
         ]
 
-        docs_specifiques = {
-            "charpente": [
-                "Plan de charpente",
-                "Note de descente de charges",
-                "Plan de contreventement"
-            ],
-            "escalier": [
-                "Plan de calepinage",
-                "Détails des assemblages",
-                "Plan de fabrication"
-            ],
-            "garde_corps": [
-                "Plan d'implantation",
-                "Détails de fixation",
-                "Note justificative"
-            ]
-        }
+        # Ajout du contexte technique si présent
+        if specs.get("materiaux"):
+            mats = ", ".join(mat["type"] for mat in specs["materiaux"])
+            prompt_parts.append(f"concernant les matériaux suivants: {mats}, ")
 
-        docs = docs_base + docs_specifiques.get(type_ouvrage, [])
-        return "\n".join(f"- {doc}" for doc in docs)
+        if specs.get("traitements"):
+            traitement = ", ".join(specs["traitements"])
+            prompt_parts.append(f"avec traitement {traitement}, ")
 
-    def _generer_reponse_erreur(self) -> Dict:
-        """Génère une réponse d'erreur standard."""
+        # Ajout des normes applicables
+        if analyse.get("normes_applicables"):
+            normes = ", ".join(analyse["normes_applicables"])
+            prompt_parts.append(f"en respectant les normes {normes}, ")
+
+        # Ajout de la question
+        prompt_parts.append(f"\nComment répondre à la question: {query}")
+
+        return "".join(prompt_parts)
+
+    def _determiner_type_reponse(self, analyse: Dict) -> str:
+        """Détermine le type de réponse approprié."""
+        type_demande = analyse.get("type_demande", "").lower()
+
+        if type_demande in ["creation", "modification"]:
+            return "technical"
+        elif type_demande == "consultation":
+            return "comprehensive"
+        else:
+            return "general"
+
+    async def _generer_reponse_clarification(
+        self,
+        analyse: Dict,
+        request: Dict,
+        start_time: datetime
+    ) -> Dict:
+        """Génère une réponse de demande de clarification."""
+        points_clarification = analyse.get("points_clarification", [])
+        template_clarification = """
+Pour mieux vous aider avec votre demande en construction métallique, j'ai besoin de quelques précisions :
+
+{points}
+
+{context_specifique}
+
+{references_utiles}
+        """
+
+        # Contexte spécifique selon le type de demande
+        context_specifique = self._get_contexte_specifique(analyse)
+        
+        # Construction de la réponse
+        response_text = template_clarification.format(
+            points="\n".join(f"- {point}" for point in points_clarification),
+            context_specifique=context_specifique,
+            references_utiles=self._get_references_utiles(analyse)
+        )
+
         return {
-            "type_reponse": "erreur",
-            "contenu": "Je suis désolé, une erreur est survenue lors du traitement de votre demande. "
-                      "Pouvez-vous reformuler ou préciser votre question ?",
-            "confiance": 0.0
+            "response": response_text.strip(),
+            "confidence_score": analyse.get("confiance", 0.0),
+            "documents": [],
+            "metadata": {
+                "needs_clarification": True,
+                "clarification_points": points_clarification,
+                "processor_type": "steel",
+                "timestamp": datetime.utcnow().isoformat()
+            }
         }
 
-# Instance globale
-processeur = ProcesseurConstructionMetallique()
+    def _get_references_utiles(self, analyse: Dict) -> str:
+        """Retourne les références utiles selon le contexte."""
+        references = []
+        type_demande = analyse.get("type_demande", "").lower()
+        
+        if type_demande == "creation":
+            references.extend(DOCUMENTS_REGLEMENTAIRES.get("TECHNIQUE", []))
+        elif "normes_applicables" in analyse:
+            for norme in analyse["normes_applicables"]:
+                if norme in NORMES["CONSTRUCTION"]:
+                    references.append(f"- {norme}: {NORMES['CONSTRUCTION'][norme]}")
+
+        if references:
+            return "\nRéférences utiles :\n" + "\n".join(references)
+        return ""
+
+    def _get_contexte_specifique(self, analyse: Dict) -> str:
+        """Retourne le contexte spécifique selon le type de demande."""
+        type_demande = analyse.get("type_demande", "").lower()
+        
+        if type_demande in PROCESSUS_METIER:
+            process = PROCESSUS_METIER[type_demande]
+            return f"\nPour les {process['nom']}, nous avons besoin des documents suivants :\n" + \
+                   "\n".join(f"- {doc}" for doc in process['documents'])
+        return ""
