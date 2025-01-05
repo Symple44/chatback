@@ -11,7 +11,7 @@ class TokenizerManager:
     def __init__(self):
         self.tokenizer = None
         self.max_length = settings.MAX_INPUT_LENGTH 
-        self._setup_tokenizer()
+        self._initialized = False
         
     async def initialize(self):
         """Initialise le tokenizer de manière asynchrone."""
@@ -25,12 +25,19 @@ class TokenizerManager:
                 padding_side='left'
             )
             
-            # Gestion intelligente du pad_token
-            if self.tokenizer.pad_token is None:
-                if self.tokenizer.eos_token:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                else:
-                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            # Configuration spécifique pour Mistral
+            if "mistral" in settings.MODEL_NAME.lower():
+                # Mistral utilise déjà les bons tokens, pas besoin d'ajout spécial
+                self.bos_token = "<s>"
+                self.eos_token = "</s>"
+                self.pad_token = self.tokenizer.eos_token
+            else:
+                # Gestion pour les autres modèles
+                if self.tokenizer.pad_token is None:
+                    if self.tokenizer.eos_token:
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
+                    else:
+                        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
             
             # Configuration de la génération
             self.generation_config = GenerationConfig(
@@ -41,7 +48,11 @@ class TokenizerManager:
                 max_new_tokens=int(settings.MAX_NEW_TOKENS),
                 min_new_tokens=int(settings.MIN_NEW_TOKENS),
                 repetition_penalty=float(settings.REPETITION_PENALTY),
-                pad_token_id=self.tokenizer.pad_token_id
+                pad_token_id=self.tokenizer.pad_token_id,
+                # Paramètres spécifiques Mistral
+                use_cache=True,
+                typical_p=0.95,  # Ajout du typical sampling pour Mistral
+                encoder_repetition_penalty=1.0
             )
             
             logger.info(f"Tokenizer initialisé: {settings.MODEL_NAME}")
@@ -50,56 +61,6 @@ class TokenizerManager:
         except Exception as e:
             logger.error(f"Erreur initialisation tokenizer: {e}")
             raise
-
-    def _setup_tokenizer(self):
-        try:
-            logger.info("Initialisation du tokenizer...")
-            
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                settings.MODEL_NAME,
-                revision=settings.MODEL_REVISION,
-                trust_remote_code=True,
-                padding_side='left'  # Optionnel, mais peut aider
-            )
-            
-            # Gestion intelligente du pad_token
-            if self.tokenizer.pad_token is None:
-                if self.tokenizer.eos_token:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                else:
-                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-            
-            self.generation_config = GenerationConfig(
-                do_sample=bool(settings.DO_SAMPLE),
-                temperature=float(settings.TEMPERATURE),
-                top_p=float(settings.TOP_P),
-                top_k=int(settings.TOP_K),
-                max_new_tokens=int(settings.MAX_NEW_TOKENS),
-                min_new_tokens=int(settings.MIN_NEW_TOKENS),
-                repetition_penalty=float(settings.REPETITION_PENALTY),
-                pad_token_id=self.tokenizer.pad_token_id
-            )
-            
-            logger.info(f"Tokenizer initialisé: {settings.MODEL_NAME}")
-        except Exception as e:
-            logger.error(f"Erreur configuration tokenizer: {e}")
-            raise
-
-    def __call__(
-        self,
-        text: str,
-        max_length: Optional[int] = None,
-        padding: bool = True,
-        return_tensors: str = "pt"
-    ) -> Dict[str, torch.Tensor]:
-        """Tokenize le texte."""
-        return self.tokenizer(
-            text,
-            max_length=max_length,
-            padding=padding,
-            truncation=True,
-            return_tensors=return_tensors
-        )
         
     def encode_with_truncation(
         self, 
@@ -109,15 +70,18 @@ class TokenizerManager:
     ) -> Dict[str, torch.Tensor]:
         """
         Encode et tronque le texte avec gestion de la longueur maximale.
+        Adapté pour le format Mistral.
         """
         try:
-            # Utiliser apply_chat_template pour générer le texte
+            is_mistral = "mistral" in settings.MODEL_NAME.lower()
+            
+            # Comportement par défaut pour tous les modèles
             tokenized_text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=True,
                 add_generation_prompt=True,
                 return_tensors=return_tensors
-            )
+            
             
             # Créer un masque d'attention
             attention_mask = tokenized_text.ne(self.tokenizer.pad_token_id)
@@ -132,9 +96,8 @@ class TokenizerManager:
                 "attention_mask": attention_mask
             }
         except Exception as e:
-            logger.error(f"Erreur de tokenisation Llama-3.1: {e}")
+            logger.error(f"Erreur de tokenisation: {e}")
             raise
-
 
     def decode_and_clean(
         self, 
@@ -150,20 +113,27 @@ class TokenizerManager:
                 clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
 
-             # Pattern spécifique pour extraire la réponse de l'assistant
-            assistant_pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
+            if "mistral" in settings.MODEL_NAME.lower():
+                # Pattern spécifique pour Mistral
+                assistant_pattern = r'\[/INST\](.*?)(?:\[INST\]|$)'
+            else:
+                # Pattern par défaut
+                assistant_pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
             
             match = re.search(assistant_pattern, full_response, re.DOTALL | re.IGNORECASE)
             
             if match:
                 response = match.group(1).strip()
             else:
-                # Fallback si aucun match
                 response = full_response.strip()
 
             # Nettoyage supplémentaire
             response = re.sub(r'\s+', ' ', response)  # Normaliser les espaces
             response = response.strip()
+
+            # Nettoyage spécifique Mistral
+            if "mistral" in settings.MODEL_NAME.lower():
+                response = response.replace("[/INST]", "").replace("[INST]", "").strip()
 
             # Vérification de la longueur minimale
             if len(response) < 5:
@@ -174,8 +144,23 @@ class TokenizerManager:
 
         except Exception as e:
             logger.error(f"Erreur de décodage: {e}")
-            logger.error(f"Tokens décodés bruts : {full_response}")
             return "Une erreur est survenue lors de la génération de la réponse."
+
+    def __call__(
+        self,
+        text: str,
+        max_length: Optional[int] = None,
+        padding: bool = True,
+        return_tensors: str = "pt"
+    ) -> Dict[str, torch.Tensor]:
+        """Tokenize le texte."""
+        return self.tokenizer(
+            text,
+            max_length=max_length or self.max_length,
+            padding=padding,
+            truncation=True,
+            return_tensors=return_tensors
+        )
 
     async def cleanup(self):
         """Nettoie les ressources."""
