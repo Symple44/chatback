@@ -79,68 +79,66 @@ class TokenizerManager:
             logger.error(f"Erreur initialisation tokenizer: {e}")
             raise
 
-    # core/llm/tokenizer_manager.py
-
-def encode_with_truncation(
-    self, 
-    messages: List[Dict],
-    max_length: Optional[int] = None, 
-    return_tensors: str = "pt"
-) -> Dict[str, torch.Tensor]:
-    """
-    Encode et tronque le texte avec gestion de la longueur maximale.
-    Adapté pour le format Mistral et Llama.
-    """
-    try:
-        is_mistral = "mistral" in settings.MODEL_NAME.lower()
-        max_length = max_length or self.max_length
-        
-        # Tokenization avec le template approprié
-        if is_mistral:
-            # Template Mistral
-            tokenized = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors=return_tensors
-            )
+    def encode_with_truncation(
+        self, 
+        messages: List[Dict],
+        max_length: Optional[int] = None, 
+        return_tensors: str = "pt"
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Encode et tronque le texte avec gestion de la longueur maximale.
+        Adapté pour le format Mistral et Llama.
+        """
+        try:
+            is_mistral = "mistral" in settings.MODEL_NAME.lower()
+            max_length = max_length or self.max_length
             
-            # Si tokenized est un tensor, le convertir en dictionnaire
-            if isinstance(tokenized, torch.Tensor):
-                tokenized = {
-                    'input_ids': tokenized,
-                    'attention_mask': torch.ones_like(tokenized)
-                }
-        else:
-            # Template pour Llama et autres modèles
-            tokenized = self.tokenizer(
-                self.tokenizer.apply_chat_template(
+            # Tokenization avec le template approprié
+            if is_mistral:
+                # Template Mistral
+                tokenized = self.tokenizer.apply_chat_template(
                     messages,
-                    add_generation_prompt=True
-                ),
-                truncation=True,
-                max_length=max_length,
-                padding=True,
-                return_tensors=return_tensors
-            )
-        
-        # Extraction des input_ids et création du masque d'attention
-        input_ids = tokenized['input_ids']
-        attention_mask = tokenized.get('attention_mask', torch.ones_like(input_ids))
-        
-        # Tronquer si nécessaire
-        if input_ids.shape[1] > max_length:
-            input_ids = input_ids[:, :max_length]
-            attention_mask = attention_mask[:, :max_length]
-        
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask
-        }
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors=return_tensors
+                )
+                
+                # Si tokenized est un tensor, le convertir en dictionnaire
+                if isinstance(tokenized, torch.Tensor):
+                    tokenized = {
+                        'input_ids': tokenized,
+                        'attention_mask': torch.ones_like(tokenized)
+                    }
+            else:
+                # Template pour Llama et autres modèles
+                tokenized = self.tokenizer(
+                    self.tokenizer.apply_chat_template(
+                        messages,
+                        add_generation_prompt=True
+                    ),
+                    truncation=True,
+                    max_length=max_length,
+                    padding=True,
+                    return_tensors=return_tensors
+                )
+            
+            # Extraction des input_ids et création du masque d'attention
+            input_ids = tokenized['input_ids']
+            attention_mask = tokenized.get('attention_mask', torch.ones_like(input_ids))
+            
+            # Tronquer si nécessaire
+            if input_ids.shape[1] > max_length:
+                input_ids = input_ids[:, :max_length]
+                attention_mask = attention_mask[:, :max_length]
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask
+            }
 
-    except Exception as e:
-        logger.error(f"Erreur de tokenisation: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"Erreur de tokenisation: {e}")
+            raise
 
     def decode_and_clean(
         self, 
