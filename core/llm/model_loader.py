@@ -44,7 +44,7 @@ class ModelLoader:
             
             # Chargement du modèle avec gestion de la mémoire
             is_mistral = "mistral" in model_name.lower()
-            with torch.cuda.amp.autocast(enabled=settings.USE_FP16):
+            with torch.amp.autocast('cuda', enabled=settings.USE_FP16):
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     revision=settings.MODEL_REVISION,
