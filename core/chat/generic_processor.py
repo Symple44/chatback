@@ -14,11 +14,14 @@ class GenericProcessor(BaseProcessor):
         self.model = components.model
         self.es_client = components.es_client
         
+    class GenericProcessor(BaseProcessor):
+    """Processeur générique pour les requêtes sans contexte métier."""
+    
     async def process_message(
         self,
         request: Dict,
         context: Optional[Dict] = None
-    ) -> Dict:
+    ) -> ChatResponse:  # Important: Retourne ChatResponse, pas Dict
         """Traite un message de manière générique."""
         try:
             start_time = datetime.utcnow()
@@ -42,36 +45,45 @@ class GenericProcessor(BaseProcessor):
                 language=request.get("language", "fr")
             )
             
-            # Vérification de la réponse
-            if not isinstance(model_response, dict):
-                raise ValueError("Format de réponse invalide du modèle")
-                
-            # Construction de la réponse
+            # Construction de la réponse en tant qu'instance de ChatResponse
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-            return {
-                "response": model_response.get("response", ""),
-                "confidence_score": self._calculate_confidence(relevant_docs),
-                "documents": relevant_docs,
-                "tokens_used": model_response.get("tokens_used", {}),
-                "processing_time": processing_time,
-                "metadata": {
+            return ChatResponse(
+                response=model_response.get("response", ""),
+                session_id=str(request.get("session_id", uuid.uuid4())),
+                conversation_id=str(uuid.uuid4()),
+                documents=[
+                    DocumentReference(
+                        title=doc.get("title", ""),
+                        page=doc.get("page", 1),
+                        score=float(doc.get("score", 0.0)),
+                        content=doc.get("content", ""),
+                        metadata=doc.get("metadata", {})
+                    ) for doc in relevant_docs
+                ],
+                confidence_score=self._calculate_confidence(relevant_docs),
+                processing_time=processing_time,
+                tokens_used=model_response.get("tokens_used", {}).get("total", 0),
+                tokens_details=model_response.get("tokens_used", {}),
+                metadata={
                     "processor_type": "generic",
                     "timestamp": datetime.utcnow().isoformat(),
                     "context_used": len(relevant_docs)
                 }
-            }
+            )
             
         except Exception as e:
             logger.error(f"Erreur traitement générique: {e}")
-            return {
-                "response": "Je suis désolé, une erreur est survenue lors du traitement de votre demande.",
-                "confidence_score": 0.0,
-                "documents": [],
-                "tokens_used": {"total": 0},
-                "processing_time": 0.0,
-                "metadata": {
+            return ChatResponse(
+                response="Je suis désolé, une erreur est survenue lors du traitement de votre demande.",
+                session_id=str(request.get("session_id", uuid.uuid4())),
+                conversation_id=str(uuid.uuid4()),
+                documents=[],
+                confidence_score=0.0,
+                processing_time=0.0,
+                tokens_used=0,
+                metadata={
                     "processor_type": "generic",
                     "error": str(e),
                     "timestamp": datetime.utcnow().isoformat()
                 }
-            }
+            )

@@ -79,93 +79,68 @@ class TokenizerManager:
             logger.error(f"Erreur initialisation tokenizer: {e}")
             raise
 
-    def encode_with_truncation(
-        self, 
-        messages: List[Dict],
-        max_length: Optional[int] = None, 
-        return_tensors: str = "pt"
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Encode et tronque le texte avec gestion de la longueur maximale.
-        Adapté pour le format Mistral et Llama.
-        """
-        try:
-            is_mistral = "mistral" in settings.MODEL_NAME.lower()
-            max_length = max_length or self.max_length
-            
-            # Validation et réorganisation des messages pour tous les modèles
-            validated_messages = []
-            has_system = False
-            
-            # Traitement des messages existants
-            for msg in messages:
-                if msg["role"] == "system":
-                    if not has_system:  # On ne garde que le premier message système
-                        validated_messages.append(msg)
-                        has_system = True
-                elif msg["role"] in ["user", "assistant"]:
-                    validated_messages.append(msg)
-            
-            # Vérification de l'alternance user/assistant
-            final_messages = []
-            if has_system:
-                final_messages.append(validated_messages[0])  # Ajout du message système
-                validated_messages = validated_messages[1:]   # Retrait du message système
-            
-            # On s'assure que ça commence par un user
-            if validated_messages and validated_messages[0]["role"] == "assistant":
-                validated_messages.pop(0)
-            
-            # Construction de la séquence alternée
-            current_role = "user"
-            for msg in validated_messages:
-                if msg["role"] == current_role:
-                    final_messages.append(msg)
-                    current_role = "assistant" if current_role == "user" else "user"
-            
-            # S'assurer que le dernier message est de l'utilisateur
-            if final_messages and final_messages[-1]["role"] == "assistant":
-                final_messages.pop()
-            
-            # Tokenization avec le template approprié
-            if is_mistral:
-                # Template Mistral
-                tokenized = self.tokenizer.apply_chat_template(
-                    final_messages,
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    return_tensors=return_tensors
-                )
-            else:
-                # Template pour Llama et autres modèles
-                tokenized = self.tokenizer(
-                    self.tokenizer.apply_chat_template(
-                        final_messages,
-                        add_generation_prompt=True
-                    ),
-                    truncation=True,
-                    max_length=max_length,
-                    padding=True,
-                    return_tensors=return_tensors
-                )
-            
-            # Extraction des input_ids et création du masque d'attention
-            input_ids = tokenized.get('input_ids', tokenized)
-            attention_mask = torch.ones_like(input_ids) if isinstance(tokenized, torch.Tensor) else tokenized.get('attention_mask')
-            
-            # Tronquer si nécessaire
-            if input_ids.shape[1] > max_length:
-                input_ids = input_ids[:, :max_length]
-                attention_mask = attention_mask[:, :max_length]
-            
-            return {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask
-            }
+    # core/llm/tokenizer_manager.py
 
-        except Exception as e:
-            logger.error(f"Erreur de tokenisation: {e}")
-            raise
+def encode_with_truncation(
+    self, 
+    messages: List[Dict],
+    max_length: Optional[int] = None, 
+    return_tensors: str = "pt"
+) -> Dict[str, torch.Tensor]:
+    """
+    Encode et tronque le texte avec gestion de la longueur maximale.
+    Adapté pour le format Mistral et Llama.
+    """
+    try:
+        is_mistral = "mistral" in settings.MODEL_NAME.lower()
+        max_length = max_length or self.max_length
+        
+        # Tokenization avec le template approprié
+        if is_mistral:
+            # Template Mistral
+            tokenized = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors=return_tensors
+            )
+            
+            # Si tokenized est un tensor, le convertir en dictionnaire
+            if isinstance(tokenized, torch.Tensor):
+                tokenized = {
+                    'input_ids': tokenized,
+                    'attention_mask': torch.ones_like(tokenized)
+                }
+        else:
+            # Template pour Llama et autres modèles
+            tokenized = self.tokenizer(
+                self.tokenizer.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True
+                ),
+                truncation=True,
+                max_length=max_length,
+                padding=True,
+                return_tensors=return_tensors
+            )
+        
+        # Extraction des input_ids et création du masque d'attention
+        input_ids = tokenized['input_ids']
+        attention_mask = tokenized.get('attention_mask', torch.ones_like(input_ids))
+        
+        # Tronquer si nécessaire
+        if input_ids.shape[1] > max_length:
+            input_ids = input_ids[:, :max_length]
+            attention_mask = attention_mask[:, :max_length]
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask
+        }
+
+    except Exception as e:
+        logger.error(f"Erreur de tokenisation: {e}")
+        raise
 
     def decode_and_clean(
         self, 
