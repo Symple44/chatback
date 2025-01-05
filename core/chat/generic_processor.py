@@ -38,6 +38,12 @@ class GenericProcessor(BaseProcessor):
         """Traite un message de manière générique."""
         try:
             start_time = datetime.utcnow()
+            
+            # Récupération de la session existante
+            session_id = request.get("session_id")
+            if not session_id:
+                raise ValueError("Session ID is required")
+                
             query = request.get("query")
             if not query:
                 return self._create_error_response("Query cannot be empty")
@@ -106,6 +112,7 @@ class GenericProcessor(BaseProcessor):
                 response_vector=await self.model.create_embedding(response.response),
                 relevant_docs=relevant_docs,
                 messages=messages
+                session_id=session_id
             )
             
             return response
@@ -121,7 +128,8 @@ class GenericProcessor(BaseProcessor):
         query_vector: List[float],
         response_vector: List[float],
         relevant_docs: List[Dict],
-        messages: List[Dict]
+        messages: List[Dict],
+        session_id: str
     ):
         """Sauvegarde l'interaction en base de données."""
         try:
@@ -129,7 +137,7 @@ class GenericProcessor(BaseProcessor):
                 # Création de l'historique
                 chat_history = ChatHistory(
                     id=uuid.uuid4(),
-                    session_id=str(response.session_id),
+                    session_id=str(session_id),
                     user_id=request.get("user_id"),
                     query=request.get("query"),
                     response=response.response,
