@@ -14,6 +14,7 @@ from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager
 from core.utils.memory_manager import MemoryManager
+from .model_manager import ModelManager
 from .prompt_system import PromptSystem
 from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
@@ -29,7 +30,9 @@ class ModelInference:
         self.cuda_manager = CUDAManager()
         self.memory_manager = MemoryManager()
         self.tokenizer_manager = TokenizerManager()
+        self.model_manager = None 
         self.model = None
+        self.tokenizer = None
         self.embedding_model = None
         self._initialized = False
         self.prompt_system = PromptSystem()
@@ -41,24 +44,44 @@ class ModelInference:
         """Initialise le modèle de manière asynchrone."""
         if not self._initialized:
             try:
-                # Authentification Hugging Face
+                logger.info("Démarrage de l'initialisation du modèle...")
+
+                # 1. Authentification Hugging Face
                 if not await self.auth_manager.setup_auth():
                     raise ValueError("Échec de l'authentification Hugging Face")
 
-                # Vérification de l'accès au modèle
+                # 2. Vérification de l'accès au modèle
                 if not self.auth_manager.get_model_access(settings.MODEL_NAME):
                     raise ValueError(f"Accès non autorisé au modèle {settings.MODEL_NAME}")
 
-                # Initialisation des modèles
-                await self._initialize_model()
+                # 3. Initialisation CUDA
+                await self.cuda_manager.initialize()
+                logger.info("CUDA initialisé")
+
+                # 4. Initialisation du TokenizerManager et ModelManager après CUDA
+                await self.tokenizer_manager.initialize()
+                self.model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
+                await self.model_manager.initialize()
+                
+                # 5. Initialisation du modèle d'embedding
                 await self._initialize_embedding_model()
+                logger.info("Modèle d'embedding initialisé")
+
+                # 6. Chargement du modèle principal
+                self.model, self.tokenizer = await self.model_manager.load_model(settings.MODEL_NAME)
+                self.tokenizer_manager.tokenizer = self.tokenizer
+                logger.info(f"Modèle principal {settings.MODEL_NAME} chargé")
+
+                # 7. Initialisation du summarizer
                 await self.summarizer.initialize()
+                logger.info("Summarizer initialisé")
                 
                 self._initialized = True
-                logger.info(f"Modèle {settings.MODEL_NAME} initialisé avec succès")
+                logger.info("Initialisation complète du modèle terminée avec succès")
 
             except Exception as e:
                 logger.error(f"Erreur lors de l'initialisation du modèle: {e}")
+                await self.cleanup()
                 raise
                 
     async def _initialize_model(self):
@@ -132,22 +155,46 @@ class ModelInference:
     async def _initialize_embedding_model(self):
         """Initialise le modèle d'embeddings."""
         try:
-            logger.info(f"Chargement du modèle d'embeddings {settings.EMBEDDING_MODEL}")
+            logger.info(f"Initialisation du modèle d'embeddings {settings.EMBEDDING_MODEL}")
             
-            # Configuration du device
-            device = "cuda" if torch.cuda.is_available() and not settings.USE_CPU_ONLY else "cpu"
+            # Utilisation du device de CUDA manager
+            device = self.cuda_manager.current_device
             
             # Chargement du modèle d'embeddings
             self.embedding_model = SentenceTransformer(
                 settings.EMBEDDING_MODEL,
-                device=device,
+                device=str(device),  # Conversion en string du torch.device
                 cache_folder=str(settings.CACHE_DIR)
             )
+            
+            # Configuration de la quantization si nécessaire
+            if settings.USE_8BIT and str(device) != "cpu":
+                self.embedding_model.half()  # Conversion en FP16
             
             logger.info(f"Modèle d'embeddings chargé sur {device}")
             
         except Exception as e:
             logger.error(f"Erreur chargement modèle d'embeddings: {e}")
+            raise
+    
+    async def change_model(self, model_name: str):
+        """Change le modèle en cours d'utilisation."""
+        try:
+            if not self._initialized:
+                raise RuntimeError("Le système n'est pas initialisé")
+
+            # Vérification de l'accès
+            if not self.auth_manager.get_model_access(model_name):
+                raise ValueError(f"Accès non autorisé au modèle {model_name}")
+                
+            # Chargement du nouveau modèle
+            self.model, self.tokenizer = await self.model_manager.load_model(model_name)
+            self.tokenizer_manager.tokenizer = self.tokenizer
+            
+            logger.info(f"Modèle changé avec succès pour: {model_name}")
+            
+        except Exception as e:
+            logger.error(f"Erreur changement de modèle: {e}")
             raise
 
     async def create_embedding(self, text: str) -> List[float]:
@@ -175,6 +222,29 @@ class ModelInference:
             logger.error(f"Erreur création embedding: {e}")
             metrics.increment_counter("embedding_errors")
             raise
+    
+    async def cleanup(self):
+        """Nettoie les ressources."""
+        try:
+            # Nettoyage dans l'ordre inverse de l'initialisation
+            if hasattr(self, 'model_loader') and self.model_loader:
+                await self.model_loader.cleanup()
+            
+            if hasattr(self, 'tokenizer_manager'):
+                await self.tokenizer_manager.cleanup()
+            
+            if hasattr(self, 'embedding_model'):
+                del self.embedding_model
+            
+            if hasattr(self, 'summarizer'):
+                await self.summarizer.cleanup()
+            
+            await self.cuda_manager.cleanup()
+            
+            self._initialized = False
+            logger.info("Toutes les ressources ont été nettoyées")
+        except Exception as e:
+            logger.error(f"Erreur nettoyage ressources: {e}")
             
     async def generate_response(
         self,
