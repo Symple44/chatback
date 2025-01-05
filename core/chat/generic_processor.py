@@ -111,7 +111,7 @@ class GenericProcessor(BaseProcessor):
                 query_vector=query_vector,
                 response_vector=await self.model.create_embedding(response.response),
                 relevant_docs=relevant_docs,
-                messages=messages
+                messages=messages,
                 session_id=session_id
             )
             
