@@ -81,7 +81,7 @@ class TokenizerManager:
                 tokenize=True,
                 add_generation_prompt=True,
                 return_tensors=return_tensors
-            
+            )
             
             # Créer un masque d'attention
             attention_mask = tokenized_text.ne(self.tokenizer.pad_token_id)
