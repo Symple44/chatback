@@ -69,7 +69,10 @@ async def process_chat_message(
         
         # Traitement du message
         response = await processor.process_message(
-            request=request.dict(exclude_unset=True)
+            request={
+                **request.dict(exclude_unset=True),
+                "session_id": chat_session.session_id  # Ajout du session_id depuis chat_session
+            }
         )
 
         # 4. Sauvegarde en arrière-plan

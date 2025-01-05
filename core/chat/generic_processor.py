@@ -38,16 +38,14 @@ class GenericProcessor(BaseProcessor):
         """Traite un message de manière générique."""
         try:
             start_time = datetime.utcnow()
-            
-            # Récupération de la session existante
-            session_id = request.get("session_id")
-            if not session_id:
-                raise ValueError("Session ID is required")
-                
             query = request.get("query")
+            session_id = request.get("session_id")
+            
             if not query:
                 return self._create_error_response("Query cannot be empty")
-            
+            if not session_id:
+                return self._create_error_response("Session ID is required")
+                
             # Génération de l'embedding pour la recherche
             query_vector = await self.model.create_embedding(query)
             
@@ -59,7 +57,7 @@ class GenericProcessor(BaseProcessor):
                 size=settings.MAX_RELEVANT_DOCS
             )
             
-            # Construction des messages via PromptSystem
+            # Construction du prompt via PromptSystem
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=relevant_docs,
@@ -70,9 +68,9 @@ class GenericProcessor(BaseProcessor):
             
             # Génération de la réponse
             model_response = await self.model.generate_response(
-                messages=messages,  # Passage direct des messages formatés
+                messages=messages,
                 language=request.get("language", "fr"),
-                response_type=request.get("response_type", "comprehensive")  # Type de réponse pour contrôler la génération
+                response_type=request.get("response_type", "comprehensive")
             )
             
             # Construction de la réponse
@@ -80,7 +78,7 @@ class GenericProcessor(BaseProcessor):
             
             response = ChatResponse(
                 response=model_response.get("response", ""),
-                session_id=str(request.get("session_id", uuid.uuid4())),
+                session_id=session_id,  # On utilise le session_id de la request
                 conversation_id=str(uuid.uuid4()),
                 documents=[
                     DocumentReference(
