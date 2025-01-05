@@ -14,9 +14,6 @@ class GenericProcessor(BaseProcessor):
         self.model = components.model
         self.es_client = components.es_client
         
-    class GenericProcessor(BaseProcessor):
-    """Processeur générique pour les requêtes sans contexte métier."""
-    
     async def process_message(
         self,
         request: Dict,
