@@ -10,20 +10,36 @@ logger = get_logger("tokenizer_manager")
 class TokenizerManager:
     def __init__(self):
         self.tokenizer = None
-        self.max_length = settings.MAX_INPUT_LENGTH 
+        self.max_length = settings.MAX_INPUT_LENGTH
         self._initialized = False
         
     async def initialize(self):
         """Initialise le tokenizer de manière asynchrone."""
+        if self._initialized:
+            return
         try:
             logger.info("Initialisation du tokenizer...")
             
+            # Configuration du tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 settings.MODEL_NAME,
                 revision=settings.MODEL_REVISION,
                 trust_remote_code=True,
-                padding_side='left'
+                padding_side='left',
+                use_fast=True  # Utiliser le tokenizer rapide si disponible
             )
+            
+            # Configuration des tokens spéciaux pour Mistral
+            if "mistral" in settings.MODEL_NAME.lower():
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                self.tokenizer.padding_side = 'left'  # Important pour le chat
+                special_tokens = {
+                    "bos_token": "<s>",
+                    "eos_token": "</s>",
+                    "pad_token": "</s>",
+                    "unk_token": "<unk>",
+                }
+                self.tokenizer.add_special_tokens(special_tokens)
             
             # Configuration spécifique pour Mistral
             if "mistral" in settings.MODEL_NAME.lower():
@@ -39,7 +55,7 @@ class TokenizerManager:
                     else:
                         self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
             
-            # Configuration de la génération
+            # Configuration de la génération optimisée pour Mistral
             self.generation_config = GenerationConfig(
                 do_sample=bool(settings.DO_SAMPLE),
                 temperature=float(settings.TEMPERATURE),
@@ -49,6 +65,7 @@ class TokenizerManager:
                 min_new_tokens=int(settings.MIN_NEW_TOKENS),
                 repetition_penalty=float(settings.REPETITION_PENALTY),
                 pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
                 # Paramètres spécifiques Mistral
                 use_cache=True,
                 typical_p=0.95,  # Ajout du typical sampling pour Mistral
@@ -61,7 +78,7 @@ class TokenizerManager:
         except Exception as e:
             logger.error(f"Erreur initialisation tokenizer: {e}")
             raise
-        
+
     def encode_with_truncation(
         self, 
         messages: List[Dict],
@@ -75,24 +92,67 @@ class TokenizerManager:
         try:
             is_mistral = "mistral" in settings.MODEL_NAME.lower()
             
-            # Comportement par défaut pour tous les modèles
-            tokenized_text = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors=return_tensors
-            )
+            if is_mistral:
+                # Validation et réorganisation des messages pour Mistral
+                validated_messages = []
+                has_system = False
+                
+                # Traitement des messages existants
+                for msg in messages:
+                    if msg["role"] == "system":
+                        if not has_system:  # On ne garde que le premier message système
+                            validated_messages.append(msg)
+                            has_system = True
+                    elif msg["role"] in ["user", "assistant"]:
+                        validated_messages.append(msg)
+                
+                # Vérification de l'alternance user/assistant
+                final_messages = []
+                if has_system:
+                    final_messages.append(validated_messages[0])  # Ajout du message système
+                    validated_messages = validated_messages[1:]   # Retrait du message système de la liste
+                
+                # On s'assure que ça commence par un user
+                if validated_messages and validated_messages[0]["role"] == "assistant":
+                    validated_messages.pop(0)  # On retire le premier message assistant si c'est le cas
+                
+                # Construction de la séquence alternée
+                current_role = "user"
+                for msg in validated_messages:
+                    if msg["role"] == current_role:
+                        final_messages.append(msg)
+                        current_role = "assistant" if current_role == "user" else "user"
+                
+                # S'assurer que le dernier message est de l'utilisateur
+                if final_messages and final_messages[-1]["role"] == "assistant":
+                    final_messages.pop()
+                
+                # Tokenization avec le template Mistral
+                tokenized_text = self.tokenizer.apply_chat_template(
+                    final_messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors=return_tensors
+                )
+            else:
+                # Comportement par défaut pour les autres modèles
+                tokenized_text = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors=return_tensors
+                )
             
             # Créer un masque d'attention
             attention_mask = tokenized_text.ne(self.tokenizer.pad_token_id)
             
             # Tronquer si nécessaire
-            if max_length and tokenized_text.shape[1] > max_length:
-                tokenized_text = tokenized_text[:, :max_length]
+            if max_length and input_ids.shape[1] > max_length:
+                input_ids = input_ids[:, :max_length]
                 attention_mask = attention_mask[:, :max_length]
             
             return {
-                "input_ids": tokenized_text,
+                "input_ids": input_ids,
                 "attention_mask": attention_mask
             }
         except Exception as e:
@@ -144,7 +204,16 @@ class TokenizerManager:
 
         except Exception as e:
             logger.error(f"Erreur de décodage: {e}")
-            return "Une erreur est survenue lors de la génération de la réponse."
+            return {
+                "response": "Une erreur est survenue lors de la génération de la réponse.",
+                "confidence_score": 0.0,
+                "processing_time": 0.0,
+                "tokens_used": 0,
+                "metadata": {
+                    "error": True,
+                    "error_message": str(e)
+                }
+            }
 
     def __call__(
         self,
