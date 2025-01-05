@@ -129,7 +129,7 @@ class GenericProcessor(BaseProcessor):
                 # Création de l'historique
                 chat_history = ChatHistory(
                     id=uuid.uuid4(),
-                    session_id=response.session_id,
+                    session_id=str(response.session_id),
                     user_id=request.get("user_id"),
                     query=request.get("query"),
                     response=response.response,
