@@ -1,6 +1,7 @@
 # core/chat/base_processor.py
 from abc import ABC, abstractmethod
 from typing import Dict, Optional
+from api.models.responses import ChatResponse
 
 class BaseProcessor(ABC):
     """Classe de base pour tous les processeurs."""
@@ -13,7 +14,7 @@ class BaseProcessor(ABC):
         self,
         request: Dict,
         context: Optional[Dict] = None
-    ) -> Dict:
+    ) -> ChatResponse:
         """Traite un message et retourne une réponse."""
         pass
 
