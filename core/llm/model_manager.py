@@ -81,9 +81,23 @@ class ModelManager:
             # Vérification de l'espace disponible
             if not self._check_system_resources():
                 raise RuntimeError("Ressources système insuffisantes")
-            
-            # Chargement du modèle
+                
+            # Chargement du modèle via le loader
             model, tokenizer = await self.model_loader.load_model(model_name)
+            
+            # Configuration optimisée du modèle après chargement
+            model.eval()  # Mode évaluation
+            if settings.USE_FP16:
+                model = model.half()
+                
+            # Désactivation du gradient de manière permanente
+            model.requires_grad_(False)
+            
+            # Configuration CUDA si disponible
+            device = self.cuda_manager.current_device
+            if device.type == "cuda":
+                if settings.USE_FP16:
+                    torch.cuda.amp.autocast(enabled=True).__enter__()
             
             # Mise à jour des informations
             self._update_model_info(
@@ -95,6 +109,7 @@ class ModelManager:
             # Sauvegarde des états
             await self._save_model_states()
             
+            logger.info(f"Modèle {model_name} chargé et configuré avec succès")
             return model, tokenizer
             
         except Exception as e:

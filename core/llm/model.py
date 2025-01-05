@@ -332,6 +332,18 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Erreur génération thread: {e}")
             raise
+
+    def _count_tokens(self, inputs: Dict[str, torch.Tensor], outputs: torch.Tensor) -> Dict[str, int]:
+        """Compte les tokens utilisés."""
+        input_tokens = inputs["input_ids"].shape[1]
+        output_tokens = outputs.shape[1]
+        new_tokens = max(0, output_tokens - input_tokens)
+        
+        return {
+            "input": input_tokens,
+            "output": new_tokens,
+            "total": input_tokens + new_tokens
+        }
             
     def _get_generation_config(self, response_type: str) -> GenerationConfig:
         """Configuration de génération adaptée au type de réponse."""
