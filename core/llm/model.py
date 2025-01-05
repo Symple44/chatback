@@ -180,130 +180,63 @@ class ModelInference:
             
     async def generate_response(
         self,
-        query: str,
-        context_docs: Optional[List[Dict]] = None,
-        context_summary: Optional[Dict] = None,
-        conversation_history: Optional[List[Dict]] = None,
+        messages: List[Dict],
         language: str = "fr",
         response_type: str = "comprehensive",
-        prompt_prefix: str = ""
+        **kwargs
     ) -> Dict:
         """
-        Génère une réponse en tenant compte du contexte et de l'historique.
-        
-        Args:
-            query: Question de l'utilisateur
-            context_docs: Documents pertinents (optionnel)
-            context_summary: Résumé du contexte (optionnel)
-            conversation_history: Historique de la conversation
-            language: Code de langue
-            response_type: Type de réponse ("comprehensive", "concise", "technical")
-            
-        Returns:
-            Dict contenant la réponse et les métadonnées
+        Génère une réponse basée sur les messages formatés.
         """
         try:
             start_time = datetime.utcnow()
             metrics.increment_counter("generation_requests")
 
-            # 1. Validation et préparation du contexte
-            validated_docs = await self._validate_and_prepare_context(context_docs)
-            context_info = await self._analyze_context_relevance(validated_docs, query)
+            # Configuration de la génération selon le type
+            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
+            generation_config = self._get_generation_config(response_type)
 
-            # 1.5 Analyse et résumé du contexte
-            if validated_docs:
-                # Générer le résumé seulement si nécessaire
-                if not context_summary:
-                    try:
-                        context_summary = await self.summarizer.summarize_documents(validated_docs)
-                        logger.debug(f"Résumé généré: {context_summary}")
-                        
-                        # Mise à jour du context_info avec les informations du résumé
-                        if isinstance(context_summary, dict):
-                            context_info.update({
-                                "themes": context_summary.get("themes", []),
-                                "key_points": context_summary.get("key_points", []),
-                                "needs_clarification": context_summary.get("needs_clarification", False)
-                            })
-                    except Exception as e:
-                        logger.error(f"Erreur génération résumé: {e}")
-                        # En cas d'erreur, on utilise une version simplifiée du contexte
-                        context_summary = {
-                            "raw_summary": "\n".join(
-                                doc.get("content", "")[:200] for doc in validated_docs[:2]
-                            )
-                        }
-                        
-            # 2. Construction du prompt avec le nouveau format en utilisant prioritairement le résumé
-            prompt = await self.prompt_system.build_chat_prompt(
-                query=query,
-                context_docs=validated_docs,
-                context_summary=context_summary,
-                conversation_history=conversation_history,
-                context_info=context_info,
-                language=language,
-                response_type=response_type,
-                prompt_prefix=prompt_prefix
+            # Tokenisation des messages
+            inputs = self.tokenizer_manager.encode_with_truncation(
+                messages,
+                max_length=settings.MAX_INPUT_LENGTH,
+                return_tensors="pt"
             )
             
-            #logger.info(prompt)
-            # 3. Génération avec gestion de la mémoire
-            with metrics.timer("model_inference"):
-                generation_config = self._get_generation_config(response_type)
-                
-                with torch.amp.autocast('cuda', enabled=settings.USE_FP16):
-                    with torch.no_grad():
-                        # Tokenisation avec gestion de la longueur
-                        inputs = self.tokenizer_manager.encode_with_truncation(
-                            prompt,
-                            max_length=settings.MAX_INPUT_LENGTH,
-                            return_tensors="pt"
-                        )
-                        
-                        inputs = {
-                            "input_ids": inputs["input_ids"].to(self.model.device),
-                            "attention_mask": inputs["attention_mask"].to(self.model.device)
-                        }
-                        
-                        # Génération
-                        outputs = await self._generate_with_fallback(
-                            inputs,
-                            generation_config
-                        )
+            # Transfert sur le device approprié
+            inputs = {
+                k: v.to(self.model.device) 
+                for k, v in inputs.items()
+            }
+            
+            # Génération avec fallback
+            outputs = await self._generate_with_fallback(inputs, generation_config)
+            response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
 
-                        response_text = self.tokenizer_manager.decode_and_clean(
-                            outputs[0],
-                            skip_special_tokens=False,
-                            clean_up_tokenization_spaces=True
-                        )
-                        if not response_text.strip():
-                            response_text = "Je m'excuse, je n'ai pas pu générer une réponse appropriée. Pourriez-vous reformuler votre question ?"
-
-            # 4. Post-traitement et calcul des métriques
             processing_time = (datetime.utcnow() - start_time).total_seconds()
             
             return {
                 "response": response_text,
-                "confidence_score": context_info["confidence"],
+                "tokens_used": self._count_tokens(inputs, outputs),
                 "processing_time": processing_time,
-                "tokens_used": {
-                    "input": len(inputs["input_ids"][0]),
-                    "output": len(outputs[0]) - len(inputs["input_ids"][0]),
-                    "total": len(outputs[0])
-                },
-                "context_info": context_info,
                 "metadata": {
-                    "model_version": settings.MODEL_NAME,
-                    "response_type": response_type,
                     "language": language,
+                    "model": settings.MODEL_NAME,
+                    "response_type": response_type,
+                    "generation_config": generation_config.to_dict(),
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
 
         except Exception as e:
-            logger.error(f"Erreur génération: {str(e)}", exc_info=True)
+            logger.error(f"Erreur génération: {e}")
             metrics.increment_counter("generation_errors")
-            raise
+            return {
+                "response": "Une erreur est survenue lors de la génération de la réponse.",
+                "tokens_used": {"total": 0},
+                "processing_time": 0.0,
+                "error": str(e)
+            }
             
     async def generate_streaming_response(
         self,
