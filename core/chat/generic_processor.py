@@ -21,6 +21,7 @@ class GenericProcessor(BaseProcessor):
     ) -> Dict:
         """Traite un message de manière générique."""
         try:
+            start_time = datetime.utcnow()
             query = request["query"]
             
             # Génération de l'embedding pour la recherche
@@ -35,34 +36,42 @@ class GenericProcessor(BaseProcessor):
             )
             
             # Génération de la réponse
-            response = await self.model.generate_response(
+            model_response = await self.model.generate_response(
                 query=query,
                 context_docs=relevant_docs,
                 language=request.get("language", "fr")
             )
             
+            # Vérification de la réponse
+            if not isinstance(model_response, dict):
+                raise ValueError("Format de réponse invalide du modèle")
+                
+            # Construction de la réponse
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
             return {
-                "response": response.get("response", ""),
+                "response": model_response.get("response", ""),
                 "confidence_score": self._calculate_confidence(relevant_docs),
                 "documents": relevant_docs,
-                "tokens_used": response.get("tokens_used", {}),
+                "tokens_used": model_response.get("tokens_used", {}),
+                "processing_time": processing_time,
                 "metadata": {
                     "processor_type": "generic",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "context_used": len(relevant_docs)
                 }
             }
             
         except Exception as e:
             logger.error(f"Erreur traitement générique: {e}")
-            error_response = {
+            return {
                 "response": "Je suis désolé, une erreur est survenue lors du traitement de votre demande.",
                 "confidence_score": 0.0,
                 "documents": [],
-                "tokens_used": {},
+                "tokens_used": {"total": 0},
+                "processing_time": 0.0,
                 "metadata": {
                     "processor_type": "generic",
                     "error": str(e),
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
-            return error_response
