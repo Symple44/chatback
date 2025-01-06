@@ -28,26 +28,22 @@ class DocumentPreprocessor:
         
         # Patterns de nettoyage
         self.cleanup_patterns = [
-            # En-têtes et pieds de page
-            (r'^2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?CMA\d+_rev\d+.*?\n', ''),
-            (r'=== Page \d+ ===', ''),
-            
-            # Informations de version et révision
-            (r'Historique des révisions.*', ''),
-            (r'Droit de reproduction.*', ''),
-            (r'Responsabilité.*', ''),
-            
+            # Suppression des en-têtes et pieds de page
+            (r'2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?\n', ''),  # Adresse
+            (r'Tél : [\d\.-]+', ''),  # Numéro de téléphone
+            (r'CMA\d+_rev\d+\s.*?\bOrganisme déclaré sous le n°\d+.*?\n', ''),  # Informations sur l'organisme
+            (r'^Page \d+ sur \d+$', ''),  # Numéros de page
+
             # Nettoyage général
-            (r'\s{2,}', ' '),           # Espaces multiples 
-            (r'^\s+', ''),              # Espaces début de ligne
-            (r'\s+$', ''),              # Espaces fin de ligne
+            (r'\s{2,}', ' '),           # Espaces multiples
+            (r'^\s+', ''),              # Espaces en début de ligne
+            (r'\s+$', ''),              # Espaces en fin de ligne
             (r'\n{3,}', '\n\n'),        # Lignes vides multiples
-            
-            # Suppression des logos et marqueurs
-            (r'2M-MANAGER.*?\n', ''),   # En-têtes
-            (r'Page \d+ sur \d+', ''),  # Numéros de page
-            (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
-            (r'<\|\w+\|>.*?<\/\|\w+\|>', '')  # Balises de formatage
+
+            # Suppression des logos et éléments formatés
+            (r'<\|\w+\|>.*?<\/\|\w+\|>', ''),  # Balises de formatage HTML/XML
+            (r'Droit de reproduction.*?\n', ''),  # Mentions légales
+            (r'Responsabilité.*?\n', ''),  # Clause de responsabilité
         ]
 
         # Patterns spécifiques pour différents types de documents
