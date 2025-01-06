@@ -73,11 +73,26 @@ class GenericProcessor(BaseProcessor):
                 response_type=request.get("response_type", "comprehensive")
             )
             
+            response_text = model_response.get("response", "")
+            
+            # Mise à jour du contexte de session
+            await self.components.session_manager.update_session_context(
+                session_id,
+                {
+                    "history": self._update_conversation_history(
+                        context.get("history", []) if context else [],
+                        query,
+                        response_text
+                    ),
+                    "last_interaction": datetime.utcnow().isoformat()
+                }
+            )
+            
             # Construction de la réponse
             processing_time = (datetime.utcnow() - start_time).total_seconds()
             
             response = ChatResponse(
-                response=model_response.get("response", ""),
+                response=response_text,
                 session_id=session_id,  # On utilise le session_id de la request
                 conversation_id=str(uuid.uuid4()),
                 documents=[
@@ -173,7 +188,42 @@ class GenericProcessor(BaseProcessor):
         except Exception as e:
             logger.error(f"Erreur sauvegarde interaction: {e}")
             metrics.increment_counter("chat_save_errors")
-
+            
+    def _update_conversation_history(
+        self,
+        current_history: List[Dict],
+        query: str,
+        response: str
+    ) -> List[Dict]:
+        """
+        Met à jour l'historique de conversation en ajoutant la nouvelle interaction.
+        
+        Args:
+            current_history: Historique actuel
+            query: Question de l'utilisateur
+            response: Réponse du système
+            
+        Returns:
+            Liste mise à jour avec les nouveaux messages
+        """
+        # Ajout des nouveaux messages
+        updated_history = current_history + [
+            {
+                "role": "user",
+                "content": query,
+                "timestamp": datetime.utcnow().isoformat()
+            },
+            {
+                "role": "assistant",
+                "content": response,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        ]
+        
+        # Garder uniquement les 5 dernières interactions (10 messages)
+        max_history = settings.MAX_HISTORY_MESSAGES * 2  # 2 messages par interaction
+        return updated_history[-max_history:] if max_history > 0 else updated_history
+    
     def _create_error_response(self, error_message: str) -> ChatResponse:
         """Crée une réponse d'erreur formatée."""
         return ChatResponse(

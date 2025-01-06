@@ -25,7 +25,7 @@ class ElasticsearchIndexManager:
         base_settings = {
             "settings": {
                 "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": 0,  # On met 0 réplica puisque c'est un environnement single-node
+                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
                 "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
                 "analysis": {
                     "analyzer": {
@@ -44,7 +44,7 @@ class ElasticsearchIndexManager:
                         "french_elision": {
                             "type": "elision",
                             "articles_case": True,
-                            "articles": ["l", "m", "t", "qu", "n", "s", "j", "d", "c", "jusqu", "quoiqu", "lorsqu", "puisqu"]
+                            "articles": ["l", "m", "t", "qu", "n", "s", "j", "d", "c"]
                         },
                         "french_stop": {
                             "type": "stop",

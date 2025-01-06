@@ -57,6 +57,13 @@ async def process_chat_message(
             request.metadata
         )
         
+        # Préparation du contexte complet pour le processeur
+        session_context = {
+            "history": chat_session.session_context.get("history", []),
+            "metadata": request.metadata,
+            "session_id": chat_session.session_id
+        }
+        
         # Obtention du processeur approprié
         processor = await ProcessorFactory.get_processor(
             business_type=request.business,
@@ -71,7 +78,8 @@ async def process_chat_message(
         response = await processor.process_message(
             request={
                 **request.dict(exclude_unset=True),
-                "session_id": chat_session.session_id  # Ajout du session_id depuis chat_session
+                "session_id": chat_session.session_id,
+                "context": session_context
             }
         )
 
