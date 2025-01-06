@@ -23,16 +23,16 @@ class DocumentPreprocessor:
         
         # Patterns à nettoyer
         self.cleanup_patterns = [
-            (r'\s{2,}', ' '),           # Espaces multiples
+            (r'\s{2,}', ' '),           # Espaces multiples -> un espace
             (r'^\s+', ''),              # Espaces début de ligne
             (r'\s+$', ''),              # Espaces fin de ligne
             (r'\n{3,}', '\n\n'),        # Lignes vides multiples
             (r'[^\S\n]+', ' '),         # Espaces non-break
             (r'2M-MANAGER.*?\n', ''),   # En-têtes
-            (r'2CM-MANAGER.*?\n', ''),   # En-têtes
+            (r'2CM-MANAGER.*?\n', ''),  # En-têtes
             (r'Page \d+ sur \d+', ''),  # Numéros de page
             (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
-            (r'<\|\w+\|>.*?<\/\|\w+\|>', '', re.DOTALL)  # Balises de formatage
+            (r'<\|\w+\|>.*?<\/\|\w+\|>', '')  # Balises de formatage
         ]
 
     def preprocess_document(self, doc: Dict) -> Dict:
