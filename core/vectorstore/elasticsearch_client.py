@@ -164,35 +164,32 @@ class ElasticsearchClient:
             if not self.initialized:
                 await self.initialize()
 
-            # Construction de la requête plus robuste
+            # Construction de la requête de base
             query_body = {
                 "size": size,
-                "min_score": min_score,
-                "query": {
-                    "bool": {
-                        "must": [],
-                        "should": [],
-                        "filter": [],
-                        "minimum_should_match": 1
-                    }
-                },
                 "_source": {
-                    "includes": ["title", "content", "metadata", "embedding"]
+                    "includes": ["title", "content", "metadata"]
                 }
             }
 
-            # Recherche textuelle avec analyse française
-            if query:
-                query_body["query"]["bool"]["must"].append({
+            # Construction de la partie bool
+            bool_query = {
+                "bool": {
+                    "must": [],
+                    "should": [],
+                    "filter": []
+                }
+            }
+
+            # Recherche textuelle
+            if query and query.strip():
+                bool_query["bool"]["must"].append({
                     "multi_match": {
                         "query": query,
                         "fields": ["title^2", "content"],
-                        "type": "most_fields",
+                        "type": "best_fields",
                         "operator": "and",
-                        "analyzer": "french_analyzer",
-                        "fuzziness": "AUTO",
-                        "prefix_length": 2,
-                        "boost": 1.0
+                        "analyzer": "french_analyzer"
                     }
                 })
 
@@ -201,58 +198,75 @@ class ElasticsearchClient:
                 for key, value in metadata_filter.items():
                     if value is not None:
                         if isinstance(value, list):
-                            filter_clause = {
-                                "terms": {
-                                    f"metadata.{key}.keyword": value
-                                }
-                            }
+                            bool_query["bool"]["filter"].append({
+                                "terms": {f"metadata.{key}.keyword": value}
+                            })
                         else:
-                            filter_clause = {
-                                "term": {
-                                    f"metadata.{key}.keyword": value
-                                }
-                            }
-                        query_body["query"]["bool"]["filter"].append(filter_clause)
+                            bool_query["bool"]["filter"].append({
+                                "term": {f"metadata.{key}.keyword": value}
+                            })
 
-            # Recherche vectorielle
-            if vector is not None:
-                if len(vector) != self.embedding_dim:
-                    logger.warning(f"Dimension du vecteur incorrecte: {len(vector)}")
-                else:
-                    query_body["query"]["bool"]["should"].append({
-                        "script_score": {
-                            "query": {"match_all": {}},
-                            "script": {
-                                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                                "params": {"query_vector": vector}
-                            },
-                            "boost": 2.0
+            # Recherche vectorielle si un vecteur est fourni
+            if vector is not None and len(vector) == self.embedding_dim:
+                logger.debug("Ajout de la recherche vectorielle")
+                vector_query = {
+                    "script_score": {
+                        "query": {"match_all": {}},
+                        "script": {
+                            "lang": "painless",
+                            "source": """
+                                float score = 0.0f;
+                                if (doc['embedding'].size() == params.query_vector.length) {
+                                    score = cosineSimilarity(params.query_vector, 'embedding') + 1.0;
+                                }
+                                return score;
+                            """,
+                            "params": {
+                                "query_vector": vector
+                            }
+                        },
+                        "min_score": min_score
+                    }
+                }
+                
+                # Si nous avons déjà une recherche textuelle, combinons les deux
+                if bool_query["bool"]["must"]:
+                    query_body["query"] = {
+                        "bool": {
+                            "should": [
+                                bool_query,
+                                vector_query
+                            ],
+                            "minimum_should_match": 1
                         }
-                    })
+                    }
+                else:
+                    query_body["query"] = vector_query
+            else:
+                query_body["query"] = bool_query
+
+            logger.debug(f"Query body: {json.dumps(query_body, indent=2)}")
 
             # Exécution de la recherche avec retry
             for attempt in range(3):
                 try:
-                    logger.debug(f"Tentative de recherche {attempt + 1}/3")
-                    logger.debug(f"URL ES: {settings.ELASTICSEARCH_HOST}")
-                    
                     response = await self.es.search(
                         index=f"{self.index_prefix}_documents",
                         body=query_body,
                         request_timeout=30,
                         params={"request_cache": "true"}
                     )
-                    
-                    # Traitement des résultats
+
                     hits = response.get("hits", {}).get("hits", [])
                     results = []
-                    
+
                     for hit in hits:
                         source = hit.get("_source", {})
                         score = hit.get("_score", 0.0)
-                    
-                        # Normalisation du score
-                        normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else 0.0
+                        
+                        # Normalisation du score entre 0 et 1
+                        normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else score
+
                         results.append({
                             "title": source.get("title", ""),
                             "content": source.get("content", ""),
@@ -260,19 +274,26 @@ class ElasticsearchClient:
                             "metadata": source.get("metadata", {}),
                             "application": source.get("metadata", {}).get("application", "unknown")
                         })
-                    
-                    logger.info(f"Recherche effectuée sur {settings.ELASTICSEARCH_HOST}: {len(results)} résultats")
+
+                    logger.info(f"Recherche réussie: {len(results)} résultats trouvés")
                     metrics.increment_counter("successful_searches")
                     return results
 
                 except Exception as e:
+                    error_detail = str(e)
+                    logger.warning(f"Tentative {attempt + 1} échouée: {error_detail}")
+                    
                     if attempt == 2:  # Dernière tentative
                         raise
-                    logger.warning(f"Tentative {attempt + 1} échouée: {e}")
+                        
+                    # Attente exponentielle entre les tentatives
                     await asyncio.sleep(1 * (2 ** attempt))
 
         except Exception as e:
-            logger.error(f"Erreur recherche documents sur {settings.ELASTICSEARCH_HOST}: {e}", exc_info=True)
+            logger.error(
+                f"Erreur recherche documents: {str(e)}", 
+                exc_info=True
+            )
             metrics.increment_counter("search_errors")
             return []
 
