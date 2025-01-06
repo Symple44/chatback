@@ -214,35 +214,45 @@ class ElasticsearchClient:
                         "query": {"match_all": {}},
                         "script": {
                             "source": """
-                                if (doc['embedding'].size() == 0 || params.query_vector.length == 0) {
+                                int expectedDim = params.embedding_dim;
+                                
+                                // Vérification de base
+                                if (params.query_vector == null || 
+                                    doc['embedding'] == null || 
+                                    params.query_vector.length != expectedDim || 
+                                    doc['embedding'].size() != expectedDim
+                                ) {
                                     return 0.0;
                                 }
                                 
-                                float dotProduct = 0.0;
-                                float normA = 0.0;
-                                float normB = 0.0;
+                                // Calcul du produit scalaire et des normes
+                                double dotProduct = 0.0;
+                                double normA = 0.0;
+                                double normB = 0.0;
                                 
-                                for (int i = 0; i < params.query_vector.length; i++) {
-                                    float a = doc['embedding'].get(i);
-                                    float b = params.query_vector[i];
+                                for (int i = 0; i < expectedDim; i++) {
+                                    double a = ((Number) params.query_vector[i]).doubleValue();
+                                    double b = ((Number) doc['embedding'].get(i)).doubleValue();
                                     
                                     dotProduct += a * b;
                                     normA += a * a;
                                     normB += b * b;
                                 }
                                 
-                                normA = (float) Math.sqrt(normA);
-                                normB = (float) Math.sqrt(normB);
-                                
+                                // Protection contre les vecteurs nuls
                                 if (normA == 0.0 || normB == 0.0) {
                                     return 0.0;
                                 }
                                 
-                                float cosineSimilarity = dotProduct / (normA * normB);
-                                return (cosineSimilarity + 1.0) / 2.0;  // Normalisation à [0, 1]
+                                // Calcul de la similarité cosinus
+                                double cosineSimilarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+                                
+                                // Normalisation à [0, 1]
+                                return (cosineSimilarity + 1.0) / 2.0;
                             """,
                             "params": {
-                                "query_vector": vector
+                                "query_vector": vector,
+                                "embedding_dim": self.embedding_dim  # Utilisez la dimension de votre configuration
                             }
                         }
                     }
