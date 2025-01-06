@@ -18,7 +18,15 @@ class DocumentPreprocessor:
         self.document_prefix = 'CMA'  # Préfixe fixe
         self.document_revision_prefix = '_rev'  # Préfixe de révision
 
-        # Patterns de nettoyage avec tuples à 2 éléments
+        # Marqueurs de sections
+        self.section_markers = [
+            r"^(?:Pour|Comment)\s+[a-zéèêë].*?$",  # Instructions directes
+            r"^(?:\d+[\).]|[-•])\s+.*$",           # Points numérotés ou puces
+            r"^(?:Étape|Phase|Partie)\s+.*:?$",    # Sections structurées
+            r"^.*?\b(?:cliquez|sélectionnez|renseignez|faites)\b.*$"  # Actions utilisateur
+        ]
+        
+        # Patterns de nettoyage
         self.cleanup_patterns = [
             # En-têtes et pieds de page
             (r'^2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?CMA\d+_rev\d+.*?\n', ''),
@@ -41,6 +49,14 @@ class DocumentPreprocessor:
             (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
             (r'<\|\w+\|>.*?<\/\|\w+\|>', '')  # Balises de formatage
         ]
+
+        # Patterns spécifiques pour différents types de documents
+        self.document_specific_patterns = {
+            'pdf': [
+                (r'Sommaire.*?Page \d+', ''),
+                (r'Droit d\'auteur.*', '')
+            ]
+        }
 
     def preprocess_document(self, doc: Dict) -> Dict:
         """Prétraite un document complet."""
