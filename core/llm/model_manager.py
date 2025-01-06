@@ -97,7 +97,7 @@ class ModelManager:
             device = self.cuda_manager.current_device
             if device.type == "cuda":
                 if settings.USE_FP16:
-                    torch.cuda.amp.autocast(enabled=True).__enter__()
+                    torch.cuda.amp.autocast('cuda', enabled=True).__enter__()
             
             # Mise à jour des informations
             self._update_model_info(
