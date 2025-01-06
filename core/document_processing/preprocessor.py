@@ -14,6 +14,7 @@ class ProcessedSection:
 class DocumentPreprocessor:
     def __init__(self):
         """Initialisation du processeur de documents."""
+        # Marqueurs de sections
         self.section_markers = [
             r"^(?:Pour|Comment)\s+[a-zéèêë].*?$",  # Instructions directes
             r"^(?:\d+[\).]|[-•])\s+.*$",           # Points numérotés ou puces
@@ -21,19 +22,43 @@ class DocumentPreprocessor:
             r"^.*?\b(?:cliquez|sélectionnez|renseignez|faites)\b.*$"  # Actions utilisateur
         ]
         
-        # Patterns à nettoyer
+        # Patterns de nettoyage
         self.cleanup_patterns = [
-            (r'\s{2,}', ' '),           # Espaces multiples -> un espace
+            # En-têtes et pieds de page
+            (r'^2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?CMA\d+_rev.d+.*?\n', '', re.MULTILINE | re.IGNORECASE | re.DOTALL),
+            (r'=== Page \d+ ===', '', re.MULTILINE),
+            
+            # Informations de version et révision
+            (r'Historique des révisions.*', '', re.MULTILINE | re.DOTALL),
+            (r'Droit de reproduction.*', '', re.MULTILINE | re.DOTALL),
+            (r'Responsabilité.*', '', re.MULTILINE | re.DOTALL),
+            
+            # Nettoyage général
+            (r'\s{2,}', ' '),           # Espaces multiples 
             (r'^\s+', ''),              # Espaces début de ligne
             (r'\s+$', ''),              # Espaces fin de ligne
             (r'\n{3,}', '\n\n'),        # Lignes vides multiples
-            (r'[^\S\n]+', ' '),         # Espaces non-break
+            
+            # Suppression des logos et marqueurs
             (r'2M-MANAGER.*?\n', ''),   # En-têtes
-            (r'2CM-MANAGER.*?\n', ''),  # En-têtes
             (r'Page \d+ sur \d+', ''),  # Numéros de page
             (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
             (r'<\|\w+\|>.*?<\/\|\w+\|>', '')  # Balises de formatage
         ]
+
+        # Patterns spécifiques pour différents types de documents
+        self.document_specific_patterns = {
+            'pdf': [
+                (r'Sommaire.*?Page \d+', '', re.MULTILINE | re.IGNORECASE | re.DOTALL),
+                (r'Droit d\'auteur.*', '', re.MULTILINE | re.DOTALL)
+            ],
+            'docx': [
+                # Ajoutez des patterns spécifiques pour les documents Word
+            ],
+            'txt': [
+                # Ajoutez des patterns spécifiques pour les fichiers texte
+            ]
+        }
 
     def preprocess_document(self, doc: Dict) -> Dict:
         """Prétraite un document complet."""
@@ -82,21 +107,23 @@ class DocumentPreprocessor:
         match = re.search(r"rev(\d+)", title.lower())
         return match.group(1) if match else "00"
 
-    def _clean_content(self, content: str) -> str:
+    def _clean_content(self, content: str, doc_type: str = 'pdf') -> str:
         """Nettoie et normalise le contenu."""
-        # Application des patterns de nettoyage
         cleaned = content
+
+        # Patterns généraux
         for pattern, replacement in self.cleanup_patterns:
-            cleaned = re.sub(pattern, replacement, cleaned)
-            
-        # Normalisation des caractères spéciaux
-        cleaned = cleaned.replace('→', '➔')
-        cleaned = cleaned.replace('`', "'")
-        
-        # Suppression des en-têtes/pieds de page répétitifs
-        cleaned = re.sub(r'2M-MANAGER.*?\n.*?\n', '', cleaned, flags=re.MULTILINE)
-        cleaned = re.sub(r'Page \d+ sur \d+', '', cleaned)
-        
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+
+        # Patterns spécifiques au type de document
+        if doc_type in self.document_specific_patterns:
+            for pattern, replacement in self.document_specific_patterns[doc_type]:
+                cleaned = re.sub(pattern, replacement, cleaned, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+
+        # Nettoyage final
+        cleaned_lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
+        cleaned = '\n'.join(cleaned_lines)
+
         return cleaned.strip()
 
     def _extract_sections(self, content: str) -> List[str]:
