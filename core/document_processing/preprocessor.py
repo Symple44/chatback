@@ -33,6 +33,12 @@ class DocumentPreprocessor:
             (r'Tél : [\d\.-]+', ''),  # Numéro de téléphone
             (r'CMA\d+_rev\d+\s.*?\bOrganisme déclaré sous le n°\d+.*?\n', ''),  # Informations sur l'organisme
             (r'^Page \d+ sur \d+$', ''),  # Numéros de page
+            (r'=== Page \d+ ===', ''),
+            
+            # Informations de version et révision
+            (r'Historique des révisions.*', ''),
+            (r'Droit de reproduction.*', ''),
+            (r'Responsabilité.*', ''),
 
             # Nettoyage général
             (r'\s{2,}', ' '),           # Espaces multiples
