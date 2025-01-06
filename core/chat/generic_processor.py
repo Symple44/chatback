@@ -57,10 +57,13 @@ class GenericProcessor(BaseProcessor):
                 size=settings.MAX_RELEVANT_DOCS
             )
             
+            context_summary = await self.summarizer.summarize_documents(relevant_docs)
+            
             # Construction du prompt via PromptSystem
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=relevant_docs,
+                context_summary=context_summary,
                 conversation_history=context.get("history", []) if context else None,
                 language=request.get("language", "fr")
             )
