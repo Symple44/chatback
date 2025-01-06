@@ -53,6 +53,7 @@ class DocumentPreprocessor:
             return {
                 "doc_id": doc.get("doc_id", ""),
                 "title": doc.get("title", ""),
+                "content": content,
                 "metadata": metadata,
                 "sections": scored_sections,
                 "processed_at": datetime.utcnow().isoformat()
