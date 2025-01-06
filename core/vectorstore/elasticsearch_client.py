@@ -225,52 +225,55 @@ class ElasticsearchClient:
                                 "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
                                 "params": {"query_vector": vector}
                             },
-                            "boost": 2.0  # Augmenter l'importance de la similarité vectorielle
+                            "boost": 2.0
                         }
                     })
 
             # Exécution de la recherche avec retry
             for attempt in range(3):
                 try:
+                    logger.debug(f"Tentative de recherche {attempt + 1}/3")
+                    logger.debug(f"URL ES: {settings.ELASTICSEARCH_HOST}")
+                    
                     response = await self.es.search(
                         index=f"{self.index_prefix}_documents",
                         body=query_body,
                         request_timeout=30,
                         params={"request_cache": "true"}
                     )
-                    break
+                    
+                    # Traitement des résultats
+                    hits = response.get("hits", {}).get("hits", [])
+                    results = []
+                    
+                    for hit in hits:
+                        source = hit.get("_source", {})
+                        score = hit.get("_score", 0.0)
+                    
+                        # Normalisation du score
+                        normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else 0.0
+                        results.append({
+                            "title": source.get("title", ""),
+                            "content": source.get("content", ""),
+                            "score": normalized_score,
+                            "metadata": source.get("metadata", {}),
+                            "application": source.get("metadata", {}).get("application", "unknown")
+                        })
+                    
+                    logger.info(f"Recherche effectuée sur {settings.ELASTICSEARCH_HOST}: {len(results)} résultats")
+                    metrics.increment_counter("successful_searches")
+                    return results
+
                 except Exception as e:
-                    if attempt == 2:
+                    if attempt == 2:  # Dernière tentative
                         raise
                     logger.warning(f"Tentative {attempt + 1} échouée: {e}")
                     await asyncio.sleep(1 * (2 ** attempt))
 
-            # Traitement des résultats
-            hits = response.get("hits", {}).get("hits", [])
-            results = []
-            
-            for hit in hits:
-                source = hit.get("_source", {})
-                score = hit.get("_score", 0.0)
-            
-                # Normalisation du score
-                normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else 0.0
-                results.append({
-                    "title": source.get("title", ""),
-                    "content": source.get("content", ""),
-                    "score": normalized_score,
-                    "metadata": source.get("metadata", {}),
-                    "application": source.get("metadata", {}).get("application", "unknown")
-                })
-
-            logger.info(f"Recherche effectuée sur {self.es.transport.hosts[0]['host']}: {len(results)} résultats")
-            metrics.increment_counter("successful_searches")
-            return results
-
         except Exception as e:
-            logger.error(f"Erreur recherche documents sur {self.es.transport.hosts[0]['host']}: {e}", exc_info=True)
-        metrics.increment_counter("search_errors")
-        return []
+            logger.error(f"Erreur recherche documents sur {settings.ELASTICSEARCH_HOST}: {e}", exc_info=True)
+            metrics.increment_counter("search_errors")
+            return []
 
     async def delete_document(self, doc_id: str) -> bool:
         """Supprime un document par son ID."""
