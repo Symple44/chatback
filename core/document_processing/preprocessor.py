@@ -14,24 +14,20 @@ class ProcessedSection:
 class DocumentPreprocessor:
     def __init__(self):
         """Initialisation du processeur de documents."""
-        # Marqueurs de sections
-        self.section_markers = [
-            r"^(?:Pour|Comment)\s+[a-zéèêë].*?$",  # Instructions directes
-            r"^(?:\d+[\).]|[-•])\s+.*$",           # Points numérotés ou puces
-            r"^(?:Étape|Phase|Partie)\s+.*:?$",    # Sections structurées
-            r"^.*?\b(?:cliquez|sélectionnez|renseignez|faites)\b.*$"  # Actions utilisateur
-        ]
-        
-        # Patterns de nettoyage
+        # Configuration spécifique au document
+        self.document_prefix = 'CMA'  # Préfixe fixe
+        self.document_revision_prefix = '_rev'  # Préfixe de révision
+
+        # Patterns de nettoyage avec tuples à 2 éléments
         self.cleanup_patterns = [
             # En-têtes et pieds de page
-            (r'^2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?CMA\d+_rev.d+.*?\n', '', re.MULTILINE | re.IGNORECASE | re.DOTALL),
-            (r'=== Page \d+ ===', '', re.MULTILINE),
+            (r'^2M-MANAGER\s*–\s*.*?11000\s*CARCASSONNE.*?CMA\d+_rev\d+.*?\n', ''),
+            (r'=== Page \d+ ===', ''),
             
             # Informations de version et révision
-            (r'Historique des révisions.*', '', re.MULTILINE | re.DOTALL),
-            (r'Droit de reproduction.*', '', re.MULTILINE | re.DOTALL),
-            (r'Responsabilité.*', '', re.MULTILINE | re.DOTALL),
+            (r'Historique des révisions.*', ''),
+            (r'Droit de reproduction.*', ''),
+            (r'Responsabilité.*', ''),
             
             # Nettoyage général
             (r'\s{2,}', ' '),           # Espaces multiples 
@@ -45,20 +41,6 @@ class DocumentPreprocessor:
             (r'Tél : [\d\.-]+', ''),    # Numéros de téléphone
             (r'<\|\w+\|>.*?<\/\|\w+\|>', '')  # Balises de formatage
         ]
-
-        # Patterns spécifiques pour différents types de documents
-        self.document_specific_patterns = {
-            'pdf': [
-                (r'Sommaire.*?Page \d+', '', re.MULTILINE | re.IGNORECASE | re.DOTALL),
-                (r'Droit d\'auteur.*', '', re.MULTILINE | re.DOTALL)
-            ],
-            'docx': [
-                # Ajoutez des patterns spécifiques pour les documents Word
-            ],
-            'txt': [
-                # Ajoutez des patterns spécifiques pour les fichiers texte
-            ]
-        }
 
     def preprocess_document(self, doc: Dict) -> Dict:
         """Prétraite un document complet."""
@@ -111,14 +93,12 @@ class DocumentPreprocessor:
         """Nettoie et normalise le contenu."""
         cleaned = content
 
+        # Utilisation des flags communs
+        flags = re.MULTILINE | re.IGNORECASE | re.DOTALL
+
         # Patterns généraux
         for pattern, replacement in self.cleanup_patterns:
-            cleaned = re.sub(pattern, replacement, cleaned, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
-
-        # Patterns spécifiques au type de document
-        if doc_type in self.document_specific_patterns:
-            for pattern, replacement in self.document_specific_patterns[doc_type]:
-                cleaned = re.sub(pattern, replacement, cleaned, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+            cleaned = re.sub(pattern, replacement, cleaned, flags=flags)
 
         # Nettoyage final
         cleaned_lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
