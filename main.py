@@ -132,34 +132,49 @@ class ComponentManager:
                 raise
 
     async def sync_drive_documents(self):
-        """Synchronise les documents depuis Google Drive."""
-        if "drive_manager" not in self._components:
-            return
-    
+        """Synchronise les documents depuis Google Drive et le système de fichiers local."""
         try:
-            downloaded_files = await self._components["drive_manager"].sync_drive_folder(
-                settings.GOOGLE_DRIVE_FOLDER_ID,
-                save_path="documents"
-            )
-            
-            if not downloaded_files:
-                logger.info("Aucun nouveau fichier à indexer")
-                return
-                
-            for file_path in downloaded_files:
-                app_name = Path(file_path).parent.name
-                await self._components["pdf_processor"].index_pdf(
-                    file_path,
-                    metadata={
-                        "application": app_name,
-                        "sync_date": datetime.utcnow().isoformat()
-                    }
+            # 1. Synchronisation Google Drive si configuré
+            downloaded_files = set()
+            if "drive_manager" in self._components:
+                downloaded_files = await self._components["drive_manager"].sync_drive_folder(
+                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    save_path="documents"
                 )
-                
-            logger.info(f"{len(downloaded_files)} documents synchronisés et indexés")
-            
+
+            # 2. Indexation locale pour tous les fichiers
+            indexed_count = 0
+            for app_dir in Path("documents").iterdir():
+                if not app_dir.is_dir():
+                    continue
+
+                app_name = app_dir.name
+                logger.info(f"Traitement de l'application: {app_name}")
+
+                # Parcours des PDFs de l'application
+                for pdf_path in app_dir.glob("*.pdf"):
+                    try:
+                        if str(pdf_path) not in downloaded_files:  # Éviter la double indexation
+                            success = await self._components["pdf_processor"].index_pdf(
+                                str(pdf_path),
+                                metadata={
+                                    "application": app_name,
+                                    "sync_date": datetime.utcnow().isoformat(),
+                                    "source": "local_filesystem"
+                                }
+                            )
+                            if success:
+                                indexed_count += 1
+                                logger.info(f"Document indexé: {app_name}/{pdf_path.name}")
+                    except Exception as e:
+                        logger.error(f"Erreur indexation {pdf_path}: {e}")
+
+            logger.info(f"Indexation terminée: {indexed_count} documents indexés")
+            return indexed_count
+
         except Exception as e:
-            logger.error(f"Erreur synchronisation Drive: {e}", exc_info=True)
+            logger.error(f"Erreur synchronisation: {e}", exc_info=True)
+            return 0
 
     async def cleanup(self):
         """Nettoie les ressources."""
