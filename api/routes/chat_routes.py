@@ -84,16 +84,16 @@ async def process_chat_message(
         )
 
         # 4. Sauvegarde en arrière-plan
-        background_tasks.add_task(
-            save_chat_interaction,
-            components,
-            chat_session.session_id,
-            request,
-            response.response,
-            response.query_vector if hasattr(response, 'query_vector') else None,
-            datetime.utcnow(),
-            response.documents
-        )
+        #background_tasks.add_task(
+        #    save_chat_interaction,
+        #    components,
+        #    chat_session.session_id,
+        #    request,
+        #    response.response,
+        #    response.query_vector if hasattr(response, 'query_vector') else None,
+        #    datetime.utcnow(),
+        #    response.documents
+        #)
 
         return response
 
