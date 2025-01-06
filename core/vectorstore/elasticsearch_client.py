@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 from elasticsearch import AsyncElasticsearch
 from elasticsearch.helpers import async_bulk, BulkIndexError
 from datetime import datetime
+import asyncio
 import json
 import logging
 from core.config import settings
