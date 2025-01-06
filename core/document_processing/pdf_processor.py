@@ -188,11 +188,11 @@ class PDFProcessor:
             document = {
                 "title": filename,
                 "content": processed_content["content"],
-                "file_path": str(file_path),
                 "metadata": {
                     "application": application,
                     "document_type": "pdf",
                     "page_count": extracted_content.get("total_pages", 0),
+                    "file_path": str(file_path),
                     "author": doc_metadata.get("author", ""),
                     "creation_date": doc_metadata.get("creation_date", ""),
                     "indexed_at": datetime.utcnow().isoformat(),
