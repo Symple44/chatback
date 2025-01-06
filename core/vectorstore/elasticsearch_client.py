@@ -176,11 +176,11 @@ class ElasticsearchClient:
                     }
                 },
                 "_source": {
-                    "excludes": ["embedding"]  # Optimisation: ne pas retourner les vecteurs
+                    "includes": ["title", "content", "metadata", "embedding"]
                 }
             }
 
-            # Recherche textuelle avec meilleure analyse
+            # Recherche textuelle avec analyse française
             if query:
                 query_body["query"]["bool"]["must"].append({
                     "multi_match": {
@@ -188,23 +188,32 @@ class ElasticsearchClient:
                         "fields": ["title^2", "content"],
                         "type": "most_fields",
                         "operator": "and",
+                        "analyzer": "french_analyzer",
                         "fuzziness": "AUTO",
-                        "prefix_length": 2
+                        "prefix_length": 2,
+                        "boost": 1.0
                     }
                 })
 
-            # Filtres de métadonnées plus robustes
+            # Filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
-                    if value is not None:  # Ignore les valeurs None
-                        filter_clause = {
-                            "term": {
-                                f"metadata.{key}.keyword": value
+                    if value is not None:
+                        if isinstance(value, list):
+                            filter_clause = {
+                                "terms": {
+                                    f"metadata.{key}.keyword": value
+                                }
                             }
-                        }
+                        else:
+                            filter_clause = {
+                                "term": {
+                                    f"metadata.{key}.keyword": value
+                                }
+                            }
                         query_body["query"]["bool"]["filter"].append(filter_clause)
 
-            # Recherche vectorielle améliorée
+            # Recherche vectorielle
             if vector is not None:
                 if len(vector) != self.embedding_dim:
                     logger.warning(f"Dimension du vecteur incorrecte: {len(vector)}")
@@ -215,7 +224,8 @@ class ElasticsearchClient:
                             "script": {
                                 "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
                                 "params": {"query_vector": vector}
-                            }
+                            },
+                            "boost": 2.0  # Augmenter l'importance de la similarité vectorielle
                         }
                     })
 
@@ -225,36 +235,42 @@ class ElasticsearchClient:
                     response = await self.es.search(
                         index=f"{self.index_prefix}_documents",
                         body=query_body,
-                        request_timeout=30
+                        request_timeout=30,
+                        params={"request_cache": "true"}
                     )
                     break
                 except Exception as e:
                     if attempt == 2:
                         raise
+                    logger.warning(f"Tentative {attempt + 1} échouée: {e}")
                     await asyncio.sleep(1 * (2 ** attempt))
 
-            hits = response["hits"]["hits"]
+            # Traitement des résultats
+            hits = response.get("hits", {}).get("hits", [])
             results = []
             
             for hit in hits:
-                doc = {
-                    "title": hit["_source"]["title"],
-                    "content": hit["_source"]["content"],
-                    "score": hit["_score"],
-                    "metadata": hit["_source"].get("metadata", {}),
-                    "application": hit["_source"].get("metadata", {}).get("application", "unknown")
-                }
-                results.append(doc)
+                source = hit.get("_source", {})
+                score = hit.get("_score", 0.0)
+            
+                # Normalisation du score
+                normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else 0.0
+                results.append({
+                    "title": source.get("title", ""),
+                    "content": source.get("content", ""),
+                    "score": normalized_score,
+                    "metadata": source.get("metadata", {}),
+                    "application": source.get("metadata", {}).get("application", "unknown")
+                })
 
+            logger.info(f"Recherche effectuée sur {self.es.transport.hosts[0]['host']}: {len(results)} résultats")
+            metrics.increment_counter("successful_searches")
             return results
 
-
         except Exception as e:
-            logger.error(f"Erreur recherche documents: {e}", exc_info=True)
-            if "details" in vars(e):
-                logger.error(f"Détails de l'erreur ES: {e.details}")
-            metrics.increment_counter("search_errors")
-            return []
+            logger.error(f"Erreur recherche documents sur {self.es.transport.hosts[0]['host']}: {e}", exc_info=True)
+        metrics.increment_counter("search_errors")
+        return []
 
     async def delete_document(self, doc_id: str) -> bool:
         """Supprime un document par son ID."""

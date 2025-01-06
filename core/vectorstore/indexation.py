@@ -134,7 +134,7 @@ class ElasticsearchIndexManager:
                 raise
 
     def _get_documents_mapping(self) -> Dict:
-        """Retourne le mapping pour l'index documents."""
+        """Retourne le mapping optimisé pour l'index documents."""
         return {
             "settings": {
                 "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
@@ -148,7 +148,8 @@ class ElasticsearchIndexManager:
                                 "lowercase",
                                 "french_elision",
                                 "french_stop",
-                                "french_stemmer"
+                                "french_stemmer",
+                                "french_keywords"
                             ]
                         }
                     },
@@ -165,6 +166,10 @@ class ElasticsearchIndexManager:
                         "french_stemmer": {
                             "type": "stemmer",
                             "language": "light_french"
+                        },
+                        "french_keywords": {
+                            "type": "keyword_marker",
+                            "keywords": ["exemple", "important"]
                         }
                     }
                 }
