@@ -10,6 +10,7 @@ from .session_routes import router as session_router
 from .user_routes import router as user_router
 from .health_routes import router as health_router
 from .history_routes import router as history_router
+from .model_routes import router as model_router
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config import settings
@@ -22,6 +23,10 @@ tags_metadata = [
     {
         "name": "chat",
         "description": "Opérations de conversation et de traitement des messages",
+    },
+    {
+        "name": "models",
+        "description": "Gestion des modèes",
     },
     {
         "name": "sessions",
@@ -53,6 +58,11 @@ router.include_router(
     chat_router,
     #prefix="/chat",
     tags=["chat"]
+)
+router.include_router(
+    model_router,
+    #prefix="/models",
+    tags=["models"]
 )
 router.include_router(
     session_router,
