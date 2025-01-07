@@ -1,6 +1,7 @@
 # core/config/models.py
 from typing import Dict, List, Any
 from pydantic import BaseModel
+import torch
 
 # Configuration des modèles disponibles avec paramètres optimisés pour RTX 3090 24GB
 # Configuration des modèles d'embedding disponibles
@@ -20,7 +21,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
+            "torch_dtype": torch.float16,
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -42,7 +43,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
+            "torch_dtype": torch.float16,
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -64,7 +65,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
+            "torch_dtype": torch.float16,
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -157,7 +158,7 @@ AVAILABLE_MODELS = {
         "load_params": {
             "load_in_4bit": True,
             "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_compute_dtype": torch.float16,
             "bnb_4bit_quant_type": "nf4",
             "max_memory": {
                 "0": "22GiB",
@@ -180,7 +181,7 @@ AVAILABLE_MODELS = {
         "load_params": {
             "load_in_4bit": True,
             "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_compute_dtype": torch.float16,
             "bnb_4bit_quant_type": "nf4",
             "max_memory": {
                 "0": "22GiB",
@@ -204,7 +205,7 @@ AVAILABLE_MODELS = {
             "load_in_4bit": True,
             "use_flash_attention_2": True,
             "trust_remote_code": True,
-            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_compute_dtype": torch.float16,
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
@@ -226,7 +227,7 @@ AVAILABLE_MODELS = {
         "load_params": {
             "load_in_4bit": True,
             "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_compute_dtype": torch.float16,
             "bnb_4bit_quant_type": "nf4",
             "max_memory": {
                 "0": "22GiB",
