@@ -1,4 +1,3 @@
-# core/config/models.py
 from typing import Dict, List, Any
 from pydantic import BaseModel
 import torch
@@ -89,8 +88,13 @@ SUMMARIZER_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["summarization"],
         "load_params": {
-            "load_in_4bit": True,
             "device_map": "auto",
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
@@ -110,8 +114,13 @@ SUMMARIZER_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["summarization"],
         "load_params": {
-            "load_in_4bit": True,
             "device_map": "auto",
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
@@ -131,8 +140,13 @@ SUMMARIZER_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["summarization"],
         "load_params": {
-            "load_in_4bit": True,
             "device_map": "auto",
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
@@ -156,10 +170,15 @@ AVAILABLE_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["chat", "instruction"],
         "load_params": {
-            "load_in_4bit": True,
-            "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": torch.float16,
-            "bnb_4bit_quant_type": "nf4",
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
+            "attn_implementation": "flash_attention_2",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
@@ -179,10 +198,15 @@ AVAILABLE_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["chat", "instruction", "function_calling"],
         "load_params": {
-            "load_in_4bit": True,
-            "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": torch.float16,
-            "bnb_4bit_quant_type": "nf4",
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
+            "attn_implementation": "flash_attention_2",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
@@ -202,10 +226,15 @@ AVAILABLE_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["chat", "instruction"],
         "load_params": {
-            "load_in_4bit": True,
-            "use_flash_attention_2": True,
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
             "trust_remote_code": True,
-            "bnb_4bit_compute_dtype": torch.float16,
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
@@ -225,10 +254,15 @@ AVAILABLE_MODELS = {
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["chat", "instruction", "function_calling"],
         "load_params": {
-            "load_in_4bit": True,
-            "use_flash_attention_2": True,
-            "bnb_4bit_compute_dtype": torch.float16,
-            "bnb_4bit_quant_type": "nf4",
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "quantization_config": {
+                "load_in_4bit": True,
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            },
+            "attn_implementation": "flash_attention_2",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
