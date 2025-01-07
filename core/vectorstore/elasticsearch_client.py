@@ -151,29 +151,32 @@ class ElasticsearchClient:
         min_score: float = 0.1
     ) -> List[Dict]:
         """
-        Recherche des documents.
+        Recherche des documents en combinant recherche textuelle et vectorielle.
         
         Args:
             query: Requête textuelle
-            vector: Vecteur de recherche optionnel
+            vector: Vecteur d'embedding pour la recherche sémantique
             metadata_filter: Filtres sur les métadonnées
             size: Nombre maximum de résultats
             min_score: Score minimum pour les résultats
+            
+        Returns:
+            Liste des documents pertinents avec leurs scores
         """
         try:
             if not self.initialized:
                 await self.initialize()
 
-            # Construction de la requête de base
+            # Construction de la requête principale
             query_body = {
                 "size": size,
                 "_source": {
-                    "includes": ["title", "content", "metadata"]
+                    "includes": ["title", "content", "metadata", "processed_date"]
                 }
             }
 
-            # Construction de la partie bool
-            bool_query = {
+            # Partie textuelle de la requête
+            text_query = {
                 "bool": {
                     "must": [],
                     "should": [],
@@ -181,100 +184,115 @@ class ElasticsearchClient:
                 }
             }
 
-            # Recherche textuelle
+            # Configuration de la recherche textuelle si une requête est fournie
             if query and query.strip():
-                bool_query["bool"]["must"].append({
-                    "multi_match": {
-                        "query": query,
-                        "fields": ["title^2", "content"],
-                        "type": "best_fields",
-                        "operator": "and",
-                        "analyzer": "french_analyzer"
+                # Recherche exacte sur les phrases importantes
+                text_query["bool"]["should"].extend([
+                    {
+                        "match_phrase": {
+                            "title": {
+                                "query": query,
+                                "boost": 3.0,
+                                "slop": 1
+                            }
+                        }
+                    },
+                    {
+                        "match_phrase": {
+                            "content": {
+                                "query": query,
+                                "boost": 2.0,
+                                "slop": 2
+                            }
+                        }
+                    }
+                ])
+
+                # Recherche floue sur les mots individuels
+                text_query["bool"]["should"].extend([
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "fields": ["title^2", "content"],
+                            "type": "cross_fields",
+                            "operator": "and",
+                            "analyzer": "french_analyzer",
+                            "minimum_should_match": "75%",
+                            "tie_breaker": 0.3
+                        }
+                    }
+                ])
+
+                # Boost sur les termes exacts
+                text_query["bool"]["should"].append({
+                    "terms": {
+                        "content.keyword": query.lower().split(),
+                        "boost": 1.5
                     }
                 })
 
-            # Filtres de métadonnées
+            # Ajout des filtres de métadonnées
             if metadata_filter:
                 for key, value in metadata_filter.items():
                     if value is not None:
                         if isinstance(value, list):
-                            bool_query["bool"]["filter"].append({
+                            text_query["bool"]["filter"].append({
                                 "terms": {f"metadata.{key}.keyword": value}
                             })
                         else:
-                            bool_query["bool"]["filter"].append({
+                            text_query["bool"]["filter"].append({
                                 "term": {f"metadata.{key}.keyword": value}
                             })
 
-            # Recherche vectorielle si un vecteur est fourni
+            # Configuration de la recherche vectorielle si un vecteur est fourni
             if vector is not None and len(vector) == self.embedding_dim:
-                logger.debug("Ajout de la recherche vectorielle")
-                vector_query = {
+                # Script de scoring combiné
+                script_score = {
                     "script_score": {
-                        "query": {"match_all": {}},
+                        "query": text_query if text_query["bool"]["should"] else {"match_all": {}},
                         "script": {
                             "source": """
-                                int expectedDim = params.embedding_dim;
+                                // Score de similarité vectorielle
+                                double vector_score = cosineSimilarity(params.query_vector, 'embedding') + 1.0;
                                 
-                                // Vérification de base
-                                if (params.query_vector == null || 
-                                    doc['embedding'] == null || 
-                                    params.query_vector.length != expectedDim || 
-                                    doc['embedding'].size() != expectedDim
-                                ) {
-                                    return 0.0;
+                                // Score textuel normalisé
+                                double text_score = _score;
+                                
+                                // Normalisation du score textuel
+                                if (text_score > 0) {
+                                    text_score = Math.log1p(text_score);
                                 }
                                 
-                                // Calcul du produit scalaire et des normes
-                                double dotProduct = 0.0;
-                                double normA = 0.0;
-                                double normB = 0.0;
+                                // Combinaison des scores avec pondération
+                                double combined_score = (vector_score * 0.6 + text_score * 0.4);
                                 
-                                for (int i = 0; i < expectedDim; i++) {
-                                    double a = ((Number) params.query_vector[i]).doubleValue();
-                                    double b = ((Number) doc['embedding'].get(i)).doubleValue();
-                                    
-                                    dotProduct += a * b;
-                                    normA += a * a;
-                                    normB += b * b;
+                                // Pénalité pour les documents sans embedding
+                                if (doc['embedding'].size() == 0) {
+                                    combined_score *= 0.8;
                                 }
                                 
-                                // Protection contre les vecteurs nuls
-                                if (normA == 0.0 || normB == 0.0) {
-                                    return 0.0;
-                                }
-                                
-                                // Calcul de la similarité cosinus
-                                double cosineSimilarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-                                
-                                // Normalisation à [0, 1]
-                                return (cosineSimilarity + 1.0) / 2.0;
+                                return combined_score;
                             """,
                             "params": {
-                                "query_vector": vector,
-                                "embedding_dim": self.embedding_dim  # Utilisez la dimension de votre configuration
+                                "query_vector": vector
                             }
                         }
                     }
                 }
-                
-                # Si nous avons déjà une recherche textuelle, combinons les deux
-                if bool_query["bool"]["must"]:
-                    query_body["query"] = {
-                        "bool": {
-                            "should": [
-                                bool_query,
-                                vector_query
-                            ],
-                            "minimum_should_match": 1
-                        }
-                    }
-                else:
-                    query_body["query"] = vector_query
+                query_body["query"] = script_score
             else:
-                query_body["query"] = bool_query
+                # Si pas de vecteur, utiliser uniquement la recherche textuelle
+                if text_query["bool"]["should"]:
+                    text_query["bool"]["minimum_should_match"] = 1
+                    query_body["query"] = text_query
+                else:
+                    query_body["query"] = {"match_all": {}}
 
-            logger.debug(f"Query body: {json.dumps(query_body, indent=2)}")
+            # Ajout du tri secondaire par date de traitement
+            query_body["sort"] = [
+                "_score",
+                {"processed_date": {"order": "desc"}}
+            ]
 
             # Exécution de la recherche avec retry
             for attempt in range(3):
@@ -282,30 +300,43 @@ class ElasticsearchClient:
                     response = await self.es.search(
                         index=f"{self.index_prefix}_documents",
                         body=query_body,
-                        request_timeout=30,
-                        params={"request_cache": "true"}
+                        request_timeout=30
                     )
 
                     hits = response.get("hits", {}).get("hits", [])
-                    results = []
+                    max_score = response["hits"]["max_score"] or 1.0
 
+                    results = []
                     for hit in hits:
-                        source = hit.get("_source", {})
-                        score = hit.get("_score", 0.0)
+                        source = hit["_source"]
+                        raw_score = hit["_score"]
                         
                         # Normalisation du score entre 0 et 1
-                        normalized_score = min(max(score - 1.0, 0.0) / 1.0, 1.0) if score > 1.0 else score
+                        normalized_score = raw_score / max_score if max_score > 0 else 0
+                        
+                        # Ajustement du score en fonction de la longueur du contenu
+                        content_length = len(source.get("content", ""))
+                        length_penalty = min(1.0, max(0.5, content_length / 1000))
+                        
+                        final_score = normalized_score * length_penalty
+                        
+                        # Ne garder que les résultats au-dessus du score minimum
+                        if final_score >= min_score:
+                            results.append({
+                                "title": source.get("title", ""),
+                                "content": source.get("content", ""),
+                                "score": final_score,
+                                "metadata": source.get("metadata", {}),
+                                "application": source.get("metadata", {}).get("application", "unknown"),
+                                "processed_date": source.get("processed_date")
+                            })
 
-                        results.append({
-                            "title": source.get("title", ""),
-                            "content": source.get("content", ""),
-                            "score": normalized_score,
-                            "metadata": source.get("metadata", {}),
-                            "application": source.get("metadata", {}).get("application", "unknown")
-                        })
-
+                    # Tri final par score
+                    results.sort(key=lambda x: x["score"], reverse=True)
+                    
                     logger.info(f"Recherche réussie: {len(results)} résultats trouvés")
                     metrics.increment_counter("successful_searches")
+                    
                     return results
 
                 except Exception as e:
@@ -315,17 +346,13 @@ class ElasticsearchClient:
                     if attempt == 2:  # Dernière tentative
                         raise
                         
-                    # Attente exponentielle entre les tentatives
                     await asyncio.sleep(1 * (2 ** attempt))
 
         except Exception as e:
-            logger.error(
-                f"Erreur recherche documents: {str(e)}", 
-                exc_info=True
-            )
+            logger.error(f"Erreur recherche documents: {str(e)}", exc_info=True)
             metrics.increment_counter("search_errors")
             return []
-
+        
     async def delete_document(self, doc_id: str) -> bool:
         """Supprime un document par son ID."""
         try:

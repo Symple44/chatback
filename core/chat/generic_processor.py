@@ -55,27 +55,40 @@ class GenericProcessor(BaseProcessor):
                 query=query,
                 vector=query_vector,
                 metadata_filter=request.get("metadata"),
-                size=settings.MAX_RELEVANT_DOCS
+                size=settings.MAX_RELEVANT_DOCS,
+                min_score=0.3
             )
+            
+            # Filtrage des documents par score
+            filtered_docs = [
+                doc for doc in relevant_docs 
+                if doc["score"] >= settings.CONFIDENCE_THRESHOLD
+            ]
+
+            if filtered_docs:
+                logger.info(f"Documents trouvés: {len(filtered_docs)}, scores: {[doc['score'] for doc in filtered_docs]}")
+            else:
+                logger.warning("Aucun document pertinent trouvé")
             
             #context_summary = await self.summarizer.summarize_documents(relevant_docs)
             context_summary = None
-            if relevant_docs:
+            if filtered_docs:
                 try:
-                    context_summary = await self.model.summarizer.summarize_documents(relevant_docs)
+                    context_summary = await self.model.summarizer.summarize_documents(filtered_docs)
                     logger.debug(f"Résumé généré: {context_summary}")
                 except Exception as e:
                     logger.error(f"Erreur génération résumé: {e}")
                     context_summary = {
                         "structured_summary": "\n".join(
-                            doc.get("content", "")[:200] for doc in relevant_docs[:2]
+                            f"Document {i+1}: {doc.get('content', '')[:200]}"
+                            for i, doc in enumerate(filtered_docs[:2])
                         )
                     }
             
             # Construction du prompt via PromptSystem
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
-                context_docs=relevant_docs,
+                context_docs=filtered_docs,
                 context_summary=context_summary,
                 conversation_history=context.get("history", []) if context else None,
                 language=request.get("language", "fr")
@@ -109,12 +122,12 @@ class GenericProcessor(BaseProcessor):
             
             response = ChatResponse(
                 response=response_text,
-                session_id=session_id,  # On utilise le session_id de la request
+                session_id=session_id, 
                 conversation_id=str(uuid.uuid4()),
                 documents=[
                     DocumentReference(
                         title=doc.get("title", ""),
-                        page=doc.get("page", 1),
+                        page=doc.get("metadata", {}).get("page", 1),
                         score=float(doc.get("score", 0.0)),
                         content=doc.get("content", ""),
                         metadata=doc.get("metadata", {})
@@ -126,10 +139,12 @@ class GenericProcessor(BaseProcessor):
                 tokens_details=model_response.get("tokens_used", {}),
                 metadata={
                     "processor_type": "generic",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "context_used": len(relevant_docs),
-                    "model_version": settings.MODEL_NAME,
-                    "prompt_messages": messages
+                    "documents_found": len(filtered_docs),
+                    "context_quality": sum(doc["score"] for doc in filtered_docs) / len(filtered_docs) if filtered_docs else 0,
+                    "processing_info": {
+                        "embedding_generated": query_vector is not None,
+                        "context_summarized": context_summary is not None,
+                    }
                 }
             )
             
