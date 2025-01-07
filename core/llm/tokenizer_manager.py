@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from core.config import settings
+from core.core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 
