@@ -5,7 +5,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
-    PreTrainedModel
+    PreTrainedModel,
+    BitsAndBytesConfig  
 )
 from sentence_transformers import SentenceTransformer
 import logging
@@ -97,11 +98,32 @@ class ModelLoader:
 
     async def _load_chat_model(self, model_name: str, config: Dict) -> LoadedModel:
         """Charge un modèle de chat."""
-        load_params = config["load_params"]
+
+        # Copie exacte des load_params de models.py
+        load_params = config["load_params"].copy()
         load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
 
-        # Chargement avec gestion de la mémoire optimisée
-        with torch.cuda.amp.autocast(enabled=True):
+        # Conversion explicite du dtype si nécessaire
+        if isinstance(load_params.get('bnb_4bit_compute_dtype'), str):
+            load_params['bnb_4bit_compute_dtype'] = torch.float16
+
+        # Création du BitsAndBytesConfig en respectant les paramètres existants
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=load_params.get('load_in_4bit', True),
+            bnb_4bit_compute_dtype=load_params.get('bnb_4bit_compute_dtype', torch.float16),
+            bnb_4bit_quant_type=load_params.get('bnb_4bit_quant_type', 'nf4'),
+            bnb_4bit_use_double_quant=load_params.get('bnb_4bit_use_double_quant', True)
+        )
+        
+        # Ajouter la configuration de quantification
+        load_params['quantization_config'] = quantization_config
+
+        # Gestion de l'implémentation de l'attention
+        if load_params.get('use_flash_attention_2'):
+            load_params['attn_implementation'] = 'flash_attention_2'
+
+        # Chargement avec gestion de la précision moderne
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
             model = AutoModelForCausalLM.from_pretrained(
                 config["path"],
                 **load_params
