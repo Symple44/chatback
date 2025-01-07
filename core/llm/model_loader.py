@@ -1,159 +1,253 @@
 # core/llm/model_loader.py
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional, Any, List
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from core.config import settings
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    PreTrainedModel
+)
+from sentence_transformers import SentenceTransformer
+import logging
+from enum import Enum
+from dataclasses import dataclass
+
+from core.config.models import (
+    AVAILABLE_MODELS,
+    EMBEDDING_MODELS,
+    SUMMARIZER_MODELS,
+    MODEL_PERFORMANCE_CONFIGS,
+    EMBEDDING_PERFORMANCE_CONFIGS,
+    SUMMARIZER_PERFORMANCE_CONFIGS
+)
 from core.utils.logger import get_logger
 
 logger = get_logger("model_loader")
 
+class ModelType(Enum):
+    CHAT = "chat"
+    EMBEDDING = "embedding"
+    SUMMARIZER = "summarizer"
+
+@dataclass
+class LoadedModel:
+    """Représente un modèle chargé avec ses métadonnées."""
+    model: PreTrainedModel
+    tokenizer: Optional[AutoTokenizer]
+    model_type: ModelType
+    model_name: str
+    config: Dict
+    loaded_at: float
+    device: torch.device
+
 class ModelLoader:
-    """Gestionnaire de chargement des modèles."""
+    """Gestionnaire de chargement des modèles avec support multi-type."""
     
     def __init__(self, cuda_manager, tokenizer_manager):
         self.cuda_manager = cuda_manager
         self.tokenizer_manager = tokenizer_manager
-        self.current_model_name = None
         self.loaded_models = {}
-        self.max_loaded_models = 2  # Nombre maximum de modèles chargés simultanément
+        self.max_loaded_models = {
+            ModelType.CHAT: 1,  # Un seul modèle principal
+            ModelType.EMBEDDING: 2,  # Max 2 modèles d'embedding
+            ModelType.SUMMARIZER: 1  # Un seul summarizer
+        }
         
-    async def load_model(self, model_name: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
-        """
-        Charge ou récupère un modèle et son tokenizer.
-        
-        Args:
-            model_name: Nom du modèle à charger
-            
-        Returns:
-            Tuple[AutoModelForCausalLM, AutoTokenizer]: Le modèle et son tokenizer
-        """
+    async def load_model(
+        self,
+        model_name: str,
+        model_type: ModelType,
+        force_reload: bool = False
+    ) -> LoadedModel:
+        """Charge ou récupère un modèle selon son type."""
         try:
             # Vérifier si le modèle est déjà chargé
-            if model_name in self.loaded_models:
+            model_key = f"{model_type.value}_{model_name}"
+            if model_key in self.loaded_models and not force_reload:
                 logger.info(f"Utilisation du modèle déjà chargé: {model_name}")
-                return self.loaded_models[model_name]
-            
-            # Libération de mémoire si nécessaire
-            if len(self.loaded_models) >= self.max_loaded_models:
-                await self._cleanup_oldest_model()
-            
-            logger.info(f"Chargement du nouveau modèle: {model_name}")
-            
-            # Obtention des paramètres optimisés pour le modèle
-            load_params = self._get_model_config(model_name)
-            
-            # Chargement du modèle avec gestion de la mémoire
-            is_mistral = "mistral" in model_name.lower()
-            with torch.amp.autocast('cuda', enabled=settings.USE_FP16):
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    revision=settings.MODEL_REVISION,
-                    **load_params
-                )
+                return self.loaded_models[model_key]
 
-            # Configuration post-chargement
-            if settings.USE_FP16:
-                model = model.half()
-            model.eval()  # Mode évaluation
-            
-            # Stockage du modèle
-            self.loaded_models[model_name] = (model, self.tokenizer_manager.tokenizer)
-            self.current_model_name = model_name
-            
-            # Log des informations de device et mémoire
-            device_info = {
-                "model_device": next(model.parameters()).device,
-                "dtype": next(model.parameters()).dtype,
-                "memory_stats": self.cuda_manager.memory_stats
-            }
-            logger.info("État du modèle après chargement:")
-            for key, value in device_info.items():
-                logger.info(f"  {key}: {value}")
-            
-            return model, self.tokenizer_manager.tokenizer
-            
+            # Récupérer la configuration selon le type
+            config = self._get_model_config(model_name, model_type)
+            if not config:
+                raise ValueError(f"Configuration non trouvée pour {model_name}")
+
+            # Libérer de la mémoire si nécessaire
+            await self._cleanup_for_model_type(model_type)
+
+            # Charger le modèle selon son type
+            if model_type == ModelType.CHAT:
+                loaded_model = await self._load_chat_model(model_name, config)
+            elif model_type == ModelType.EMBEDDING:
+                loaded_model = await self._load_embedding_model(model_name, config)
+            elif model_type == ModelType.SUMMARIZER:
+                loaded_model = await self._load_summarizer_model(model_name, config)
+            else:
+                raise ValueError(f"Type de modèle non supporté: {model_type}")
+
+            # Stocker le modèle chargé
+            self.loaded_models[model_key] = loaded_model
+            logger.info(f"Modèle {model_name} ({model_type.value}) chargé avec succès")
+
+            return loaded_model
+
         except Exception as e:
             logger.error(f"Erreur chargement modèle {model_name}: {e}")
             raise
 
-    def _get_model_config(self, model_name: str) -> Dict:
-        """
-        Obtient la configuration optimale pour le chargement du modèle.
-        """
-        is_mistral = "mistral" in model_name.lower()
+    async def _load_chat_model(self, model_name: str, config: Dict) -> LoadedModel:
+        """Charge un modèle de chat."""
+        load_params = config["load_params"]
+        load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
+
+        # Chargement avec gestion de la mémoire optimisée
+        with torch.cuda.amp.autocast(enabled=True):
+            model = AutoModelForCausalLM.from_pretrained(
+                config["path"],
+                **load_params
+            )
+            
+            if not self.tokenizer_manager.tokenizer:
+                self.tokenizer_manager.tokenizer = AutoTokenizer.from_pretrained(
+                    config["path"],
+                    use_fast=True
+                )
+
+        # Configuration post-chargement
+        if config.get("quantization"):
+            model = self._apply_quantization(model, config["quantization"])
         
-        # Configuration de base commune
-        config = {
-            "device_map": "auto",
-            "torch_dtype": torch.bfloat16 if is_mistral else torch.float16,
-            "low_cpu_mem_usage": True,
-            "trust_remote_code": True
-        }
+        model.eval()
+        model.requires_grad_(False)
 
-        # Configuration de la mémoire
-        if self.cuda_manager.config.max_memory:
-            config["max_memory"] = self.cuda_manager.config.max_memory
+        return LoadedModel(
+            model=model,
+            tokenizer=self.tokenizer_manager.tokenizer,
+            model_type=ModelType.CHAT,
+            model_name=model_name,
+            config=config,
+            loaded_at=torch.cuda.current_stream().record_event(),
+            device=next(model.parameters()).device
+        )
 
-        # Configuration de la quantization
-        if settings.USE_8BIT:
-            config.update({
-                "load_in_8bit": True,
-                "llm_int8_enable_fp32_cpu_offload": True
-            })
-        elif settings.USE_4BIT:
-            config.update({
-                "load_in_4bit": True,
-                "bnb_4bit_quant_type": settings.BNB_4BIT_QUANT_TYPE,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_use_double_quant": True
-            })
-
-        # Configuration du flash attention pour Mistral
-        if is_mistral and settings.USE_FLASH_ATTENTION:
-            config["attn_implementation"] = "flash_attention_2"
-
-        # Ajout des tokens spéciaux depuis le tokenizer manager
-        config.update({
-            "pad_token_id": self.tokenizer_manager.tokenizer.pad_token_id,
-            "eos_token_id": self.tokenizer_manager.tokenizer.eos_token_id
-        })
-
-        return config
-            
-    async def _cleanup_oldest_model(self):
-        """
-        Libère la mémoire en supprimant le plus ancien modèle chargé.
-        """
-        if not self.loaded_models:
-            return
-            
-        # Trouve le modèle le plus ancien (différent du modèle actuel)
-        models_to_remove = [name for name in self.loaded_models.keys() 
-                          if name != self.current_model_name]
+    async def _load_embedding_model(self, model_name: str, config: Dict) -> LoadedModel:
+        """Charge un modèle d'embedding."""
+        device = self.cuda_manager.current_device
         
-        if models_to_remove:
-            oldest_model = models_to_remove[0]
-            model, _ = self.loaded_models.pop(oldest_model)
-            
-            # Nettoyage explicite
-            model.cpu()  # Déplacer sur CPU avant suppression
-            del model
-            torch.cuda.empty_cache()
-            logger.info(f"Modèle libéré: {oldest_model}")
-            
-    async def cleanup(self):
-        """
-        Nettoie tous les modèles chargés.
-        """
+        model = SentenceTransformer(
+            config["path"],
+            device=str(device)
+        )
+
+        # Optimisations pour l'inférence
+        model.eval()
+        if config.get("quantization"):
+            model = self._apply_quantization(model, config["quantization"])
+
+        return LoadedModel(
+            model=model,
+            tokenizer=None,  # SentenceTransformer gère son propre tokenizer
+            model_type=ModelType.EMBEDDING,
+            model_name=model_name,
+            config=config,
+            loaded_at=torch.cuda.current_stream().record_event(),
+            device=device
+        )
+
+    async def _load_summarizer_model(self, model_name: str, config: Dict) -> LoadedModel:
+        """Charge un modèle de résumé."""
+        load_params = config["load_params"]
+        load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
+
+        with torch.cuda.amp.autocast(enabled=True):
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                config["path"],
+                **load_params
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                config["path"],
+                use_fast=True
+            )
+
+        # Configuration post-chargement
+        if config.get("quantization"):
+            model = self._apply_quantization(model, config["quantization"])
+        
+        model.eval()
+        model.requires_grad_(False)
+
+        return LoadedModel(
+            model=model,
+            tokenizer=tokenizer,
+            model_type=ModelType.SUMMARIZER,
+            model_name=model_name,
+            config=config,
+            loaded_at=torch.cuda.current_stream().record_event(),
+            device=next(model.parameters()).device
+        )
+
+    def _get_model_config(self, model_name: str, model_type: ModelType) -> Optional[Dict]:
+        """Récupère la configuration d'un modèle selon son type."""
+        if model_type == ModelType.CHAT:
+            return AVAILABLE_MODELS.get(model_name)
+        elif model_type == ModelType.EMBEDDING:
+            return EMBEDDING_MODELS.get(model_name)
+        elif model_type == ModelType.SUMMARIZER:
+            return SUMMARIZER_MODELS.get(model_name)
+        return None
+
+    def _get_performance_config(self, model_name: str, model_type: ModelType) -> Dict:
+        """Récupère la configuration de performance d'un modèle."""
+        if model_type == ModelType.CHAT:
+            return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
+        elif model_type == ModelType.EMBEDDING:
+            return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
+        elif model_type == ModelType.SUMMARIZER:
+            return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
+        return {}
+
+    async def _cleanup_for_model_type(self, model_type: ModelType):
+        """Nettoie la mémoire pour un type de modèle si nécessaire."""
+        type_models = [k for k, v in self.loaded_models.items() 
+                      if k.startswith(model_type.value)]
+        
+        if len(type_models) >= self.max_loaded_models[model_type]:
+            oldest_model = min(
+                type_models,
+                key=lambda k: self.loaded_models[k].loaded_at
+            )
+            await self._unload_model(oldest_model)
+
+    async def _unload_model(self, model_key: str):
+        """Décharge un modèle de la mémoire."""
         try:
-            for model_name in list(self.loaded_models.keys()):
-                model, _ = self.loaded_models.pop(model_name)
-                model.cpu()
-                del model
-                
+            model = self.loaded_models.pop(model_key)
+            if hasattr(model.model, 'cpu'):
+                model.model.cpu()
+            del model.model
+            if model.tokenizer:
+                del model.tokenizer
             torch.cuda.empty_cache()
-            self.current_model_name = None
+            logger.info(f"Modèle {model_key} déchargé")
+        except Exception as e:
+            logger.error(f"Erreur déchargement modèle {model_key}: {e}")
+
+    def _apply_quantization(self, model: PreTrainedModel, quantization: str) -> PreTrainedModel:
+        """Applique la quantization à un modèle."""
+        try:
+            if quantization == "bitsandbytes-4bit":
+                model = model.half()  # Conversion en FP16
+            return model
+        except Exception as e:
+            logger.warning(f"Échec quantization {quantization}: {e}")
+            return model
+
+    async def cleanup(self):
+        """Nettoie toutes les ressources."""
+        try:
+            for model_key in list(self.loaded_models.keys()):
+                await self._unload_model(model_key)
+            torch.cuda.empty_cache()
             logger.info("Tous les modèles ont été nettoyés")
         except Exception as e:
-            logger.error(f"Erreur lors du nettoyage des modèles: {e}")
-            raise
+            logger.error(f"Erreur nettoyage modèles: {e}")

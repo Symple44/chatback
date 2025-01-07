@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import uuid
 import json
 import shutil
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,13 +18,13 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# Import internes avant setup
 from core.config import settings
 from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
 from core.llm.cuda_manager import CUDAManager
 from core.storage.google_drive import GoogleDriveManager
+from core.llm.model_loader import ModelType
 
 logger = get_logger("main")
 
@@ -35,6 +35,8 @@ class CustomJSONEncoder(json.JSONEncoder):
             return obj.isoformat()
         if isinstance(obj, uuid.UUID):
             return str(obj)
+        if isinstance(obj, ModelType):
+            return obj.value
         return super().default(obj)
 
 class CustomJSONResponse(JSONResponse):
@@ -99,10 +101,30 @@ class ComponentManager:
                 self._components["es_client"] = es_client
                 logger.info("Elasticsearch initialisé")
 
+                # CUDA Manager
+                cuda_manager = CUDAManager()
+                await cuda_manager.initialize()
+                self._components["cuda_manager"] = cuda_manager
+                logger.info("CUDA Manager initialisé")
+
+                # Tokenizer Manager
+                from core.llm.tokenizer_manager import TokenizerManager
+                tokenizer_manager = TokenizerManager()
+                await tokenizer_manager.initialize()
+                self._components["tokenizer_manager"] = tokenizer_manager
+                logger.info("Tokenizer Manager initialisé")
+
+                # Model Manager
+                from core.llm.model_manager import ModelManager
+                model_manager = ModelManager(cuda_manager, tokenizer_manager)
+                await model_manager.initialize()
+                self._components["model_manager"] = model_manager
+                logger.info("Model Manager initialisé")
+
                 # Modèle LLM
                 from core.llm.model import ModelInference
                 model = ModelInference()
-                await model.initialize()  
+                await model.initialize()
                 self._components["model"] = model
                 logger.info("Modèle LLM initialisé")
 
@@ -132,9 +154,8 @@ class ComponentManager:
                 raise
 
     async def sync_drive_documents(self):
-        """Synchronise les documents depuis Google Drive et le système de fichiers local."""
+        """Synchronise les documents."""
         try:
-            # 1. Synchronisation Google Drive si configuré
             downloaded_files = set()
             if "drive_manager" in self._components:
                 downloaded_files = await self._components["drive_manager"].sync_drive_folder(
@@ -142,7 +163,6 @@ class ComponentManager:
                     save_path="documents"
                 )
 
-            # 2. Indexation locale pour tous les fichiers
             indexed_count = 0
             for app_dir in Path("documents").iterdir():
                 if not app_dir.is_dir():
@@ -151,10 +171,9 @@ class ComponentManager:
                 app_name = app_dir.name
                 logger.info(f"Traitement de l'application: {app_name}")
 
-                # Parcours des PDFs de l'application
                 for pdf_path in app_dir.glob("*.pdf"):
                     try:
-                        if str(pdf_path) not in downloaded_files:  # Éviter la double indexation
+                        if str(pdf_path) not in downloaded_files:
                             success = await self._components["pdf_processor"].index_pdf(
                                 str(pdf_path),
                                 metadata={
@@ -173,7 +192,7 @@ class ComponentManager:
             return indexed_count
 
         except Exception as e:
-            logger.error(f"Erreur synchronisation: {e}", exc_info=True)
+            logger.error(f"Erreur synchronisation: {e}")
             return 0
 
     async def cleanup(self):
@@ -197,16 +216,17 @@ class ComponentManager:
 async def setup_environment():
     """Configure l'environnement complet avant le démarrage."""
     try:
-        # Configuration CUDA
-        cuda_manager = CUDAManager()
-        await cuda_manager.initialize()
-        logger.info("Configuration CUDA initialisée")
-
         # Configuration des bibliothèques numériques
-        os.environ["MKL_NUM_THREADS"] = os.getenv("MKL_NUM_THREADS", "16")
-        os.environ["NUMEXPR_NUM_THREADS"] = os.getenv("NUMEXPR_NUM_THREADS", "16")
-        os.environ["OMP_NUM_THREADS"] = os.getenv("OMP_NUM_THREADS", "16")
-        os.environ["OPENBLAS_NUM_THREADS"] = os.getenv("OPENBLAS_NUM_THREADS", "16")
+        os.environ.update({
+            "MKL_NUM_THREADS": str(settings.MKL_NUM_THREADS),
+            "NUMEXPR_NUM_THREADS": str(settings.NUMEXPR_NUM_THREADS),
+            "OMP_NUM_THREADS": str(settings.OMP_NUM_THREADS),
+            "OPENBLAS_NUM_THREADS": str(settings.OPENBLAS_NUM_THREADS),
+            "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF,
+            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD).lower(),
+            "CUDA_MODULE_LOADING": settings.CUDA_MODULE_LOADING,
+            "CUDA_VISIBLE_DEVICES": str(settings.CUDA_VISIBLE_DEVICES)
+        })
         
         # Création des répertoires
         REQUIRED_DIRS = [
@@ -216,8 +236,10 @@ async def setup_environment():
             "model_cache",
             "logs",
             "data",
-            "temp"
+            "temp",
+            str(settings.MODELS_DIR)
         ]
+        
         for dir_name in REQUIRED_DIRS:
             path = Path(dir_name)
             path.mkdir(parents=True, exist_ok=True)
@@ -257,7 +279,12 @@ async def lifespan(app: FastAPI):
 
         # Import et ajout des routes
         from api.routes.router import router as api_router
+        from api.routes.chat_routes import router as chat_router
+        from api.routes.model_routes import router as model_router
+        
         app.include_router(api_router)
+        app.include_router(chat_router)
+        app.include_router(model_router)
         
         if settings.GOOGLE_DRIVE_SYNC_INTERVAL:
             asyncio.create_task(periodic_sync())
@@ -311,14 +338,28 @@ if static_path.exists():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Gestionnaire d'erreurs global."""
+    """Gestionnaire d'erreurs global avec gestion spéciale CUDA."""
     error_id = str(uuid.uuid4())
-    logger.error(f"Erreur [{error_id}]: {exc}", exc_info=True)
+    
+    # Gestion spécifique selon le type d'erreur
+    if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
+        logger.error(f"Erreur CUDA [{error_id}]: {exc}", exc_info=True)
+        if hasattr(components, 'cuda_manager'):
+            await components.cuda_manager.cleanup_memory()
+        status_code = 503
+        detail = "Ressources GPU temporairement indisponibles"
+    else:
+        logger.error(f"Erreur [{error_id}]: {exc}", exc_info=True)
+        status_code = 500
+        detail = str(exc)
+
+    metrics.increment_counter("errors")
+    
     return CustomJSONResponse(
-        status_code=500,
+        status_code=status_code,
         content={
             "error_id": error_id,
-            "detail": str(exc),
+            "detail": detail,
             "timestamp": datetime.utcnow().isoformat()
         }
     )

@@ -1,16 +1,25 @@
 # core/llm/model_manager.py
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Any
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from datetime import datetime
 import psutil
 import json
 from pathlib import Path
+import asyncio
 
 from core.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from .model_loader import ModelLoader
+from .model_loader import ModelLoader, ModelType, LoadedModel
+from .cuda_manager import ModelPriority
+from core.config.models import (
+    AVAILABLE_MODELS,
+    EMBEDDING_MODELS,
+    SUMMARIZER_MODELS,
+    MODEL_PERFORMANCE_CONFIGS,
+    EMBEDDING_PERFORMANCE_CONFIGS,
+    SUMMARIZER_PERFORMANCE_CONFIGS
+)
 
 logger = get_logger("model_manager")
 
@@ -27,6 +36,13 @@ class ModelManager:
         self.model_loader = None
         self._initialized = False
         self.model_info = {}
+        
+        # États actuels des modèles
+        self.current_models = {
+            ModelType.CHAT: None,
+            ModelType.EMBEDDING: None,
+            ModelType.SUMMARIZER: None
+        }
         
         # Configuration
         self.models_dir = Path(settings.MODEL_DIR)
@@ -47,8 +63,11 @@ class ModelManager:
                 self.tokenizer_manager
             )
             
-            # Chargement des états des modèles si existe
+            # Chargement des états des modèles
             await self._load_model_states()
+            
+            # Chargement des modèles par défaut
+            await self._load_default_models()
             
             self._initialized = True
             logger.info("ModelManager initialisé avec succès")
@@ -57,169 +76,163 @@ class ModelManager:
             logger.error(f"Erreur initialisation ModelManager: {e}")
             raise
 
-    async def load_model(
+    async def _load_default_models(self):
+        """Charge les modèles par défaut pour chaque type."""
+        try:
+            # Modèle de chat principal
+            self.current_models[ModelType.CHAT] = await self.model_loader.load_model(
+                settings.MODEL_NAME,
+                ModelType.CHAT
+            )
+
+            # Modèle d'embedding
+            self.current_models[ModelType.EMBEDDING] = await self.model_loader.load_model(
+                settings.EMBEDDING_MODEL,
+                ModelType.EMBEDDING
+            )
+
+            # Modèle de summarization
+            if settings.MODEL_NAME_SUMMARIZER:
+                self.current_models[ModelType.SUMMARIZER] = await self.model_loader.load_model(
+                    settings.MODEL_NAME_SUMMARIZER,
+                    ModelType.SUMMARIZER
+                )
+                
+        except Exception as e:
+            logger.error(f"Erreur chargement modèles par défaut: {e}")
+            raise
+
+    async def change_model(
         self,
         model_name: str,
-        force_reload: bool = False
-    ) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
+        model_type: ModelType,
+        keep_old: bool = False
+    ) -> LoadedModel:
         """
-        Charge un modèle et son tokenizer.
+        Change le modèle actif pour un type donné.
         
         Args:
-            model_name: Nom du modèle à charger
-            force_reload: Force le rechargement même si déjà chargé
-            
-        Returns:
-            Tuple[AutoModelForCausalLM, AutoTokenizer]
+            model_name: Nom du nouveau modèle
+            model_type: Type de modèle
+            keep_old: Conserve l'ancien modèle en mémoire si possible
         """
-        if not self._initialized:
-            raise RuntimeError("ModelManager non initialisé")
-            
         try:
-            start_time = datetime.utcnow()
-            
-            # Vérification de l'espace disponible
-            if not self._check_system_resources():
+            # Vérification de la disponibilité du modèle
+            if not self.is_model_available(model_name, model_type):
+                raise ValueError(f"Modèle {model_name} non disponible pour le type {model_type}")
+
+            # Vérification des ressources
+            if not await self._check_system_resources():
                 raise RuntimeError("Ressources système insuffisantes")
                 
-            # Chargement du modèle via le loader
-            model, tokenizer = await self.model_loader.load_model(model_name)
-            
-            # Configuration optimisée du modèle après chargement
-            model.eval()  # Mode évaluation
-            if settings.USE_FP16:
-                model = model.half()
-                
-            # Désactivation du gradient de manière permanente
-            model.requires_grad_(False)
-            
-            # Configuration CUDA si disponible
-            device = self.cuda_manager.current_device
-            if device.type == "cuda":
-                if settings.USE_FP16:
-                    torch.cuda.amp.autocast(enabled=True).__enter__()
+            # Chargement du nouveau modèle
+            model = await self.model_loader.load_model(
+                model_name=model_name,
+                model_type=model_type
+            )
+
+            # Nettoyage de l'ancien modèle si nécessaire
+            if not keep_old:
+                old_model = self.current_models[model_type]
+                if old_model:
+                    await self.model_loader._unload_model(
+                        f"{model_type.value}_{old_model.model_name}"
+                    )
+
+            # Mise à jour du modèle courant
+            self.current_models[model_type] = model
             
             # Mise à jour des informations
             self._update_model_info(
-                model_name,
-                model,
-                datetime.utcnow() - start_time
+                model_name=model_name,
+                model_type=model_type,
+                model=model
             )
             
             # Sauvegarde des états
             await self._save_model_states()
             
-            logger.info(f"Modèle {model_name} chargé et configuré avec succès")
-            return model, tokenizer
-            
-        except Exception as e:
-            logger.error(f"Erreur chargement modèle {model_name}: {e}")
-            metrics.increment_counter("model_load_errors")
-            raise
-
-    async def change_model(
-        self,
-        new_model_name: str,
-        keep_old: bool = False
-    ) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
-        """
-        Change le modèle actif.
-        
-        Args:
-            new_model_name: Nom du nouveau modèle
-            keep_old: Conserve l'ancien modèle en mémoire si possible
-            
-        Returns:
-            Tuple[AutoModelForCausalLM, AutoTokenizer]
-        """
-        try:
-            if not keep_old:
-                # Si on ne garde pas l'ancien, on force le nettoyage
-                await self.model_loader._cleanup_oldest_model()
-                
-            # Chargement du nouveau modèle
-            model, tokenizer = await self.load_model(new_model_name)
-            
-            logger.info(f"Changement de modèle effectué vers {new_model_name}")
-            return model, tokenizer
+            return model
             
         except Exception as e:
             logger.error(f"Erreur changement modèle: {e}")
             raise
 
-    def get_model_info(self, model_name: Optional[str] = None) -> Dict:
+    def is_model_available(self, model_name: str, model_type: ModelType) -> bool:
+        """Vérifie si un modèle est disponible."""
+        if model_type == ModelType.CHAT:
+            return model_name in AVAILABLE_MODELS
+        elif model_type == ModelType.EMBEDDING:
+            return model_name in EMBEDDING_MODELS
+        elif model_type == ModelType.SUMMARIZER:
+            return model_name in SUMMARIZER_MODELS
+        return False
+
+    async def get_available_models(self) -> Dict[str, List[str]]:
+        """Retourne la liste des modèles disponibles par type."""
+        return {
+            "chat_models": list(AVAILABLE_MODELS.keys()),
+            "embedding_models": list(EMBEDDING_MODELS.keys()),
+            "summarizer_models": list(SUMMARIZER_MODELS.keys())
+        }
+
+    def get_current_model(self, model_type: ModelType = ModelType.CHAT) -> Optional[str]:
+        """Retourne le nom du modèle actif pour un type donné."""
+        model = self.current_models.get(model_type)
+        return model.model_name if model else None
+
+    def get_model_info(self, model_type: Optional[ModelType] = None) -> Dict:
         """
         Récupère les informations sur un ou tous les modèles.
-        
-        Args:
-            model_name: Nom du modèle spécifique ou None pour tous
-            
-        Returns:
-            Dict: Informations sur le(s) modèle(s)
         """
-        if model_name:
-            return self.model_info.get(model_name, {})
+        if model_type:
+            return self.model_info.get(f"{model_type.value}", {})
         return self.model_info
-
-    def get_current_model(self) -> Optional[str]:
-        """Retourne le nom du modèle actif."""
-        return self.model_loader.current_model_name if self.model_loader else None
-
-    async def _load_model_states(self):
-        """Charge l'état des modèles depuis le fichier."""
-        try:
-            if self.model_states_file.exists():
-                data = json.loads(self.model_states_file.read_text())
-                self.model_info = data.get("model_info", {})
-                logger.info("États des modèles chargés")
-        except Exception as e:
-            logger.warning(f"Erreur chargement états modèles: {e}")
-            self.model_info = {}
-
-    async def _save_model_states(self):
-        """Sauvegarde l'état des modèles."""
-        try:
-            data = {
-                "model_info": self.model_info,
-                "last_updated": datetime.utcnow().isoformat()
-            }
-            self.model_states_file.write_text(json.dumps(data, indent=2))
-        except Exception as e:
-            logger.warning(f"Erreur sauvegarde états modèles: {e}")
 
     def _update_model_info(
         self,
         model_name: str,
-        model: AutoModelForCausalLM,
-        load_time: datetime
+        model_type: ModelType,
+        model: LoadedModel
     ):
         """Met à jour les informations sur un modèle."""
         try:
-            device = next(model.parameters()).device
-            memory_stats = torch.cuda.get_device_properties(device).total_memory \
-                if str(device) != "cpu" else None
-            
-            self.model_info[model_name] = {
+            self.model_info[f"{model_type.value}_{model_name}"] = {
                 "last_loaded": datetime.utcnow().isoformat(),
-                "load_time_seconds": load_time.total_seconds(),
-                "device": str(device),
-                "dtype": str(next(model.parameters()).dtype),
-                "memory_used": str(memory_stats) if memory_stats else "N/A",
-                "is_quantized": bool(settings.USE_8BIT or settings.USE_4BIT),
+                "device": str(model.device),
+                "model_type": model_type.value,
+                "config": self._get_model_config(model_name, model_type),
+                "performance_config": self._get_performance_config(model_name, model_type),
                 "metadata": {
-                    "architecture": model.config.architectures[0] if hasattr(model.config, 'architectures') else "unknown",
-                    "revision": settings.MODEL_REVISION
+                    "is_quantized": hasattr(model.model, "is_quantized"),
+                    "requires_grad": next(model.model.parameters()).requires_grad
                 }
             }
         except Exception as e:
             logger.warning(f"Erreur mise à jour info modèle: {e}")
 
-    def _check_system_resources(self) -> bool:
-        """
-        Vérifie si les ressources système sont suffisantes.
-        Returns:
-            bool: True si ok, False sinon
-        """
+    def _get_model_config(self, model_name: str, model_type: ModelType) -> Dict:
+        """Récupère la configuration d'un modèle."""
+        if model_type == ModelType.CHAT:
+            return AVAILABLE_MODELS.get(model_name, {})
+        elif model_type == ModelType.EMBEDDING:
+            return EMBEDDING_MODELS.get(model_name, {})
+        elif model_type == ModelType.SUMMARIZER:
+            return SUMMARIZER_MODELS.get(model_name, {})
+        return {}
+
+    def _get_performance_config(self, model_name: str, model_type: ModelType) -> Dict:
+        """Récupère la configuration de performance d'un modèle."""
+        if model_type == ModelType.CHAT:
+            return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
+        elif model_type == ModelType.EMBEDDING:
+            return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
+        elif model_type == ModelType.SUMMARIZER:
+            return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
+        return {}
+
+    async def _check_system_resources(self) -> bool:
+        """Vérifie si les ressources système sont suffisantes."""
         try:
             # Vérification RAM
             memory = psutil.virtual_memory()
@@ -246,6 +259,80 @@ class ModelManager:
             logger.error(f"Erreur vérification ressources: {e}")
             return False
 
+    async def _load_model_states(self):
+        """Charge l'état des modèles depuis le fichier."""
+        try:
+            if self.model_states_file.exists():
+                data = json.loads(self.model_states_file.read_text())
+                self.model_info = data.get("model_info", {})
+                logger.info("États des modèles chargés")
+        except Exception as e:
+            logger.warning(f"Erreur chargement états modèles: {e}")
+            self.model_info = {}
+
+    async def _save_model_states(self):
+        """Sauvegarde l'état des modèles."""
+        try:
+            data = {
+                "model_info": self.model_info,
+                "last_updated": datetime.utcnow().isoformat()
+            }
+            self.model_states_file.write_text(json.dumps(data, indent=2))
+        except Exception as e:
+            logger.warning(f"Erreur sauvegarde états modèles: {e}")
+            
+    async def test_model_health(
+        self,
+        model_type: ModelType,
+        test_input: str
+    ) -> bool:
+        """Teste la santé d'un modèle."""
+        try:
+            model = self.current_models.get(model_type)
+            if not model:
+                return False
+
+            with torch.no_grad():
+                if model_type == ModelType.CHAT:
+                    # Test simple de génération
+                    tokenized = self.tokenizer_manager.tokenizer(
+                        test_input,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=32
+                    ).to(model.device)
+                    
+                    _ = model.model.generate(
+                        **tokenized,
+                        max_length=32,
+                        num_return_sequences=1
+                    )
+
+                elif model_type == ModelType.EMBEDDING:
+                    # Test de création d'embedding
+                    _ = model.model.encode(test_input)
+
+                else:  # SUMMARIZER
+                    # Test de génération de résumé
+                    tokenized = model.tokenizer(
+                        test_input,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=32
+                    ).to(model.device)
+                    
+                    _ = model.model.generate(
+                        **tokenized,
+                        max_length=32,
+                        num_return_sequences=1
+                    )
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Erreur test santé modèle {model_type}: {e}")
+            return False
+
     async def cleanup(self):
         """Nettoie les ressources."""
         try:
@@ -255,6 +342,9 @@ class ModelManager:
             # Sauvegarde finale des états
             await self._save_model_states()
             
+            self.current_models = {
+                model_type: None for model_type in ModelType
+            }
             self._initialized = False
             logger.info("ModelManager nettoyé")
         except Exception as e:
