@@ -138,7 +138,7 @@ class TokenizerManager:
         try:
             model_config = self._get_model_config(model_name, tokenizer_type)
             if not model_config:
-                raise ValueError(f"Configuration non trouvée pour {model_name}")
+                raise ValueError(f"Configuration non trouvée pour {model_name} , {tokenizer_type} ")
 
             tokenizer_key = f"{tokenizer_type.value}_{model_name}"
             
