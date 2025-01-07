@@ -103,24 +103,25 @@ class ModelLoader:
         load_params = config["load_params"].copy()
         load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
 
-        # Conversion explicite du dtype si nécessaire
-        if isinstance(load_params.get('bnb_4bit_compute_dtype'), str):
-            load_params['bnb_4bit_compute_dtype'] = torch.float16
-
-        # Création du BitsAndBytesConfig en respectant les paramètres existants
+        # Création du BitsAndBytesConfig qui respecte la configuration existante
         quantization_config = BitsAndBytesConfig(
-            load_in_4bit=load_params.get('load_in_4bit', True),
-            bnb_4bit_compute_dtype=load_params.get('bnb_4bit_compute_dtype', torch.float16),
+            load_in_4bit=load_params['load_in_4bit'],
+            bnb_4bit_compute_dtype=torch.float16,  # Conversion explicite
             bnb_4bit_quant_type=load_params.get('bnb_4bit_quant_type', 'nf4'),
-            bnb_4bit_use_double_quant=load_params.get('bnb_4bit_use_double_quant', True)
+            bnb_4bit_use_double_quant=True
         )
         
         # Ajouter la configuration de quantification
         load_params['quantization_config'] = quantization_config
+        
+        # Retirer les paramètres qui causent des conflits
+        load_params.pop('load_in_4bit', None)
+        load_params.pop('bnb_4bit_compute_dtype', None)
 
         # Gestion de l'implémentation de l'attention
         if load_params.get('use_flash_attention_2'):
             load_params['attn_implementation'] = 'flash_attention_2'
+            load_params.pop('use_flash_attention_2', None)
 
         # Chargement avec gestion de la précision moderne
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
