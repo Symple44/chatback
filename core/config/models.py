@@ -5,9 +5,9 @@ from pydantic import BaseModel
 # Configuration des modèles disponibles avec paramètres optimisés pour RTX 3090 24GB
 # Configuration des modèles d'embedding disponibles
 EMBEDDING_MODELS = {
-    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": {
+    "paraphrase-multilingual-mpnet-base-v2": {
         "display_name": "paraphrase multilingual mpnet base v2",
-        "path": "intfloat/paraphrase-multilingual-mpnet-base-v2",
+        "path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         "type": "embedding",
         "languages": ["fr"],
         "embedding_dimension": 768,
@@ -27,7 +27,7 @@ EMBEDDING_MODELS = {
             }
         }
     },
-    "e5-large-v2": {
+    "multilingual-e5-large": {
         "display_name": "E5 Large v2",
         "path": "intfloat/multilingual-e5-large",
         "type": "embedding",
@@ -49,7 +49,7 @@ EMBEDDING_MODELS = {
             }
         }
     },
-    "bge-large": {
+    "bge-large-v1.5": {
         "display_name": "BGE Large v1.5",
         "path": "BAAI/bge-large-v1.5",
         "type": "embedding",
@@ -75,7 +75,7 @@ EMBEDDING_MODELS = {
 
 # Configuration des modèles de summarization disponibles
 SUMMARIZER_MODELS = {
-    "mt5-base-multi-sum": {
+    "t5-base-multi-sum": {
         "display_name": "t5-base-fr-sum-cnndm",
         "path": "plguillou/t5-base-fr-sum-cnndm",
         "type": "summarization",
@@ -96,7 +96,7 @@ SUMMARIZER_MODELS = {
             }
         }
     },
-    "mt5-base-multi-sum": {
+    "mT5_multilingual_XLSum": {
         "display_name": "mT5 Base Multilingual Summarizer",
         "path": "csebuetnlp/mT5_multilingual_XLSum",
         "type": "summarization",
@@ -117,7 +117,7 @@ SUMMARIZER_MODELS = {
             }
         }
     },
-    "bart-large-multi": {
+    "mbart-large-cc25": {
         "display_name": "mBART Large Multilingual",
         "path": "facebook/mbart-large-cc25",
         "type": "summarization",
@@ -142,7 +142,7 @@ SUMMARIZER_MODELS = {
 
 # Configuration des modèles de chat/instruction disponibles
 AVAILABLE_MODELS = {
-    "mistral-7b-instruct-v0.3": {
+    "Mistral-7B-Instruct-v0.3": {
         "display_name": "Mistral-7B Instruct v0.3",
         "path": "mistralai/Mistral-7B-Instruct-v0.3",
         "type": "chat",
@@ -165,7 +165,7 @@ AVAILABLE_MODELS = {
             }
         }
     },
-    "mixtral-8x7b-instruct": {
+    "Mixtral-8x7B-Instruct-v0.1": {
         "display_name": "Mixtral 8x7B Instruct",
         "path": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "type": "chat",
@@ -188,7 +188,7 @@ AVAILABLE_MODELS = {
             }
         }
     },
-    "qwen-14b-chat": {
+    "Qwen-14B-Chat": {
         "display_name": "Qwen 14B Chat",
         "path": "Qwen/Qwen-14B-Chat",
         "type": "chat",
