@@ -9,14 +9,14 @@ logger = get_logger("prompt_system")
 
 class Message(BaseModel):
     """Modèle pour les messages de conversation."""
-    role: str = Field(..., description="Role du message (system, user, assistant)")
+    role: str = Field(..., description="Role du message (system, user, assistant, tool)")
     content: str = Field(..., description="Contenu du message")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict = Field(default_factory=dict)
 
     @validator('role')
     def validate_role(cls, v):
-        valid_roles = {"system", "user", "assistant", "context"}
+        valid_roles = {"system", "user", "assistant", "context", "tool"}
         if v not in valid_roles:
             raise ValueError(f"Role invalide. Valeurs acceptées: {valid_roles}")
         return v
@@ -28,6 +28,13 @@ class PromptSystem:
         """Initialise le système de prompts."""
         self.system_roles = settings.SYSTEM_ROLES
         self.response_types = settings.RESPONSE_TYPES
+        self.max_context_length = settings.MAX_CONTEXT_LENGTH
+        self.language_indicators = {
+            "fr": "Répondez en français",
+            "en": "Respond in English",
+            "es": "Responda en español",
+            "de": "Antworten Sie auf Deutsch"
+        }
 
     async def build_chat_prompt(
         self,

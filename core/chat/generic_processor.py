@@ -59,12 +59,24 @@ class GenericProcessor(BaseProcessor):
             )
             
             #context_summary = await self.summarizer.summarize_documents(relevant_docs)
+            context_summary = None
+            if relevant_docs:
+                try:
+                    context_summary = await self.model.summarizer.summarize_documents(relevant_docs)
+                    logger.debug(f"Résumé généré: {context_summary}")
+                except Exception as e:
+                    logger.error(f"Erreur génération résumé: {e}")
+                    context_summary = {
+                        "structured_summary": "\n".join(
+                            doc.get("content", "")[:200] for doc in relevant_docs[:2]
+                        )
+                    }
             
             # Construction du prompt via PromptSystem
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=relevant_docs,
-                #context_summary=context_summary,
+                context_summary=context_summary,
                 conversation_history=context.get("history", []) if context else None,
                 language=request.get("language", "fr")
             )
