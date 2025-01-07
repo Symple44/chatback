@@ -75,7 +75,7 @@ EMBEDDING_MODELS = {
 
 # Configuration des modèles de summarization disponibles
 SUMMARIZER_MODELS = {
-    "t5-base-multi-sum": {
+    "t5-base-fr-sum-cnndm": {
         "display_name": "t5-base-fr-sum-cnndm",
         "path": "plguillou/t5-base-fr-sum-cnndm",
         "type": "summarization",
