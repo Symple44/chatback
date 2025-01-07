@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from core.config import settings
+from core.config.config import settings
 from core.config.models import (
     AVAILABLE_MODELS,
     EMBEDDING_MODELS,
