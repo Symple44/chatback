@@ -56,7 +56,7 @@ class CUDAConfig:
 class CUDAManager:
     def __init__(self):
         """Initialise le gestionnaire CUDA."""
-        self.config.config = self._load_config()
+        self.config = self._load_config()
         self.device = None
         self._initialized = False
         self.memory_stats = {}
