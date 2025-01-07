@@ -38,10 +38,14 @@ class TokenizerManager:
     """Gestionnaire centralisé des tokenizers."""
     
     def __init__(self):
-        self.tokenizers: Dict[TokenizerType, PreTrainedTokenizer] = {}
-        self.configs: Dict[TokenizerType, TokenizerConfig] = {}
+        self.tokenizers: Dict[str, PreTrainedTokenizer] = {}  # Changé pour utiliser le nom du modèle comme clé
+        self.configs: Dict[str, TokenizerConfig] = {}
         self._initialized = False
-        self.default_type = TokenizerType.CHAT
+        self.current_models = {
+            TokenizerType.CHAT: None,
+            TokenizerType.SUMMARIZER: None,
+            TokenizerType.EMBEDDING: None
+        }
 
     def _get_model_config(self, model_name: str, model_type: TokenizerType) -> Optional[Dict]:
         """Récupère la configuration d'un modèle selon son type."""
@@ -53,58 +57,6 @@ class TokenizerManager:
             return SUMMARIZER_MODELS.get(model_name)
         return None
 
-    async def initialize(self):
-        """Initialise les tokenizers."""
-        if self._initialized:
-            return
-
-        try:
-            logger.info("Initialisation des tokenizers...")
-            
-            # Configuration par type
-            configs = {
-                TokenizerType.CHAT: TokenizerConfig(
-                    padding_side="left",
-                    max_length=settings.MAX_CONTEXT_LENGTH
-                ),
-                TokenizerType.SUMMARIZER: TokenizerConfig(
-                    padding_side="right",
-                    max_length=settings.MAX_INPUT_LENGTH
-                ),
-                TokenizerType.EMBEDDING: TokenizerConfig(
-                    padding_side="right",
-                    max_length=512
-                )
-            }
-
-            # Configuration des modèles
-            model_configs = {
-                TokenizerType.CHAT: (settings.MODEL_NAME, self._get_model_config(settings.MODEL_NAME, TokenizerType.CHAT)),
-                TokenizerType.SUMMARIZER: (settings.MODEL_NAME_SUMMARIZER, self._get_model_config(settings.MODEL_NAME_SUMMARIZER, TokenizerType.SUMMARIZER)),
-                TokenizerType.EMBEDDING: (settings.EMBEDDING_MODEL, self._get_model_config(settings.EMBEDDING_MODEL, TokenizerType.EMBEDDING))
-            }
-
-            for tokenizer_type, (model_name, model_config) in model_configs.items():
-                if not model_config:
-                    raise ValueError(f"Configuration non trouvée pour {model_name}")
-
-                config = configs[tokenizer_type]
-                tokenizer = await self._initialize_tokenizer(
-                    model_config["path"],
-                    config,
-                    tokenizer_type
-                )
-                self.tokenizers[tokenizer_type] = tokenizer
-                self.configs[tokenizer_type] = config
-                logger.info(f"Tokenizer {tokenizer_type.value} initialisé: {model_config['path']}")
-
-            self._initialized = True
-            logger.info("Tokenizers initialisés avec succès")
-
-        except Exception as e:
-            logger.error(f"Erreur initialisation tokenizers: {e}")
-            raise
-
     async def _initialize_tokenizer(
         self,
         model_path: str,
@@ -113,6 +65,7 @@ class TokenizerManager:
     ) -> PreTrainedTokenizer:
         """Initialise un tokenizer spécifique."""
         try:
+            logger.info(f"Initialisation du tokenizer pour {model_path}")
             tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
                 revision=settings.MODEL_REVISION,
@@ -139,28 +92,141 @@ class TokenizerManager:
             logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
             raise
 
-    def get_tokenizer(self, tokenizer_type: Optional[TokenizerType] = None) -> PreTrainedTokenizer:
+    async def initialize(self):
+        """Initialise les tokenizers."""
+        if self._initialized:
+            return
+
+        try:
+            logger.info("Initialisation des tokenizers...")
+            
+            # Configuration par type
+            configs = {
+                TokenizerType.CHAT: TokenizerConfig(
+                    padding_side="left",
+                    max_length=settings.MAX_CONTEXT_LENGTH
+                ),
+                TokenizerType.SUMMARIZER: TokenizerConfig(
+                    padding_side="right",
+                    max_length=settings.MAX_INPUT_LENGTH
+                ),
+                TokenizerType.EMBEDDING: TokenizerConfig(
+                    padding_side="right",
+                    max_length=512
+                )
+            }
+
+            await self.load_tokenizer(settings.MODEL_NAME, TokenizerType.CHAT, configs[TokenizerType.CHAT])
+            await self.load_tokenizer(settings.MODEL_NAME_SUMMARIZER, TokenizerType.SUMMARIZER, configs[TokenizerType.SUMMARIZER])
+            await self.load_tokenizer(settings.EMBEDDING_MODEL, TokenizerType.EMBEDDING, configs[TokenizerType.EMBEDDING])
+
+            self._initialized = True
+            logger.info("Tokenizers initialisés avec succès")
+
+        except Exception as e:
+            logger.error(f"Erreur initialisation tokenizers: {e}")
+            raise
+
+    async def load_tokenizer(
+        self,
+        model_name: str,
+        tokenizer_type: TokenizerType,
+        config: TokenizerConfig,
+        force_reload: bool = False
+    ) -> PreTrainedTokenizer:
+        """Charge ou recharge un tokenizer."""
+        try:
+            model_config = self._get_model_config(model_name, tokenizer_type)
+            if not model_config:
+                raise ValueError(f"Configuration non trouvée pour {model_name}")
+
+            tokenizer_key = f"{tokenizer_type.value}_{model_name}"
+            
+            # Si le tokenizer existe déjà et qu'on ne force pas le rechargement
+            if not force_reload and tokenizer_key in self.tokenizers:
+                return self.tokenizers[tokenizer_key]
+
+            # Initialisation du nouveau tokenizer
+            tokenizer = await self._initialize_tokenizer(
+                model_config["path"],
+                config,
+                tokenizer_type
+            )
+
+            # Mise à jour des dictionnaires
+            self.tokenizers[tokenizer_key] = tokenizer
+            self.configs[tokenizer_key] = config
+            self.current_models[tokenizer_type] = model_name
+
+            logger.info(f"Tokenizer chargé pour {model_name} ({tokenizer_type.value})")
+            return tokenizer
+
+        except Exception as e:
+            logger.error(f"Erreur chargement tokenizer {model_name}: {e}")
+            raise
+
+    def get_tokenizer(
+        self,
+        model_name: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT
+    ) -> PreTrainedTokenizer:
         """Récupère un tokenizer spécifique."""
         if not self._initialized:
             raise RuntimeError("TokenizerManager non initialisé")
 
-        t_type = tokenizer_type or self.default_type
-        if t_type not in self.tokenizers:
-            raise ValueError(f"Type de tokenizer non supporté: {t_type}")
-            
-        return self.tokenizers[t_type]
+        if model_name is None:
+            model_name = self.current_models[tokenizer_type]
+            if model_name is None:
+                raise ValueError(f"Aucun modèle actif pour le type {tokenizer_type}")
+
+        tokenizer_key = f"{tokenizer_type.value}_{model_name}"
+        if tokenizer_key not in self.tokenizers:
+            raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+
+        return self.tokenizers[tokenizer_key]
+
+    async def change_model(
+        self,
+        new_model_name: str,
+        tokenizer_type: TokenizerType,
+        force_reload: bool = False
+    ) -> PreTrainedTokenizer:
+        """Change le modèle actif pour un type donné."""
+        try:
+            # Vérification si le changement est nécessaire
+            if new_model_name == self.current_models[tokenizer_type] and not force_reload:
+                return self.get_tokenizer(new_model_name, tokenizer_type)
+
+            # Chargement du nouveau tokenizer
+            config = self.configs.get(f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}")
+            if not config:
+                config = TokenizerConfig()  # Config par défaut
+
+            tokenizer = await self.load_tokenizer(
+                new_model_name,
+                tokenizer_type,
+                config,
+                force_reload=True
+            )
+
+            return tokenizer
+
+        except Exception as e:
+            logger.error(f"Erreur changement de modèle: {e}")
+            raise
 
     def encode_with_truncation(
         self,
         messages: Union[str, List[Dict]],
         max_length: Optional[int] = None,
-        tokenizer_type: Optional[TokenizerType] = None,
+        model_name: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         return_tensors: str = "pt"
     ) -> Dict[str, torch.Tensor]:
         """Encode et tronque le texte avec gestion de la longueur maximale."""
         try:
-            tokenizer = self.get_tokenizer(tokenizer_type)
-            config = self.configs[tokenizer_type or self.default_type]
+            tokenizer = self.get_tokenizer(model_name, tokenizer_type)
+            config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
             # Gestion différente selon le type d'entrée
@@ -205,14 +271,13 @@ class TokenizerManager:
         self,
         token_ids: torch.Tensor,
         skip_special_tokens: bool = True,
-        tokenizer_type: Optional[TokenizerType] = None,
+        model_name: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         clean_up_tokenization_spaces: bool = True
     ) -> str:
         """Décode et nettoie le texte généré."""
         try:
-            tokenizer = self.get_tokenizer(tokenizer_type)
-
-            # Décodage initial
+            tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             full_response = tokenizer.decode(
                 token_ids,
                 skip_special_tokens=skip_special_tokens,
@@ -220,20 +285,22 @@ class TokenizerManager:
             )
 
             # Patterns de nettoyage selon le type de modèle
+            pattern = None
             if "mistral" in str(tokenizer.__class__).lower():
-                assistant_pattern = r'\[/INST\](.*?)(?:\[INST\]|$)'
+                pattern = r'\[/INST\](.*?)(?:\[INST\]|$)'
             else:
-                assistant_pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
+                pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
 
-            # Extraction de la réponse
-            match = re.search(assistant_pattern, full_response, re.DOTALL | re.IGNORECASE)
-            response = match.group(1).strip() if match else full_response.strip()
+            if pattern:
+                match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
+                response = match.group(1).strip() if match else full_response.strip()
+            else:
+                response = full_response.strip()
 
             # Nettoyage supplémentaire
-            response = re.sub(r'\s+', ' ', response)  # Normaliser les espaces
+            response = re.sub(r'\s+', ' ', response)
             response = response.strip()
 
-            # Vérification de la longueur minimale
             if len(response) < 5:
                 logger.warning(f"Réponse générée trop courte: {full_response}")
                 return "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
@@ -247,29 +314,21 @@ class TokenizerManager:
     def count_tokens(
         self,
         text: str,
-        tokenizer_type: Optional[TokenizerType] = None
+        model_name: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT
     ) -> int:
         """Compte le nombre de tokens dans un texte."""
         try:
-            tokenizer = self.get_tokenizer(tokenizer_type)
+            tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             return len(tokenizer.encode(text))
         except Exception as e:
             logger.error(f"Erreur comptage tokens: {e}")
             return 0
 
-    def __call__(
-        self,
-        text: str,
-        tokenizer_type: Optional[TokenizerType] = None,
-        **kwargs
-    ) -> Dict[str, torch.Tensor]:
-        """Interface directe pour la tokenization."""
-        tokenizer = self.get_tokenizer(tokenizer_type)
-        return tokenizer(text, **kwargs)
-
     async def cleanup(self):
         """Nettoie les ressources."""
         self.tokenizers.clear()
         self.configs.clear()
+        self.current_models = {t: None for t in TokenizerType}
         self._initialized = False
         logger.info("Tokenizer Manager nettoyé")
