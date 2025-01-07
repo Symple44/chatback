@@ -3,6 +3,101 @@ from typing import Dict, List, Any
 from pydantic import BaseModel
 
 # Configuration des modèles disponibles avec paramètres optimisés pour RTX 3090 24GB
+# Configuration des modèles d'embedding disponibles
+EMBEDDING_MODELS = {
+    "e5-large-v2": {
+        "display_name": "E5 Large v2",
+        "path": "intfloat/multilingual-e5-large",
+        "type": "embedding",
+        "languages": ["fr", "en", "de", "es", "it"],
+        "embedding_dimension": 1024,
+        "max_sequence_length": 512,
+        "gpu_requirements": {
+            "vram_required": "2GB",
+            "recommended_batch_size": 32
+        },
+        "quantization": None,
+        "capabilities": ["embedding", "retrieval"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": "float16",
+            "max_memory": {
+                "0": "2GiB",
+                "cpu": "4GB"
+            }
+        }
+    },
+    "bge-large": {
+        "display_name": "BGE Large v1.5",
+        "path": "BAAI/bge-large-v1.5",
+        "type": "embedding",
+        "languages": ["fr", "en", "de", "es", "it", "zh"],
+        "embedding_dimension": 1024,
+        "max_sequence_length": 512,
+        "gpu_requirements": {
+            "vram_required": "2GB",
+            "recommended_batch_size": 32
+        },
+        "quantization": None,
+        "capabilities": ["embedding", "retrieval"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": "float16",
+            "max_memory": {
+                "0": "2GiB",
+                "cpu": "4GB"
+            }
+        }
+    }
+}
+
+# Configuration des modèles de summarization disponibles
+SUMMARIZER_MODELS = {
+    "mt5-base-multi-sum": {
+        "display_name": "mT5 Base Multilingual Summarizer",
+        "path": "csebuetnlp/mT5_multilingual_XLSum",
+        "type": "summarization",
+        "languages": ["fr", "en", "de", "es", "it"],
+        "max_sequence_length": 1024,
+        "gpu_requirements": {
+            "vram_required": "4GB",
+            "recommended_batch_size": 16
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["summarization"],
+        "load_params": {
+            "load_in_4bit": True,
+            "device_map": "auto",
+            "max_memory": {
+                "0": "4GiB",
+                "cpu": "8GB"
+            }
+        }
+    },
+    "bart-large-multi": {
+        "display_name": "mBART Large Multilingual",
+        "path": "facebook/mbart-large-cc25",
+        "type": "summarization",
+        "languages": ["fr", "en", "de", "es", "it"],
+        "max_sequence_length": 1024,
+        "gpu_requirements": {
+            "vram_required": "4GB",
+            "recommended_batch_size": 16
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["summarization"],
+        "load_params": {
+            "load_in_4bit": True,
+            "device_map": "auto",
+            "max_memory": {
+                "0": "4GiB",
+                "cpu": "8GB"
+            }
+        }
+    }
+}
+
+# Configuration des modèles de chat/instruction disponibles
 AVAILABLE_MODELS = {
     "mistral-7b-instruct-v0.3": {
         "display_name": "Mistral-7B Instruct v0.3",
@@ -168,7 +263,65 @@ MODEL_PERFORMANCE_CONFIGS = {
     }
 }
 
-# Configuration du système pour tous les modèles
+# Configuration de performance pour les modèles d'embedding
+EMBEDDING_PERFORMANCE_CONFIGS = {
+    "e5-large-v2": {
+        "batch_size": 32,
+        "normalize_embeddings": True,
+        "max_length": 512,
+        "pooling_strategy": "mean",
+        "preprocessing": {
+            "truncation": True,
+            "padding": "max_length",
+            "add_special_tokens": True
+        }
+    },
+    "bge-large": {
+        "batch_size": 32,
+        "normalize_embeddings": True,
+        "max_length": 512,
+        "pooling_strategy": "cls",
+        "preprocessing": {
+            "truncation": True,
+            "padding": "max_length",
+            "add_special_tokens": True
+        }
+    }
+}
+
+# Configuration de performance pour les modèles de summarization
+SUMMARIZER_PERFORMANCE_CONFIGS = {
+    "mt5-base-multi-sum": {
+        "batch_size": 16,
+        "min_length": 50,
+        "max_length": 150,
+        "length_penalty": 2.0,
+        "early_stopping": True,
+        "num_beams": 4,
+        "no_repeat_ngram_size": 3,
+        "preprocessing": {
+            "truncation": True,
+            "padding": "longest",
+            "max_length": 1024
+        }
+    },
+    "bart-large-multi": {
+        "batch_size": 16,
+        "min_length": 50,
+        "max_length": 150,
+        "length_penalty": 2.0,
+        "early_stopping": True,
+        "num_beams": 4,
+        "no_repeat_ngram_size": 3,
+        "preprocessing": {
+            "truncation": True,
+            "padding": "longest",
+            "max_length": 1024
+        }
+    }
+}
+
+# Configuration globale du système
 SYSTEM_CONFIG = {
     "memory_management": {
         "gpu_memory_fraction": 0.95,
