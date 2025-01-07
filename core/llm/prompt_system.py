@@ -2,7 +2,7 @@
 from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field, validator
 from datetime import datetime
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("prompt_system")

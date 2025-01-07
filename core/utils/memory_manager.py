@@ -5,7 +5,7 @@ import torch
 import json
 from typing import Dict, Union
 from core.utils.logger import get_logger
-from core.config import settings
+from core.config.config import settings
 
 logger = get_logger("memory_manager")
 

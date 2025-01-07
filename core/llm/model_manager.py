@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import asyncio
 
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .model_loader import ModelLoader, ModelType, LoadedModel

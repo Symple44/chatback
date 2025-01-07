@@ -6,7 +6,7 @@ import logging
 import asyncio
 import zlib
 import pickle
-from core.config import settings
+from core.config.config import settings
 
 logger = logging.getLogger(__name__)
 

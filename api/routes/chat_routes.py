@@ -19,7 +19,7 @@ from core.utils.metrics import metrics
 from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument
 from core.database.base import DatabaseSession
 from core.database.manager import DatabaseManager
-from core.config import settings
+from core.config.config import settings
 from core.chat.processor_factory import ProcessorFactory
 
 #A supprimer

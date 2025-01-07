@@ -9,7 +9,7 @@ import base64
 from datetime import datetime
 
 from core.utils.logger import get_logger
-from core.config import settings
+from core.config.config import settings
 
 logger = get_logger("image_processing")
 

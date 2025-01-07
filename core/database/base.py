@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any
 import asyncio
 from datetime import datetime
 
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 

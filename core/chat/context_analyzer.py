@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Set
 from datetime import datetime
 import re
 import logging
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("context_analyzer")

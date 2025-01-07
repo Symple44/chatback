@@ -8,7 +8,7 @@ from elasticsearch.helpers import async_bulk, BulkIndexError
 import logging
 from pathlib import Path
 
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("es_indexation")

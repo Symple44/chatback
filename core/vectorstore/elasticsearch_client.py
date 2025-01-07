@@ -6,7 +6,7 @@ from datetime import datetime
 import asyncio
 import json
 import logging
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .indexation import ElasticsearchIndexManager

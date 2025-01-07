@@ -9,7 +9,7 @@ import json
 import psutil
 from enum import Enum
 
-from core.config import settings
+from core.config.config import settings
 from core.config.models import CUDA_CONFIG
 from core.utils.logger import get_logger
 
@@ -56,7 +56,7 @@ class CUDAConfig:
 class CUDAManager:
     def __init__(self):
         """Initialise le gestionnaire CUDA."""
-        self.config = self._load_config()
+        self.config.config = self._load_config()
         self.device = None
         self._initialized = False
         self.memory_stats = {}

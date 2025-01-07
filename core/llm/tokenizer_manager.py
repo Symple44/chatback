@@ -2,7 +2,7 @@ from transformers import AutoTokenizer, GenerationConfig
 from typing import Dict, Any, Optional, List
 import torch
 import re
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("tokenizer_manager")

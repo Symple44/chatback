@@ -12,7 +12,7 @@ from .models import (
 )
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.config import settings
+from core.config.config import settings
 
 logger = get_logger(__name__)
 

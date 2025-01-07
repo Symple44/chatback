@@ -13,7 +13,7 @@ import uuid
 import re
 
 from .base import Base
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from .models_base import Base
 

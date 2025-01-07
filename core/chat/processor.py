@@ -8,7 +8,7 @@ import re
 import traceback
 from pathlib import Path
 from core.utils.system_optimizer import SystemOptimizer
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.chat.context_analyzer import context_analyzer

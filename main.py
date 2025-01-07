@@ -18,7 +18,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
@@ -83,7 +83,7 @@ class ComponentManager:
                 logger.info("Base de données initialisée")
 
                 # Session Manager
-                from core.session_manager import SessionManager
+                from core.database.session_manager import SessionManager
                 self._components["session_manager"] = SessionManager(settings.get_database_url())
                 logger.info("Session manager initialisé")
 

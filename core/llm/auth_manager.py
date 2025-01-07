@@ -2,7 +2,7 @@
 from huggingface_hub import login, HfApi
 import os
 from typing import Optional
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 
 logger = get_logger("auth_manager")

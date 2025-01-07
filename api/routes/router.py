@@ -13,7 +13,7 @@ from .history_routes import router as history_router
 from .model_routes import router as model_router
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.config import settings
+from core.config.config import settings
 from ..dependencies import get_components
 
 logger = get_logger("router")

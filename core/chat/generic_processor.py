@@ -6,7 +6,7 @@ import torch
 
 from core.chat.base_processor import BaseProcessor
 from core.utils.logger import get_logger
-from core.config import settings
+from core.config.config import settings
 from core.utils.metrics import metrics
 from core.database.models import ChatHistory, ReferencedDocument
 from core.database.base import DatabaseSession

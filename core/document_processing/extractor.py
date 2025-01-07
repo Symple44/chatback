@@ -12,7 +12,7 @@ import numpy as np
 import base64
 from collections import defaultdict
 
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .image_processing import PDFImageProcessor

@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Union, Generator
 from datetime import datetime
 import torch
 import asyncio
-from core.config import settings
+from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .cuda_manager import CUDAManager, ModelPriority
