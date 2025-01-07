@@ -45,7 +45,7 @@ class ModelManager:
         }
         
         # Configuration
-        self.models_dir = Path(settings.MODEL_DIR)
+        self.models_dir = Path(settings.MODELS_DIR)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.model_states_file = self.models_dir / "model_states.json"
         
