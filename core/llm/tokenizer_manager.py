@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from core.config.config import settings
+from core.config.models import AVAILABLE_MODELS, EMBEDDING_MODELS, SUMMARIZER_MODELS
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 
@@ -61,12 +62,14 @@ class TokenizerManager:
                 )
             }
 
-            # Initialisation des tokenizers
+            # Récupération des chemins des modèles depuis la configuration
             model_paths = {
-                TokenizerType.CHAT: settings.MODEL_NAME,
-                TokenizerType.SUMMARIZER: settings.MODEL_NAME_SUMMARIZER,
-                TokenizerType.EMBEDDING: settings.EMBEDDING_MODEL
+                TokenizerType.CHAT: AVAILABLE_MODELS[settings.MODEL_NAME]["path"],
+                TokenizerType.SUMMARIZER: SUMMARIZER_MODELS[settings.MODEL_NAME_SUMMARIZER]["path"],
+                TokenizerType.EMBEDDING: EMBEDDING_MODELS[settings.EMBEDDING_MODEL]["path"]
             }
+
+            logger.info(f"Chemins des modèles: {model_paths}")
 
             for tokenizer_type, model_path in model_paths.items():
                 config = configs[tokenizer_type]
