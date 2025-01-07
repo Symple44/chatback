@@ -6,8 +6,13 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from core.config.config import settings
-from core.config.models import AVAILABLE_MODELS, EMBEDDING_MODELS, SUMMARIZER_MODELS
+from core.config import settings
+from core.config.models import (
+    AVAILABLE_MODELS,
+    EMBEDDING_MODELS,
+    SUMMARIZER_MODELS,
+    MODEL_PERFORMANCE_CONFIGS
+)
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 
@@ -38,6 +43,16 @@ class TokenizerManager:
         self._initialized = False
         self.default_type = TokenizerType.CHAT
 
+    def _get_model_config(self, model_name: str, model_type: TokenizerType) -> Optional[Dict]:
+        """Récupère la configuration d'un modèle selon son type."""
+        if model_type == TokenizerType.CHAT:
+            return AVAILABLE_MODELS.get(model_name)
+        elif model_type == TokenizerType.EMBEDDING:
+            return EMBEDDING_MODELS.get(model_name)
+        elif model_type == TokenizerType.SUMMARIZER:
+            return SUMMARIZER_MODELS.get(model_name)
+        return None
+
     async def initialize(self):
         """Initialise les tokenizers."""
         if self._initialized:
@@ -58,28 +73,30 @@ class TokenizerManager:
                 ),
                 TokenizerType.EMBEDDING: TokenizerConfig(
                     padding_side="right",
-                    max_length=512  # Taille standard pour les embeddings
+                    max_length=512
                 )
             }
 
-            # Récupération des chemins des modèles depuis la configuration
-            model_paths = {
-                TokenizerType.CHAT: AVAILABLE_MODELS[settings.MODEL_NAME]["path"],
-                TokenizerType.SUMMARIZER: SUMMARIZER_MODELS[settings.MODEL_NAME_SUMMARIZER]["path"],
-                TokenizerType.EMBEDDING: EMBEDDING_MODELS[settings.EMBEDDING_MODEL]["path"]
+            # Configuration des modèles
+            model_configs = {
+                TokenizerType.CHAT: (settings.MODEL_NAME, self._get_model_config(settings.MODEL_NAME, TokenizerType.CHAT)),
+                TokenizerType.SUMMARIZER: (settings.MODEL_NAME_SUMMARIZER, self._get_model_config(settings.MODEL_NAME_SUMMARIZER, TokenizerType.SUMMARIZER)),
+                TokenizerType.EMBEDDING: (settings.EMBEDDING_MODEL, self._get_model_config(settings.EMBEDDING_MODEL, TokenizerType.EMBEDDING))
             }
 
-            logger.info(f"Chemins des modèles: {model_paths}")
+            for tokenizer_type, (model_name, model_config) in model_configs.items():
+                if not model_config:
+                    raise ValueError(f"Configuration non trouvée pour {model_name}")
 
-            for tokenizer_type, model_path in model_paths.items():
                 config = configs[tokenizer_type]
                 tokenizer = await self._initialize_tokenizer(
-                    model_path,
+                    model_config["path"],
                     config,
                     tokenizer_type
                 )
                 self.tokenizers[tokenizer_type] = tokenizer
                 self.configs[tokenizer_type] = config
+                logger.info(f"Tokenizer {tokenizer_type.value} initialisé: {model_config['path']}")
 
             self._initialized = True
             logger.info("Tokenizers initialisés avec succès")
