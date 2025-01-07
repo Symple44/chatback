@@ -20,7 +20,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -42,7 +42,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -64,7 +64,7 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "2GiB",
                 "cpu": "4GB"
@@ -89,16 +89,16 @@ SUMMARIZER_MODELS = {
         "capabilities": ["summarization"],
         "load_params": {
             "device_map": "auto",
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
             }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
         }
     },
     "mT5_multilingual_XLSum": {
@@ -115,16 +115,16 @@ SUMMARIZER_MODELS = {
         "capabilities": ["summarization"],
         "load_params": {
             "device_map": "auto",
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
             }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
         }
     },
     "mbart-large-cc25": {
@@ -141,16 +141,16 @@ SUMMARIZER_MODELS = {
         "capabilities": ["summarization"],
         "load_params": {
             "device_map": "auto",
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
             "max_memory": {
                 "0": "4GiB",
                 "cpu": "8GB"
             }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
         }
     }
 }
@@ -171,19 +171,19 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
-            "attn_implementation": "flash_attention_2",
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
             }
-        }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
+        },
+        "attn_implementation": "flash_attention_2"
     },
     "Mixtral-8x7B-Instruct-v0.1": {
         "display_name": "Mixtral 8x7B Instruct",
@@ -199,19 +199,19 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction", "function_calling"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
-            "attn_implementation": "flash_attention_2",
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
             }
-        }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
+        },
+        "attn_implementation": "flash_attention_2"
     },
     "Qwen-14B-Chat": {
         "display_name": "Qwen 14B Chat",
@@ -227,18 +227,18 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
+            "torch_dtype": "float16",
             "trust_remote_code": True,
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
             }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
         }
     },
     "zephyr-7b-beta": {
@@ -255,19 +255,19 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction", "function_calling"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "quantization_config": {
-                "load_in_4bit": True,
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
-            },
-            "attn_implementation": "flash_attention_2",
+            "torch_dtype": "float16",
             "max_memory": {
                 "0": "22GiB",
                 "cpu": "24GB"
             }
-        }
+        },
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
+        },
+        "attn_implementation": "flash_attention_2"
     }
 }
 
