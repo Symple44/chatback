@@ -5,6 +5,28 @@ from pydantic import BaseModel
 # Configuration des modèles disponibles avec paramètres optimisés pour RTX 3090 24GB
 # Configuration des modèles d'embedding disponibles
 EMBEDDING_MODELS = {
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": {
+        "display_name": "paraphrase multilingual mpnet base v2",
+        "path": "intfloat/paraphrase-multilingual-mpnet-base-v2",
+        "type": "embedding",
+        "languages": ["fr"],
+        "embedding_dimension": 768,
+        "max_sequence_length": 512,
+        "gpu_requirements": {
+            "vram_required": "2GB",
+            "recommended_batch_size": 32
+        },
+        "quantization": None,
+        "capabilities": ["embedding", "retrieval"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": "float16",
+            "max_memory": {
+                "0": "2GiB",
+                "cpu": "4GB"
+            }
+        }
+    },
     "e5-large-v2": {
         "display_name": "E5 Large v2",
         "path": "intfloat/multilingual-e5-large",
@@ -53,6 +75,27 @@ EMBEDDING_MODELS = {
 
 # Configuration des modèles de summarization disponibles
 SUMMARIZER_MODELS = {
+    "mt5-base-multi-sum": {
+        "display_name": "t5-base-fr-sum-cnndm",
+        "path": "plguillou/t5-base-fr-sum-cnndm",
+        "type": "summarization",
+        "languages": ["fr"],
+        "max_sequence_length": 1024,
+        "gpu_requirements": {
+            "vram_required": "4GB",
+            "recommended_batch_size": 16
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["summarization"],
+        "load_params": {
+            "load_in_4bit": True,
+            "device_map": "auto",
+            "max_memory": {
+                "0": "4GiB",
+                "cpu": "8GB"
+            }
+        }
+    },
     "mt5-base-multi-sum": {
         "display_name": "mT5 Base Multilingual Summarizer",
         "path": "csebuetnlp/mT5_multilingual_XLSum",
@@ -265,6 +308,17 @@ MODEL_PERFORMANCE_CONFIGS = {
 
 # Configuration de performance pour les modèles d'embedding
 EMBEDDING_PERFORMANCE_CONFIGS = {
+    "paraphrase-multilingual-mpnet-base-v2": {
+        "batch_size": 32,
+        "normalize_embeddings": True,
+        "max_length": 512,
+        "pooling_strategy": "mean",
+        "preprocessing": {
+            "truncation": True,
+            "padding": "max_length",
+            "add_special_tokens": True
+        }
+    },
     "e5-large-v2": {
         "batch_size": 32,
         "normalize_embeddings": True,
@@ -291,6 +345,20 @@ EMBEDDING_PERFORMANCE_CONFIGS = {
 
 # Configuration de performance pour les modèles de summarization
 SUMMARIZER_PERFORMANCE_CONFIGS = {
+    "t5-base-fr-sum-cnndm": {
+        "batch_size": 16,
+        "min_length": 50,
+        "max_length": 150,
+        "length_penalty": 2.0,
+        "early_stopping": True,
+        "num_beams": 4,
+        "no_repeat_ngram_size": 3,
+        "preprocessing": {
+            "truncation": True,
+            "padding": "longest",
+            "max_length": 1024
+        }
+    },
     "mt5-base-multi-sum": {
         "batch_size": 16,
         "min_length": 50,
