@@ -123,6 +123,35 @@ class ModelInference:
                 "error": str(e)
             }
 
+    def _get_generation_config(self, response_type: str = "comprehensive") -> Dict[str, Any]:
+        """
+        Retourne la configuration de génération du modèle avec ajustements selon response_type.
+        Args:
+            response_type: Type de réponse demandée
+        Returns:
+            Configuration de génération ajustée
+        """
+        try:
+            # Récupération de la config complète du modèle
+            model = self.model_manager.current_models[ModelType.CHAT]
+            model_name = model.model_name.lower()
+            model_config = MODEL_PERFORMANCE_CONFIGS[model_name]
+            generation_config = model_config.get("generation_config", {}).copy()
+
+            # Surcharge des paramètres spécifiques si response_type spécifié
+            if response_type and response_type in settings.RESPONSE_TYPES:
+                response_config = settings.RESPONSE_TYPES[response_type]
+                if "temperature" in response_config:
+                    generation_config["temperature"] = response_config["temperature"]
+                if "max_tokens" in response_config:
+                    generation_config["max_length"] = response_config["max_tokens"]
+
+            return generation_config
+
+        except Exception as e:
+            logger.error(f"Erreur récupération config génération: {e}")
+            return {}
+        
     async def create_embedding(self, text: str) -> List[float]:
         """Crée un embedding pour un texte donné."""
         if not self._initialized:
