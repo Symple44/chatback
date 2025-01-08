@@ -130,47 +130,56 @@ async def get_model_stats(
     model_type: str,
     components=Depends(get_components)
 ) -> Dict:
-    """Obtient les statistiques détaillées d'un type de modèle."""
     try:
-        # Conversion du type de modèle
-        try:
-            model_type_enum = ModelType[model_type.upper()]
-        except KeyError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Type de modèle invalide. Types valides: {[t.value for t in ModelType]}"
-            )
-
-        # Récupération des statistiques
+        model_type_enum = ModelType[model_type.upper()]
         model = components.model_manager.current_models.get(model_type_enum)
+        
         if not model:
             raise HTTPException(
                 status_code=404,
                 detail=f"Aucun modèle actif pour le type {model_type}"
             )
 
-        # Test de santé du modèle
+        # Mise à jour des stats mémoire
+        components.cuda_manager.update_memory_stats()
+        
+        # Test de génération simple pour vérifier la santé
         test_result = await components.model_manager.test_model_health(
             model_type_enum,
             "Test de santé du modèle."
         )
 
+        # Récupération des infos GPU plus détaillées
+        gpu_info = {}
+        if torch.cuda.is_available():
+            device = torch.cuda.current_device()
+            gpu_info = {
+                "name": torch.cuda.get_device_name(device),
+                "total_memory": torch.cuda.get_device_properties(device).total_memory / (1024**3),
+                "allocated_memory": torch.cuda.memory_allocated(device) / (1024**3),
+                "reserved_memory": torch.cuda.memory_reserved(device) / (1024**3),
+                "max_allocated": torch.cuda.max_memory_allocated(device) / (1024**3)
+            }
+
         return {
             "model_name": model.model_name,
             "device": str(model.device),
             "info": components.model_manager.get_model_info(model_type_enum),
-            "memory_stats": components.cuda_manager.memory_stats,
+            "memory_stats": {
+                "cuda": gpu_info,
+                "ram": components.cuda_manager.memory_stats["ram"]
+            },
             "health_check": {
                 "status": "healthy" if test_result else "unhealthy",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "test_result": test_result
             }
         }
-    except HTTPException:
-        raise
+
     except Exception as e:
         logger.error(f"Erreur récupération stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+        
 @router.post("/reload/{model_type}")
 async def reload_model(
     model_type: str,
