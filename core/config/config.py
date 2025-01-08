@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     ELASTICSEARCH_VERIFY_CERTS: bool = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "true").lower() == "true"
     ELASTICSEARCH_INDEX_PREFIX: str = os.getenv("ELASTICSEARCH_INDEX_PREFIX", "owai")
     ELASTICSEARCH_EMBEDDING_DIM: int = int(os.getenv("ELASTICSEARCH_EMBEDDING_DIM", "768"))
+    
+    # === Processeur de chat ===
+    CONFIDENCE_THRESHOLD: float = 0.5
+    MIN_RELEVANT_DOCS: int = 1
+    MAX_THEMES: int = 3
+    MAX_CLARIFICATION_ATTEMPTS: int = 3
+    MIN_QUERY_LENGTH: int = 2
+    MAX_CONTEXT_DOCS: int = 6
 
     # === Validation Methods ===
     @validator('MAX_MEMORY')
