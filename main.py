@@ -306,13 +306,8 @@ async def lifespan(app: FastAPI):
 
         # Import et ajout des routes
         from api.routes.router import router as api_router
-        from api.routes.chat_routes import router as chat_router
-        from api.routes.model_routes import router as model_router
-        
         app.include_router(api_router)
-        app.include_router(chat_router)
-        app.include_router(model_router)
-        
+                
         if settings.GOOGLE_DRIVE_SYNC_INTERVAL:
             asyncio.create_task(periodic_sync())
 
