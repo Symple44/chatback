@@ -103,52 +103,43 @@ class ModelManager:
             logger.error(f"Erreur chargement modèles par défaut: {e}")
             raise
 
-    async def change_model(
-        self,
-        model_name: str,
-        model_type: ModelType,
-        keep_old: bool = False
-    ) -> LoadedModel:
-        """
-        Change le modèle actif pour un type donné.
-        
-        Args:
-            model_name: Nom du nouveau modèle
-            model_type: Type de modèle
-            keep_old: Conserve l'ancien modèle en mémoire si possible
-        """
+    def _get_model_key(self, model_type: ModelType, model_name: str) -> str:
+        """Génère une clé unique pour un modèle."""
+        return f"{model_type.value}_{model_name}"
+
+    async def change_model(self, model_name: str, model_type: ModelType, keep_old: bool = False) -> LoadedModel:
+        """Change le modèle actif pour un type donné."""
         try:
             # Vérification de la disponibilité du modèle
             if not self.is_model_available(model_name, model_type):
                 raise ValueError(f"Modèle {model_name} non disponible pour le type {model_type}")
 
-            # Vérification des ressources
-            if not await self._check_system_resources():
-                raise RuntimeError("Ressources système insuffisantes")
-                
-            # Chargement du nouveau modèle
+            # Clé unique pour le nouveau modèle
+            new_model_key = self._get_model_key(model_type, model_name)
+
+            # Sauvegarde de l'ancien modèle si nécessaire
+            old_model = self.current_models[model_type]
+            if old_model and not keep_old:
+                old_model_key = self._get_model_key(model_type, old_model.model_name)
+                await self.model_loader._unload_model(old_model_key)
+
+            # Chargement ou récupération du nouveau modèle
             model = await self.model_loader.load_model(
                 model_name=model_name,
-                model_type=model_type
+                model_type=model_type,
+                force_reload=not keep_old
             )
 
-            # Nettoyage de l'ancien modèle si nécessaire
-            if not keep_old:
-                old_model = self.current_models[model_type]
-                if old_model:
-                    await self.model_loader._unload_model(
-                        f"{model_type.value}_{old_model.model_name}"
-                    )
-
-            # Mise à jour du modèle courant
+            # Mise à jour des références
             self.current_models[model_type] = model
             
             # Mise à jour des informations
-            self._update_model_info(
-                model_name=model_name,
-                model_type=model_type,
-                model=model
-            )
+            if model and hasattr(model, 'model'):
+                self._update_model_info(
+                    model_name=model_name,
+                    model_type=model_type,
+                    model=model
+                )
             
             # Sauvegarde des états
             await self._save_model_states()
@@ -156,7 +147,7 @@ class ModelManager:
             return model
             
         except Exception as e:
-            logger.error(f"Erreur changement modèle: {e}")
+            logger.error(f"Erreur changement modèle {model_name}: {e}")
             raise
 
     def is_model_available(self, model_name: str, model_type: ModelType) -> bool:
@@ -190,20 +181,15 @@ class ModelManager:
             return self.model_info.get(f"{model_type.value}", {})
         return self.model_info
 
-    def _update_model_info(
-        self,
-        model_name: str,
-        model_type: ModelType,
-        model: LoadedModel
-    ):
+    def _update_model_info(self, model_name: str, model_type: ModelType, model: LoadedModel):
         """Met à jour les informations sur un modèle."""
         try:
-            # Vérification que le modèle est valide avant de l'utiliser
             if not model or not hasattr(model, 'model'):
-                logger.warning(f"Modèle invalide pour {model_name}")
+                logger.debug(f"Modèle {model_name} non valide pour la mise à jour des infos")
                 return
 
-            self.model_info[f"{model_type.value}_{model_name}"] = {
+            model_key = self._get_model_key(model_type, model_name)
+            self.model_info[model_key] = {
                 "last_loaded": datetime.utcnow().isoformat(),
                 "device": str(model.device),
                 "model_type": model_type.value,
@@ -211,9 +197,10 @@ class ModelManager:
                 "performance_config": self._get_performance_config(model_name, model_type),
                 "metadata": {
                     "is_quantized": hasattr(model.model, "is_quantized"),
-                    "requires_grad": next(model.model.parameters()).requires_grad
+                    "requires_grad": next(model.model.parameters(), None) is not None
                 }
             }
+            logger.debug(f"Infos mises à jour pour {model_key}")
         except Exception as e:
             logger.warning(f"Erreur mise à jour info modèle: {e}")
 

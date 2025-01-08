@@ -128,7 +128,6 @@ class ElasticsearchClient:
                     success = response.get("result") in ["created", "updated"]
                     if success:
                         metrics.increment_counter("documents_indexed")
-                        logger.info(f"Document indexé avec succès: {title}")
                     return success
 
                 except Exception as e:

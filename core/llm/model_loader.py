@@ -285,43 +285,33 @@ class ModelLoader:
         """Décharge un modèle de la mémoire."""
         try:
             if model_key not in self.loaded_models:
-                logger.warning(f"Tentative de déchargement d'un modèle non chargé: {model_key}")
+                logger.debug(f"Le modèle {model_key} n'est pas chargé, ignoré")
                 return
 
             model = self.loaded_models.pop(model_key)
             
             # Nettoyage du modèle
-            if hasattr(model, 'model'):
-                if hasattr(model.model, 'cpu'):
-                    try:
+            if model and hasattr(model, 'model'):
+                try:
+                    if hasattr(model.model, 'cpu'):
                         model.model.cpu()
-                    except Exception as e:
-                        logger.warning(f"Erreur lors du passage sur CPU: {e}")
-                
-                # Suppression explicite
-                try:
                     del model.model
+                    logger.debug(f"Modèle {model_key} déchargé et supprimé")
                 except Exception as e:
-                    logger.warning(f"Erreur lors de la suppression du modèle: {e}")
+                    logger.warning(f"Erreur lors du nettoyage du modèle {model_key}: {e}")
 
-            # Nettoyage du tokenizer si présent
-            if hasattr(model, 'tokenizer') and model.tokenizer:
-                try:
-                    del model.tokenizer
-                except Exception as e:
-                    logger.warning(f"Erreur lors de la suppression du tokenizer: {e}")
-
-            # Nettoyage de la mémoire CUDA
+            # Nettoyage du cache CUDA
             if torch.cuda.is_available():
                 try:
                     torch.cuda.empty_cache()
+                    logger.debug("Cache CUDA nettoyé")
                 except Exception as e:
-                    logger.warning(f"Erreur lors du nettoyage CUDA: {e}")
+                    logger.warning(f"Erreur lors du nettoyage du cache CUDA: {e}")
 
-            logger.info(f"Modèle {model_key} déchargé")
+            logger.info(f"Modèle {model_key} déchargé avec succès")
             
         except Exception as e:
-            logger.error(f"Erreur déchargement modèle {model_key}: {e}")
+            logger.error(f"Erreur lors du déchargement du modèle {model_key}: {e}")
 
     def _apply_quantization(self, model: PreTrainedModel, quantization: str) -> PreTrainedModel:
         """Applique la quantization à un modèle."""
