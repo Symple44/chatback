@@ -305,56 +305,56 @@ class ModelManager:
             self.model_info = {}
             
     async def test_model_health(
-        self,
-        model_type: ModelType,
-        test_input: str
-    ) -> bool:
-        """Teste la santé d'un modèle."""
-        try:
-            model = self.current_models.get(model_type)
-            if not model:
-                return False
-
-            with torch.no_grad():
-                if model_type == ModelType.CHAT:
-                    # Test simple de génération
-                    tokenized = self.tokenizer_manager.tokenizer(
-                        test_input,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=32
-                    ).to(model.device)
-                    
-                    _ = model.model.generate(
-                        **tokenized,
-                        max_length=32,
-                        num_return_sequences=1
-                    )
-
-                elif model_type == ModelType.EMBEDDING:
-                    # Test de création d'embedding
-                    _ = model.model.encode(test_input)
-
-                else:  # SUMMARIZER
-                    # Test de génération de résumé
-                    tokenized = model.tokenizer(
-                        test_input,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=32
-                    ).to(model.device)
-                    
-                    _ = model.model.generate(
-                        **tokenized,
-                        max_length=32,
-                        num_return_sequences=1
-                    )
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Erreur test santé modèle {model_type}: {e}")
+    self,
+    model_type: ModelType,
+    test_input: str = "Test de santé du modèle."
+) -> bool:
+    """Teste la santé d'un modèle."""
+    try:
+        model = self.current_models.get(model_type)
+        if not model:
             return False
+
+        with torch.no_grad():
+            if model_type == ModelType.CHAT:
+                # Test simple de génération en utilisant le tokenizer du modèle
+                tokenized = model.tokenizer(
+                    test_input,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=32
+                ).to(model.device)
+                
+                _ = model.model.generate(
+                    **tokenized,
+                    max_length=32,
+                    num_return_sequences=1
+                )
+
+            elif model_type == ModelType.EMBEDDING:
+                # Test de création d'embedding
+                _ = model.model.encode(test_input)
+
+            else:  # SUMMARIZER
+                # Test de génération de résumé
+                tokenized = model.tokenizer(
+                    test_input,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=32
+                ).to(model.device)
+                
+                _ = model.model.generate(
+                    **tokenized,
+                    max_length=32,
+                    num_return_sequences=1
+                )
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Erreur test santé modèle {model_type}: {e}")
+        return False
 
     async def cleanup(self):
         """Nettoie les ressources."""
