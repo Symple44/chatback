@@ -241,8 +241,6 @@ class CUDAManager:
             if priority == ModelPriority.HIGH:
                 if self.config.use_flash_attention:
                     load_params["attn_implementation"] = "flash_attention_2"
-            elif priority == ModelPriority.LOW:
-                load_params["load_in_8bit"] = True  # Plus agressive pour les embeddings
 
         return load_params
 
