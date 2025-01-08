@@ -106,7 +106,6 @@ SUMMARIZER_MODELS = {
             "device_map": "auto",
             "torch_dtype": torch.float16,
             "max_memory": {0: "4GiB", "cpu": "8GB"},
-            "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
@@ -118,6 +117,7 @@ SUMMARIZER_MODELS = {
 
 # Configuration des modèles de chat/instruction disponibles
 AVAILABLE_MODELS = {
+    # Dans AVAILABLE_MODELS, pour le modèle Mistral
     "Mistral-7B-Instruct-v0.3": {
         "display_name": "Mistral-7B Instruct v0.3",
         "path": "mistralai/Mistral-7B-Instruct-v0.3",
@@ -134,7 +134,6 @@ AVAILABLE_MODELS = {
             "device_map": "auto",
             "torch_dtype": torch.float16,
             "max_memory": {0: "16GiB", "cpu": "12GB"},
-            "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
@@ -159,7 +158,6 @@ AVAILABLE_MODELS = {
             "device_map": "auto",
             "torch_dtype": torch.float16,
             "max_memory": {0: "20GiB", "cpu": "24GB"},
-            "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",

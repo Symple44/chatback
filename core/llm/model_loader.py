@@ -5,7 +5,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
-    PreTrainedModel, 
+    PreTrainedModel,
+    BitsAndBytesConfig
 )
 from sentence_transformers import SentenceTransformer
 import logging
@@ -105,17 +106,22 @@ class ModelLoader:
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
+            # Configuration de la quantization avec BitsAndBytesConfig
+            if "quantization_config" in load_params:
+                quant_config = load_params.pop("quantization_config")
+                load_params["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=quant_config["bnb_4bit_compute_dtype"],
+                    bnb_4bit_quant_type=quant_config["bnb_4bit_quant_type"],
+                    bnb_4bit_use_double_quant=quant_config["bnb_4bit_use_double_quant"]
+                )
+            
             # Récupération des paramètres CUDA optimisés
             cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.HIGH)
             
             # Fusionner les paramètres en gardant la priorité pour load_params
             cuda_params.update(load_params)
             load_params = cuda_params
-
-            # Configurer les paramètres de quantization si nécessaire
-            if "quantization_config" in load_params:
-                quant_config = load_params.pop("quantization_config")
-                load_params.update(quant_config)
             
             logger.debug(f"Paramètres de chargement: {load_params}")
             
