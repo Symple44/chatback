@@ -136,7 +136,8 @@ AVAILABLE_MODELS = {
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
+                "bnb_4bit_use_double_quant": True,
+                "llm_int8_enable_fp32_cpu_offload": True
             },
             "attn_implementation": "flash_attention_2"
         }
@@ -160,28 +161,13 @@ AVAILABLE_MODELS = {
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True
+                "bnb_4bit_use_double_quant": True,
+                "llm_int8_enable_fp32_cpu_offload": True
             },
+            "low_cpu_mem_usage": True,
+            "offload_folder": "offload_folder",
             "attn_implementation": "flash_attention_2"
         }
-    }
-}
-
-# Configuration CUDA optimisée pour RTX 3090
-CUDA_CONFIG = {
-    "device_type": "cuda",
-    "compute_capability": "8.6",
-    "memory_config": {
-        "max_split_size_mb": 4096,
-        "gpu_memory_fraction": 0.95,
-        "offload_folder": "offload_folder"
-    },
-    "optimization": {
-        "use_flash_attention": True,
-        "use_cuda_graphs": True,
-        "cudnn_benchmark": True,
-        "enable_tf32": True,
-        "allow_fp16_reduced_precision_reduction": True
     }
 }
 
@@ -210,6 +196,24 @@ MODEL_PERFORMANCE_CONFIGS = {
             "top_p": 0.95,
             "repetition_penalty": 1.1
         }
+    }
+}
+
+# Configuration CUDA optimisée pour RTX 3090
+CUDA_CONFIG = {
+    "device_type": "cuda",
+    "compute_capability": "8.6",
+    "memory_config": {
+        "max_split_size_mb": 4096,
+        "gpu_memory_fraction": 0.95,
+        "offload_folder": "offload_folder"
+    },
+    "optimization": {
+        "use_flash_attention": True,
+        "use_cuda_graphs": True,
+        "cudnn_benchmark": True,
+        "enable_tf32": True,
+        "allow_fp16_reduced_precision_reduction": True
     }
 }
 

@@ -110,10 +110,11 @@ class ModelLoader:
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
                 load_params["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=quant_config["bnb_4bit_compute_dtype"],
-                    bnb_4bit_quant_type=quant_config["bnb_4bit_quant_type"],
-                    bnb_4bit_use_double_quant=quant_config["bnb_4bit_use_double_quant"]
+                    load_in_4bit=quant_config.get("load_in_4bit", True),
+                    bnb_4bit_compute_dtype=quant_config.get("bnb_4bit_compute_dtype", torch.float16),
+                    bnb_4bit_quant_type=quant_config.get("bnb_4bit_quant_type", "nf4"),
+                    bnb_4bit_use_double_quant=quant_config.get("bnb_4bit_use_double_quant", True),
+                    llm_int8_enable_fp32_cpu_offload=quant_config.get("llm_int8_enable_fp32_cpu_offload", True)
                 )
             
             # Récupération des paramètres CUDA optimisés
@@ -129,6 +130,7 @@ class ModelLoader:
             with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForCausalLM.from_pretrained(
                     config["path"],
+                    trust_remote_code=True,
                     **load_params
                 )
 
