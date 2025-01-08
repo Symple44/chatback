@@ -179,8 +179,7 @@ AVAILABLE_MODELS = {
                 "bnb_4bit_use_double_quant": True
             }
         }
-    }
-
+    },
     "Mixtral-8x7B-Instruct-v0.1": {
         "display_name": "Mixtral 8x7B Instruct",
         "path": "mistralai/Mixtral-8x7B-Instruct-v0.1",
