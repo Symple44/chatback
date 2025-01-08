@@ -24,7 +24,7 @@ from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
 from core.llm.cuda_manager import CUDAManager
 from core.storage.google_drive import GoogleDriveManager
-from core.llm.model_loader import ModelType
+from core.llm.model_loader import ModelLoader, ModelType
 
 logger = get_logger("main")
 
