@@ -171,20 +171,16 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "22GiB",
-                "cpu": "24GB"
-            }
-        },
-        "quantization_config": {
+            "torch_dtype": torch.float16,
             "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
-        },
-        "attn_implementation": "flash_attention_2"
-    },
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            }
+        }
+    }
+
     "Mixtral-8x7B-Instruct-v0.1": {
         "display_name": "Mixtral 8x7B Instruct",
         "path": "mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -199,19 +195,14 @@ AVAILABLE_MODELS = {
         "capabilities": ["chat", "instruction", "function_calling"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "22GiB",
-                "cpu": "24GB"
-            }
-        },
-        "quantization_config": {
+            "torch_dtype": torch.float16,
             "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
-        },
-        "attn_implementation": "flash_attention_2"
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            }
+        }
     },
     "Qwen-14B-Chat": {
         "display_name": "Qwen 14B Chat",

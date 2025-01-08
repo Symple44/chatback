@@ -107,14 +107,20 @@ class ModelLoader:
             
             # Récupération des paramètres CUDA optimisés
             cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.HIGH)
-            load_params.update(cuda_params)
             
-            # Application de la configuration de quantization si disponible
-            if "quantization_config" in config:
-                load_params.update(config["quantization_config"])
+            # Fusionner les paramètres en gardant la priorité pour load_params
+            cuda_params.update(load_params)
+            load_params = cuda_params
+
+            # Configurer les paramètres de quantization si nécessaire
+            if "quantization_config" in load_params:
+                quant_config = load_params.pop("quantization_config")
+                load_params.update(quant_config)
+            
+            logger.debug(f"Paramètres de chargement: {load_params}")
             
             # Chargement avec gestion de la précision moderne
-            with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForCausalLM.from_pretrained(
                     config["path"],
                     **load_params
