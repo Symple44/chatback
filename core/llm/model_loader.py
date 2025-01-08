@@ -103,6 +103,10 @@ class ModelLoader:
         try:
             logger.info(f"Chargement du modèle {model_name}")
             
+            tokenizer = self.tokenizer_manager.get_tokenizer(model_name, ModelType.CHAT)
+            if not tokenizer:
+                raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+            
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
@@ -139,7 +143,7 @@ class ModelLoader:
 
             return LoadedModel(
                 model=model,
-                tokenizer=self.tokenizer_manager.get_tokenizer(model_name, ModelType.CHAT),
+                tokenizer=tokenizer,
                 model_type=ModelType.CHAT,
                 model_name=model_name,
                 config=config,

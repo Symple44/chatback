@@ -116,9 +116,27 @@ class TokenizerManager:
                 )
             }
 
-            await self.load_tokenizer(settings.MODEL_NAME, TokenizerType.CHAT, configs[TokenizerType.CHAT])
-            await self.load_tokenizer(settings.MODEL_NAME_SUMMARIZER, TokenizerType.SUMMARIZER, configs[TokenizerType.SUMMARIZER])
-            await self.load_tokenizer(settings.EMBEDDING_MODEL, TokenizerType.EMBEDDING, configs[TokenizerType.EMBEDDING])
+            # Chargement des tokenizers pour les modèles de chat
+            for model_name in AVAILABLE_MODELS.keys():
+                await self.load_tokenizer(
+                    model_name, 
+                    TokenizerType.CHAT, 
+                    configs[TokenizerType.CHAT]
+                )
+                
+            # Chargement des tokenizers pour les summarizers
+            await self.load_tokenizer(
+                settings.MODEL_NAME_SUMMARIZER,
+                TokenizerType.SUMMARIZER,
+                configs[TokenizerType.SUMMARIZER]
+            )
+                
+            # Chargement des tokenizers pour l'embedding
+            await self.load_tokenizer(
+                settings.EMBEDDING_MODEL,
+                TokenizerType.EMBEDDING,
+                configs[TokenizerType.EMBEDDING]
+            )
 
             self._initialized = True
             logger.info("Tokenizers initialisés avec succès")
@@ -152,6 +170,17 @@ class TokenizerManager:
                 config,
                 tokenizer_type
             )
+            
+            # Configuration spécifique pour Mixtral
+            if "mixtral" in model_name.lower():
+                tokenizer.pad_token = tokenizer.eos_token
+                special_tokens = {
+                    "bos_token": "<s>",
+                    "eos_token": "</s>",
+                    "pad_token": "</s>",
+                    "unk_token": "<unk>",
+                }
+                tokenizer.add_special_tokens(special_tokens)
 
             # Mise à jour des dictionnaires
             self.tokenizers[tokenizer_key] = tokenizer
