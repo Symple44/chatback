@@ -122,7 +122,7 @@ class ComponentManager:
                 logger.info("Tokenizer Manager initialisé")
 
                 # Initialisation du model loader avant tout
-                self.model_loader = ModelLoader(self.cuda_manager, self.tokenizer_manager)
+                model_loader = ModelLoader(self.cuda_manager, self.tokenizer_manager)
                 self._components["model_loader"] = model_loader
 
                 # Initialisation du model manager
