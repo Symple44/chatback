@@ -1,15 +1,15 @@
+# core/config/models.py
 from typing import Dict, List, Any
 from pydantic import BaseModel
 import torch
 
-# Configuration des modèles disponibles avec paramètres optimisés pour RTX 3090 24GB
 # Configuration des modèles d'embedding disponibles
 EMBEDDING_MODELS = {
     "paraphrase-multilingual-mpnet-base-v2": {
-        "display_name": "paraphrase multilingual mpnet base v2",
+        "display_name": "Paraphrase Multilingual MPNet Base v2",
         "path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         "type": "embedding",
-        "languages": ["fr"],
+        "languages": ["fr", "en", "de", "es", "it"],
         "embedding_dimension": 768,
         "max_sequence_length": 512,
         "gpu_requirements": {
@@ -20,11 +20,8 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "2GiB",
-                "cpu": "4GB"
-            }
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "2GiB", "cpu": "4GB"}
         }
     },
     "multilingual-e5-large": {
@@ -42,11 +39,8 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "2GiB",
-                "cpu": "4GB"
-            }
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "2GiB", "cpu": "4GB"}
         }
     },
     "bge-large-v1.5": {
@@ -64,11 +58,8 @@ EMBEDDING_MODELS = {
         "capabilities": ["embedding", "retrieval"],
         "load_params": {
             "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "2GiB",
-                "cpu": "4GB"
-            }
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "2GiB", "cpu": "4GB"}
         }
     }
 }
@@ -76,7 +67,7 @@ EMBEDDING_MODELS = {
 # Configuration des modèles de summarization disponibles
 SUMMARIZER_MODELS = {
     "t5-base-fr-sum-cnndm": {
-        "display_name": "t5-base-fr-sum-cnndm",
+        "display_name": "T5 Base FR Summarizer",
         "path": "plguillou/t5-base-fr-sum-cnndm",
         "type": "summarization",
         "languages": ["fr"],
@@ -89,19 +80,17 @@ SUMMARIZER_MODELS = {
         "capabilities": ["summarization"],
         "load_params": {
             "device_map": "auto",
-            "max_memory": {
-                "0": "4GiB",
-                "cpu": "8GB"
-            }
-        },
-        "quantization_config": {
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "4GiB", "cpu": "8GB"},
             "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
+            }
         }
     },
-    "mT5_multilingual_XLSum": {
+    "mt5-base-multi-sum": {
         "display_name": "mT5 Base Multilingual Summarizer",
         "path": "csebuetnlp/mT5_multilingual_XLSum",
         "type": "summarization",
@@ -115,42 +104,14 @@ SUMMARIZER_MODELS = {
         "capabilities": ["summarization"],
         "load_params": {
             "device_map": "auto",
-            "max_memory": {
-                "0": "4GiB",
-                "cpu": "8GB"
-            }
-        },
-        "quantization_config": {
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "4GiB", "cpu": "8GB"},
             "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
-        }
-    },
-    "mbart-large-cc25": {
-        "display_name": "mBART Large Multilingual",
-        "path": "facebook/mbart-large-cc25",
-        "type": "summarization",
-        "languages": ["fr", "en", "de", "es", "it"],
-        "max_sequence_length": 1024,
-        "gpu_requirements": {
-            "vram_required": "4GB",
-            "recommended_batch_size": 16
-        },
-        "quantization": "bitsandbytes-4bit",
-        "capabilities": ["summarization"],
-        "load_params": {
-            "device_map": "auto",
-            "max_memory": {
-                "0": "4GiB",
-                "cpu": "8GB"
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True
             }
-        },
-        "quantization_config": {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
         }
     }
 }
@@ -172,12 +133,14 @@ AVAILABLE_MODELS = {
         "load_params": {
             "device_map": "auto",
             "torch_dtype": torch.float16,
+            "max_memory": {0: "16GiB", "cpu": "12GB"},
             "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
                 "bnb_4bit_use_double_quant": True
-            }
+            },
+            "attn_implementation": "flash_attention_2"
         }
     },
     "Mixtral-8x7B-Instruct-v0.1": {
@@ -195,69 +158,15 @@ AVAILABLE_MODELS = {
         "load_params": {
             "device_map": "auto",
             "torch_dtype": torch.float16,
+            "max_memory": {0: "20GiB", "cpu": "24GB"},
             "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
                 "bnb_4bit_use_double_quant": True
-            }
+            },
+            "attn_implementation": "flash_attention_2"
         }
-    },
-    "Qwen-14B-Chat": {
-        "display_name": "Qwen 14B Chat",
-        "path": "Qwen/Qwen-14B-Chat",
-        "type": "chat",
-        "languages": ["fr", "en"],
-        "context_length": 8192,
-        "gpu_requirements": {
-            "vram_required": "18GB",
-            "recommended_batch_size": 24
-        },
-        "quantization": "bitsandbytes-4bit",
-        "capabilities": ["chat", "instruction"],
-        "load_params": {
-            "device_map": "auto",
-            "torch_dtype": "float16",
-            "trust_remote_code": True,
-            "max_memory": {
-                "0": "22GiB",
-                "cpu": "24GB"
-            }
-        },
-        "quantization_config": {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
-        }
-    },
-    "zephyr-7b-beta": {
-        "display_name": "Zephyr 7B Beta",
-        "path": "HuggingFaceH4/zephyr-7b-beta",
-        "type": "chat",
-        "languages": ["fr", "en"],
-        "context_length": 8192,
-        "gpu_requirements": {
-            "vram_required": "16GB",
-            "recommended_batch_size": 32
-        },
-        "quantization": "bitsandbytes-4bit",
-        "capabilities": ["chat", "instruction", "function_calling"],
-        "load_params": {
-            "device_map": "auto",
-            "torch_dtype": "float16",
-            "max_memory": {
-                "0": "22GiB",
-                "cpu": "24GB"
-            }
-        },
-        "quantization_config": {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_use_double_quant": True
-        },
-        "attn_implementation": "flash_attention_2"
     }
 }
 
@@ -304,30 +213,6 @@ MODEL_PERFORMANCE_CONFIGS = {
             "top_p": 0.95,
             "repetition_penalty": 1.1
         }
-    },
-    "qwen-14b-chat": {
-        "batch_size": 24,
-        "prefetch_factor": 2,
-        "num_workers": 4,
-        "pin_memory": True,
-        "generation_config": {
-            "max_length": 4096,
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "repetition_penalty": 1.1
-        }
-    },
-    "zephyr-7b-beta": {
-        "batch_size": 32,
-        "prefetch_factor": 2,
-        "num_workers": 4,
-        "pin_memory": True,
-        "generation_config": {
-            "max_length": 4096,
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "repetition_penalty": 1.1
-        }
     }
 }
 
@@ -344,7 +229,7 @@ EMBEDDING_PERFORMANCE_CONFIGS = {
             "add_special_tokens": True
         }
     },
-    "e5-large-v2": {
+    "multilingual-e5-large": {
         "batch_size": 32,
         "normalize_embeddings": True,
         "max_length": 512,
@@ -355,7 +240,7 @@ EMBEDDING_PERFORMANCE_CONFIGS = {
             "add_special_tokens": True
         }
     },
-    "bge-large": {
+    "bge-large-v1.5": {
         "batch_size": 32,
         "normalize_embeddings": True,
         "max_length": 512,
@@ -397,23 +282,8 @@ SUMMARIZER_PERFORMANCE_CONFIGS = {
             "padding": "longest",
             "max_length": 1024
         }
-    },
-    "bart-large-multi": {
-        "batch_size": 16,
-        "min_length": 50,
-        "max_length": 150,
-        "length_penalty": 2.0,
-        "early_stopping": True,
-        "num_beams": 4,
-        "no_repeat_ngram_size": 3,
-        "preprocessing": {
-            "truncation": True,
-            "padding": "longest",
-            "max_length": 1024
-        }
     }
 }
-
 # Configuration globale du système
 SYSTEM_CONFIG = {
     "memory_management": {

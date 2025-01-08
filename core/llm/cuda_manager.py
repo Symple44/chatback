@@ -124,6 +124,9 @@ class CUDAManager:
             return
 
         try:
+            # Application de la configuration système
+            self._apply_system_config()
+            
             # Nettoyage initial
             self.cleanup_memory()
             
@@ -134,7 +137,7 @@ class CUDAManager:
             if self.config.device_type == DeviceType.CUDA:
                 # Configuration cuDNN
                 cudnn.enabled = True
-                cudnn.benchmark = self.config.benchmark
+                cudnn.benchmark = self.config.benchmark and SYSTEM_CONFIG["optimization"]["enable_cuda_graphs"]
                 cudnn.deterministic = self.config.deterministic
                 cudnn.allow_tf32 = self.config.enable_tf32
 
@@ -148,8 +151,18 @@ class CUDAManager:
                     f"garbage_collection_threshold:{self.config.gc_threshold}"
                 )
 
-            # Configuration des threads CPU
-            torch.set_num_threads(int(settings.MKL_NUM_THREADS))
+                # Application des optimisations système
+                if SYSTEM_CONFIG["optimization"]["enable_channels_last"]:
+                    torch.backends.cuda.preferred_memory_format = torch.channels_last
+
+                if SYSTEM_CONFIG["optimization"]["compile_mode"] == "reduce-overhead":
+                    torch._dynamo.config.optimize_ddp = True
+                    torch._dynamo.config.automatic_dynamic_shapes = True
+
+            # Configuration des threads CPU selon SYSTEM_CONFIG
+            for env_var, thread_count in SYSTEM_CONFIG["thread_config"].items():
+                os.environ[env_var] = str(thread_count)
+            torch.set_num_threads(SYSTEM_CONFIG["thread_config"]["mkl_num_threads"])
             
             self._initialized = True
             self.update_memory_stats()
@@ -157,6 +170,37 @@ class CUDAManager:
             
         except Exception as e:
             logger.error(f"Erreur initialisation CUDA: {e}")
+            raise
+
+    def _apply_system_config(self):
+        """Applique la configuration système globale."""
+        try:
+            # Configuration de la mémoire
+            memory_config = SYSTEM_CONFIG["memory_management"]
+            self.config.gc_threshold = memory_config["gpu_memory_fraction"]
+            
+            # Mise à jour des limites mémoire
+            if hasattr(self.config, "memory_configs"):
+                for priority in self.config.memory_configs:
+                    if "0" in self.config.memory_configs[priority]:
+                        max_gpu_mem = int(float(memory_config["gpu_memory_fraction"]) * 24)  # 24GB pour RTX 3090
+                        self.config.memory_configs[priority][0] = f"{max_gpu_mem}GiB"
+                    
+                    if "cpu" in self.config.memory_configs[priority]:
+                        self.config.memory_configs[priority]["cpu"] = memory_config["cpu_memory_limit"]
+
+            # Configuration des dossiers
+            self.config.offload_folder = memory_config["offload_folder"]
+            os.makedirs(self.config.offload_folder, exist_ok=True)
+
+            # Application des optimisations
+            if SYSTEM_CONFIG["optimization"]["enable_amp"]:
+                torch.cuda.amp.autocast(enabled=True).__enter__()
+
+            logger.info("Configuration système appliquée avec succès")
+            
+        except Exception as e:
+            logger.error(f"Erreur application configuration système: {e}")
             raise
 
     def get_model_load_parameters(
@@ -314,7 +358,12 @@ class CUDAManager:
                     "multi_processor_count": gpu_properties.multi_processor_count,
                     "device_id": device,
                     "cuda_version": torch.version.cuda,
-                    "allocated_memory": self.current_allocations
+                    "allocated_memory": self.current_allocations,
+                    "system_config": {
+                        "memory_management": SYSTEM_CONFIG["memory_management"],
+                        "optimization": SYSTEM_CONFIG["optimization"],
+                        "thread_config": SYSTEM_CONFIG["thread_config"]
+                    }
                 }
 
                 logger.info("Configuration GPU:")
