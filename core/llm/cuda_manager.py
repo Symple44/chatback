@@ -159,7 +159,7 @@ class CUDAManager:
             logger.error(f"Erreur initialisation CUDA: {e}")
             raise
 
-    ddef get_model_load_parameters(
+    def get_model_load_parameters(
         self,
         model_name: str,
         priority: ModelPriority = ModelPriority.HIGH
