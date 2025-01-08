@@ -37,11 +37,18 @@ class EmbeddingManager:
         try:
             logger.info(f"Initialisation du modèle d'embedding: {self.model_name}")
             
-            # Utilisation de change_model au lieu de load_model
-            self.model = await model_manager.change_model(
-                model_name=self.model_name,
-                model_type=ModelType.EMBEDDING
-            )
+            # Vérifier si le modèle est déjà chargé dans le model_manager
+            existing_model = model_manager.current_models.get(ModelType.EMBEDDING)
+            if existing_model and existing_model.model_name == self.model_name:
+                logger.info(f"Utilisation du modèle d'embedding déjà chargé: {self.model_name}")
+                self.model = existing_model
+            else:
+                # Chargement du nouveau modèle si nécessaire
+                self.model = await model_manager.change_model(
+                    model_name=self.model_name,
+                    model_type=ModelType.EMBEDDING,
+                    keep_old=False  # On ne garde pas l'ancien modèle
+                )
 
             self._initialized = True
             logger.info("Modèle d'embedding initialisé avec succès")
