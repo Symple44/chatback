@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 import asyncio
+import torch
 from datetime import datetime
 
 from core.utils.logger import get_logger
