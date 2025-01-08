@@ -167,6 +167,16 @@ class ModelManager:
             "embedding_models": list(EMBEDDING_MODELS.keys()),
             "summarizer_models": list(SUMMARIZER_MODELS.keys())
         }
+        
+    def _get_available_models_by_type(self, model_type: ModelType) -> Dict:
+        """Récupère tous les modèles disponibles pour un type donné."""
+        if model_type == ModelType.CHAT:
+            return AVAILABLE_MODELS
+        elif model_type == ModelType.EMBEDDING:
+            return EMBEDDING_MODELS
+        elif model_type == ModelType.SUMMARIZER:
+            return SUMMARIZER_MODELS
+        return {}
 
     def get_current_model(self, model_type: ModelType = ModelType.CHAT) -> Optional[str]:
         """Retourne le nom du modèle actif pour un type donné."""
