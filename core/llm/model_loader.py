@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 import logging
 from enum import Enum
 from dataclasses import dataclass
+from datetime import datetime
 
 from core.config.models import (
     AVAILABLE_MODELS,
@@ -21,6 +22,7 @@ from core.config.models import (
     SUMMARIZER_PERFORMANCE_CONFIGS
 )
 from core.utils.logger import get_logger
+from core.llm.cuda_manager import ModelPriority
 
 logger = get_logger("model_loader")
 
