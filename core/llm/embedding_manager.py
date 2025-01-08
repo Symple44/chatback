@@ -29,7 +29,7 @@ class EmbeddingManager:
         self.current_config = EMBEDDING_MODELS[self.model_name]
         self.perf_config = EMBEDDING_PERFORMANCE_CONFIGS[self.model_name]
 
-    async def initialize(self, model_loader):
+    async def initialize(self, model_manager):
         """Initialise le modèle d'embedding."""
         if self._initialized:
             return
@@ -37,8 +37,8 @@ class EmbeddingManager:
         try:
             logger.info(f"Initialisation du modèle d'embedding: {self.model_name}")
             
-            # Chargement du modèle via le ModelLoader
-            self.model = await model_loader.load_model(
+            # Utilisation de change_model au lieu de load_model
+            self.model = await model_manager.change_model(
                 model_name=self.model_name,
                 model_type=ModelType.EMBEDDING
             )

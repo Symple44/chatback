@@ -137,7 +137,7 @@ class ComponentManager:
                 # Embedding Manager
                 from core.llm.embedding_manager import EmbeddingManager
                 embedding_manager = EmbeddingManager()
-                await embedding_manager.initialize(model_manager)
+                await embedding_manager.initialize(self.model_manager)
                 self._components["embedding_manager"] = embedding_manager
                 logger.info("Embedding Manager initialisé")
 
