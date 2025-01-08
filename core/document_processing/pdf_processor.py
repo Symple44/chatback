@@ -90,9 +90,7 @@ class PDFProcessor:
                 
         Returns:
             Dict contenant le texte complet et la structure des pages
-        """
-        logger.info(f"Extraction du texte de {file_path}")
-        
+        """   
         try:
             doc = fitz.open(file_path)
             pages_data = []

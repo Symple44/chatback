@@ -284,14 +284,42 @@ class ModelLoader:
     async def _unload_model(self, model_key: str):
         """Décharge un modèle de la mémoire."""
         try:
+            if model_key not in self.loaded_models:
+                logger.warning(f"Tentative de déchargement d'un modèle non chargé: {model_key}")
+                return
+
             model = self.loaded_models.pop(model_key)
-            if hasattr(model.model, 'cpu'):
-                model.model.cpu()
-            del model.model
-            if model.tokenizer:
-                del model.tokenizer
-            torch.cuda.empty_cache()
+            
+            # Nettoyage du modèle
+            if hasattr(model, 'model'):
+                if hasattr(model.model, 'cpu'):
+                    try:
+                        model.model.cpu()
+                    except Exception as e:
+                        logger.warning(f"Erreur lors du passage sur CPU: {e}")
+                
+                # Suppression explicite
+                try:
+                    del model.model
+                except Exception as e:
+                    logger.warning(f"Erreur lors de la suppression du modèle: {e}")
+
+            # Nettoyage du tokenizer si présent
+            if hasattr(model, 'tokenizer') and model.tokenizer:
+                try:
+                    del model.tokenizer
+                except Exception as e:
+                    logger.warning(f"Erreur lors de la suppression du tokenizer: {e}")
+
+            # Nettoyage de la mémoire CUDA
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception as e:
+                    logger.warning(f"Erreur lors du nettoyage CUDA: {e}")
+
             logger.info(f"Modèle {model_key} déchargé")
+            
         except Exception as e:
             logger.error(f"Erreur déchargement modèle {model_key}: {e}")
 

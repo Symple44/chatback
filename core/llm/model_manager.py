@@ -4,6 +4,7 @@ import torch
 from datetime import datetime
 import psutil
 import json
+import numpy as np
 from pathlib import Path
 import asyncio
 
@@ -264,54 +265,47 @@ class ModelManager:
             logger.error(f"Erreur vérification ressources: {e}")
             return False
 
+    async def _save_model_states(self):
+        """Sauvegarde l'état des modèles."""
+        try:
+            data = {
+                "model_info": self.model_info,
+                "last_updated": datetime.utcnow().isoformat(),
+                "model_states": {
+                    model_type.value: model.model_name if model else None
+                    for model_type, model in self.current_models.items()
+                }
+            }
+            
+            json_str = json.dumps(
+                data, 
+                indent=2, 
+                cls=ModelStateEncoder
+            )
+            self.model_states_file.write_text(json_str)
+            logger.debug("États des modèles sauvegardés avec succès")
+            
+        except Exception as e:
+            logger.warning(f"Erreur sauvegarde états modèles: {e}")
+
     async def _load_model_states(self):
         """Charge l'état des modèles depuis le fichier."""
         try:
             if self.model_states_file.exists():
                 data = json.loads(self.model_states_file.read_text())
                 self.model_info = data.get("model_info", {})
+                
+                # Conversion des types si nécessaire
+                for model_key, info in self.model_info.items():
+                    if "device" in info:
+                        info["device"] = torch.device(info["device"])
+                    if "metadata" in info and "requires_grad" in info["metadata"]:
+                        info["metadata"]["requires_grad"] = bool(info["metadata"]["requires_grad"])
+                        
                 logger.info("États des modèles chargés")
         except Exception as e:
             logger.warning(f"Erreur chargement états modèles: {e}")
             self.model_info = {}
-
-    async def _save_model_states(self):
-        """Sauvegarde l'état des modèles."""
-        try:
-            # Fonction helper pour la sérialisation
-            def serialize_value(val):
-                if hasattr(val, 'item'):  # Pour les tensors et types numpy
-                    return val.item()
-                if isinstance(val, torch.dtype):
-                    return str(val)
-                if hasattr(val, '__dict__'):  # Pour les objets complexes
-                    return str(val)
-                return val
-
-            # Copie et nettoyage des infos modèles
-            serializable_info = {}
-            for model_key, info in self.model_info.items():
-                cleaned_info = {}
-                for k, v in info.items():
-                    if isinstance(v, dict):
-                        cleaned_info[k] = {
-                            sub_k: serialize_value(sub_v)
-                            for sub_k, sub_v in v.items()
-                        }
-                    else:
-                        cleaned_info[k] = serialize_value(v)
-                serializable_info[model_key] = cleaned_info
-
-            data = {
-                "model_info": serializable_info,
-                "last_updated": datetime.utcnow().isoformat()
-            }
-            
-            self.model_states_file.write_text(json.dumps(data, indent=2))
-            logger.debug("États des modèles sauvegardés avec succès")
-            
-        except Exception as e:
-            logger.warning(f"Erreur sauvegarde états modèles: {e}")
             
     async def test_model_health(
         self,
@@ -381,3 +375,25 @@ class ModelManager:
             logger.info("ModelManager nettoyé")
         except Exception as e:
             logger.error(f"Erreur nettoyage ModelManager: {e}")
+        
+class ModelStateEncoder(json.JSONEncoder):
+    def default(self, obj: Any) -> Any:
+        try:
+            if isinstance(obj, torch.dtype):
+                return str(obj)
+            elif isinstance(obj, ModelPriority):
+                return obj.value
+            elif isinstance(obj, (torch.Tensor, np.ndarray)):
+                return obj.tolist()
+            elif isinstance(obj, (datetime, Path)):
+                return str(obj)
+            elif hasattr(obj, 'item'):
+                return obj.item()
+            elif hasattr(obj, '__dict__'):
+                return {
+                    k: v for k, v in obj.__dict__.items() 
+                    if not k.startswith('_')
+                }
+            return str(obj)
+        except Exception:
+            return str(obj)
