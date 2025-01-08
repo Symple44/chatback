@@ -82,7 +82,6 @@ SUMMARIZER_MODELS = {
             "device_map": "auto",
             "torch_dtype": torch.float16,
             "max_memory": {0: "4GiB", "cpu": "8GB"},
-            "load_in_4bit": True,
             "quantization_config": {
                 "bnb_4bit_compute_dtype": torch.float16,
                 "bnb_4bit_quant_type": "nf4",
