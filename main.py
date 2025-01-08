@@ -19,12 +19,31 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 from core.config.config import settings
+
 from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
-from core.llm.cuda_manager import CUDAManager
-from core.storage.google_drive import GoogleDriveManager
+
+from core.database.manager import DatabaseManager
+from core.database.base import get_session_manager
+from core.database.session_manager import SessionManager
+
+from core.cache import RedisCache
+
+from core.vectorstore import ElasticsearchClient
+
+from core.llm.auth_manager import HuggingFaceAuthManager
+from core.llm.model_manager import ModelManager
 from core.llm.model_loader import ModelLoader, ModelType
+from core.llm.cuda_manager import CUDAManager
+from core.llm.embedding_manager import EmbeddingManager 
+from core.llm.summarizer import DocumentSummarizer
+from core.llm.tokenizer_manager import TokenizerManager
+from core.llm.model import ModelInference
+
+from core.storage.google_drive import GoogleDriveManager
+from core.document_processing.extractor import DocumentExtractor
+from core.document_processing.pdf_processor import PDFProcessor
 
 logger = get_logger("main")
 
@@ -73,8 +92,6 @@ class ComponentManager:
                 await self.system_optimizer.optimize()
 
                 # Base de données
-                from core.database.manager import DatabaseManager
-                from core.database.base import get_session_manager
 
                 db_session_manager = get_session_manager(settings.get_database_url())
                 db_manager = DatabaseManager(db_session_manager.session_factory)
@@ -83,26 +100,22 @@ class ComponentManager:
                 logger.info("Base de données initialisée")
 
                 # Session Manager
-                from core.database.session_manager import SessionManager
                 self._components["session_manager"] = SessionManager(settings.get_database_url())
                 logger.info("Session manager initialisé")
 
                 # Cache Redis
-                from core.cache import RedisCache
                 cache = RedisCache()
                 await cache.initialize()
                 self._components["cache"] = cache
                 logger.info("Cache Redis initialisé")
 
                 # Elasticsearch
-                from core.vectorstore import ElasticsearchClient
                 es_client = ElasticsearchClient()
                 await es_client.initialize()
                 self._components["es_client"] = es_client
                 logger.info("Elasticsearch initialisé")
                 
                 # Auth Manager
-                from core.llm.auth_manager import HuggingFaceAuthManager
                 auth_manager = HuggingFaceAuthManager()
                 await auth_manager.setup_auth()
                 self._components["auth_manager"] = auth_manager
@@ -115,7 +128,6 @@ class ComponentManager:
                 logger.info("CUDA Manager initialisé")
 
                 # Tokenizer Manager
-                from core.llm.tokenizer_manager import TokenizerManager
                 tokenizer_manager = TokenizerManager()
                 await tokenizer_manager.initialize()
                 self._components["tokenizer_manager"] = tokenizer_manager
@@ -141,15 +153,12 @@ class ComponentManager:
                 self._components["summarizer"] = summarizer
 
                 # Model Inference (utilise les composants déjà initialisés)
-                from core.llm.model import ModelInference
                 model = ModelInference()
                 await model.initialize(self)  # Passage de self pour accéder aux composants
                 self._components["model"] = model
                 logger.info("Model Inference initialisé")
 
                 # Processeurs de documents
-                from core.document_processing.extractor import DocumentExtractor
-                from core.document_processing.pdf_processor import PDFProcessor
                 self._components["doc_extractor"] = DocumentExtractor()
                 self._components["pdf_processor"] = PDFProcessor(es_client)
                 logger.info("Processeurs de documents initialisés")
