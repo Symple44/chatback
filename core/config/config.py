@@ -166,6 +166,13 @@ class Settings(BaseSettings):
     MAX_CLARIFICATION_ATTEMPTS: int = 3
     MIN_QUERY_LENGTH: int = 2
     MAX_CONTEXT_DOCS: int = 6
+    
+    SYSTEM_ROLES: Dict[str, str] = {
+        "system": "Je suis {app_name}, votre assistant IA spécialisé.",
+        "user": "En tant qu'utilisateur, je demande :",
+        "assistant": "En tant qu'assistant technique, je vais vous aider :",
+        "context": "Voici le contexte pertinent :",
+    }
 
     # === Validation Methods ===
     @validator('MAX_MEMORY')
