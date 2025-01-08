@@ -153,18 +153,32 @@ class ModelLoader:
     async def _load_summarizer_model(self, model_name: str, config: Dict) -> LoadedModel:
         """Charge un modèle de résumé."""
         try:
+            logger.info(f"Chargement du summarizer {model_name}")
+            
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
-            # Récupération des paramètres CUDA optimisés
-            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.MEDIUM)
-            load_params.update(cuda_params)
-            
-            # Application de la configuration de quantization si disponible
-            if "quantization_config" in config:
-                load_params.update(config["quantization_config"])
+            # Configuration de la quantization avec BitsAndBytesConfig
+            if "quantization_config" in load_params:
+                quant_config = load_params.pop("quantization_config")
+                load_params["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=quant_config["bnb_4bit_compute_dtype"],
+                    bnb_4bit_quant_type=quant_config["bnb_4bit_quant_type"],
+                    bnb_4bit_use_double_quant=quant_config["bnb_4bit_use_double_quant"]
+                )
 
-            with torch.cuda.amp.autocast(enabled=True):
+            # Récupération des paramètres CUDA optimisés
+            cuda_params = self.cuda_manager.get_model_load_parameters(
+                model_name,
+                ModelPriority.MEDIUM
+            )
+            
+            # Fusionner les paramètres
+            cuda_params.update(load_params)
+            load_params = cuda_params
+
+            with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     config["path"],
                     **load_params
@@ -194,14 +208,22 @@ class ModelLoader:
     async def _load_embedding_model(self, model_name: str, config: Dict) -> LoadedModel:
         """Charge un modèle d'embedding."""
         try:
+            logger.info(f"Chargement du modèle d'embedding {model_name}")
+            
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
             # Récupération des paramètres CUDA optimisés
-            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.LOW)
-            load_params.update(cuda_params)
-
+            cuda_params = self.cuda_manager.get_model_load_parameters(
+                model_name,
+                ModelPriority.LOW
+            )
+            
+            # Fusionner les paramètres
+            cuda_params.update(load_params)
             device = self.cuda_manager.device
+
+            # Les modèles d'embedding utilisent SentenceTransformer
             model = SentenceTransformer(
                 config["path"],
                 device=str(device)
@@ -209,6 +231,9 @@ class ModelLoader:
 
             # Optimisations pour l'inférence
             model.eval()
+
+            # Note: Pas de quantization pour les modèles d'embedding car 
+            # ils sont déjà optimisés par SentenceTransformer
 
             return LoadedModel(
                 model=model,
