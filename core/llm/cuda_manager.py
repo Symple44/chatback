@@ -159,7 +159,7 @@ class CUDAManager:
             logger.error(f"Erreur initialisation CUDA: {e}")
             raise
 
-    def get_model_load_parameters(
+    ddef get_model_load_parameters(
         self,
         model_name: str,
         priority: ModelPriority = ModelPriority.HIGH
@@ -172,7 +172,13 @@ class CUDAManager:
 
         if self.config.device_type == DeviceType.CUDA:
             # Gestion de la mémoire selon la priorité
-            mem_config = self.config.memory_configs[priority]
+            mem_configs = {
+                ModelPriority.HIGH: {0: "16GiB", "cpu": "12GB"},     # Pour modèles de chat
+                ModelPriority.MEDIUM: {0: "4GiB", "cpu": "8GB"},    # Pour summarizers
+                ModelPriority.LOW: {0: "2GiB", "cpu": "4GB"}        # Pour embeddings
+            }
+            
+            mem_config = mem_configs[priority]
             
             # Validation de la mémoire disponible
             if not self._check_memory_availability(priority):
