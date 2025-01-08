@@ -121,12 +121,26 @@ class ComponentManager:
                 self._components["model_manager"] = model_manager
                 logger.info("Model Manager initialisé")
 
-                # Modèle LLM
+                # Embedding Manager
+                from core.llm.embedding_manager import EmbeddingManager
+                embedding_manager = EmbeddingManager()
+                await embedding_manager.initialize(model_manager)
+                self._components["embedding_manager"] = embedding_manager
+                logger.info("Embedding Manager initialisé")
+
+                # Summarizer
+                from core.llm.summarizer import DocumentSummarizer
+                summarizer = DocumentSummarizer()
+                await summarizer.initialize(model_manager)
+                self._components["summarizer"] = summarizer
+                logger.info("Summarizer initialisé")
+
+                # Model Inference (utilise les composants déjà initialisés)
                 from core.llm.model import ModelInference
                 model = ModelInference()
-                await model.initialize()
+                await model.initialize(self)  # Passage de self pour accéder aux composants
                 self._components["model"] = model
-                logger.info("Modèle LLM initialisé")
+                logger.info("Model Inference initialisé")
 
                 # Processeurs de documents
                 from core.document_processing.extractor import DocumentExtractor

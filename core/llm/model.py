@@ -20,13 +20,13 @@ class ModelInference:
     
     def __init__(self):
         """Initialise les composants nécessaires."""
-        self.auth_manager = HuggingFaceAuthManager()
-        self.cuda_manager = CUDAManager()
-        self.tokenizer_manager = TokenizerManager()
+        self.auth_manager = None
+        self.cuda_manager = None
+        self.tokenizer_manager = None
         self.model_manager = None
-        self.embedding_manager = EmbeddingManager()
+        self.embedding_manager = None
         self._initialized = False
-        self.summarizer = DocumentSummarizer()
+        self.summarizer = None
         
     async def initialize(self):
         """Initialise tous les composants de manière asynchrone."""
@@ -48,26 +48,15 @@ class ModelInference:
                     if not self.auth_manager.get_model_access(model):
                         raise ValueError(f"Accès non autorisé au modèle {model}")
 
-                # 3. Initialisation CUDA
-                await self.cuda_manager.initialize()
-                logger.info("CUDA initialisé")
-
-                # 4. Initialisation du TokenizerManager
-                await self.tokenizer_manager.initialize()
-                logger.info("Tokenizer initialisé")
-
-                # 5. Initialisation du ModelManager
-                self.model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
-                await self.model_manager.initialize()
-                logger.info("ModelManager initialisé")
-
-                # 6. Initialisation de l'EmbeddingManager
-                await self.embedding_manager.initialize(self.model_manager)
-                logger.info("EmbeddingManager initialisé")
-
-                # 7. Initialisation du Summarizer
-                await self.summarizer.initialize(self.model_manager)
-                logger.info("Summarizer initialisé")
+                # Réutilisation des composants déjà initialisés
+                self.cuda_manager = components.cuda_manager
+                self.tokenizer_manager = components.tokenizer_manager
+                self.model_manager = components.model_manager
+                self.auth_manager = components.auth_manager
+                
+                # Ces composants sont spécifiques à ModelInference
+                self.embedding_manager = components.embedding_manager
+                self.summarizer = components.summarizer
 
                 self._initialized = True
                 logger.info("Initialisation complète du système d'inférence")
