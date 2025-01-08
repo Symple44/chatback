@@ -18,7 +18,7 @@ class DocumentSummarizer:
         self.current_config = SUMMARIZER_MODELS[self.model_name]
         self.perf_config = SUMMARIZER_PERFORMANCE_CONFIGS[self.model_name]
         
-    async def initialize(self, model_loader):
+    async def initialize(self, model_manager):
         """Initialise le modèle de résumé."""
         if self._initialized:
             return
@@ -26,8 +26,8 @@ class DocumentSummarizer:
         try:
             logger.info(f"Initialisation du résumeur: {self.model_name}")
             
-            # Chargement du modèle via le ModelLoader
-            self.model = await model_loader.load_model(
+            # Utilisation de change_model au lieu de load_model
+            self.model = await model_manager.change_model(
                 model_name=self.model_name,
                 model_type=ModelType.SUMMARIZER
             )

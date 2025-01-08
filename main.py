@@ -121,32 +121,25 @@ class ComponentManager:
                 self._components["tokenizer_manager"] = tokenizer_manager
                 logger.info("Tokenizer Manager initialisé")
 
-                # Model Loader (nouveau)
-                from core.llm.model_loader import ModelLoader
-                model_loader = ModelLoader(cuda_manager, tokenizer_manager)
-                self._components["model_loader"] = model_loader
-                logger.info("Model Loader initialisé")
-                
-                # Model Manager
-                from core.llm.model_manager import ModelManager
-                model_manager = ModelManager(cuda_manager, tokenizer_manager)
+                # Initialisation du model loader avant tout
+                self.model_loader = ModelLoader(self.cuda_manager, self.tokenizer_manager)
+                await self.model_loader.initialize()
+                self._components["model_loader"] = self.model_loader
+
+                # Initialisation du model manager
+                model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
                 await model_manager.initialize()
                 self._components["model_manager"] = model_manager
-                logger.info("Model Manager initialisé")
 
-                # Embedding Manager
-                from core.llm.embedding_manager import EmbeddingManager
+                # Initialisation de l'embedding manager avec le model manager
                 embedding_manager = EmbeddingManager()
-                await embedding_manager.initialize(self.model_manager)
+                await embedding_manager.initialize(model_manager)
                 self._components["embedding_manager"] = embedding_manager
-                logger.info("Embedding Manager initialisé")
 
-                # Summarizer
-                from core.llm.summarizer import DocumentSummarizer
+                # Initialisation du summarizer avec le model manager
                 summarizer = DocumentSummarizer()
                 await summarizer.initialize(model_manager)
                 self._components["summarizer"] = summarizer
-                logger.info("Summarizer initialisé")
 
                 # Model Inference (utilise les composants déjà initialisés)
                 from core.llm.model import ModelInference

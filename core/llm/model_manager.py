@@ -197,6 +197,11 @@ class ModelManager:
     ):
         """Met à jour les informations sur un modèle."""
         try:
+            # Vérification que le modèle est valide avant de l'utiliser
+            if not model or not hasattr(model, 'model'):
+                logger.warning(f"Modèle invalide pour {model_name}")
+                return
+
             self.model_info[f"{model_type.value}_{model_name}"] = {
                 "last_loaded": datetime.utcnow().isoformat(),
                 "device": str(model.device),
