@@ -97,96 +97,118 @@ class ModelLoader:
 
     async def _load_chat_model(self, model_name: str, config: Dict) -> LoadedModel:
         """Charge un modèle de chat."""
-    
-        # Copie des paramètres de chargement
-        load_params = config["load_params"].copy()
-        load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
-    
-        # Chargement avec gestion de la précision moderne
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
-            model = AutoModelForCausalLM.from_pretrained(
-                config["path"],
-                **load_params
-            )
+        try:
+            logger.info(f"Chargement du modèle {model_name}")
             
-            if not self.tokenizer_manager.tokenizer:
-                self.tokenizer_manager.tokenizer = AutoTokenizer.from_pretrained(
+            # Récupération des paramètres de base du modèle
+            load_params = config["load_params"].copy()
+            
+            # Récupération des paramètres CUDA optimisés
+            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.HIGH)
+            load_params.update(cuda_params)
+            
+            # Application de la configuration de quantization si disponible
+            if "quantization_config" in config:
+                load_params.update(config["quantization_config"])
+            
+            # Chargement avec gestion de la précision moderne
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+                model = AutoModelForCausalLM.from_pretrained(
                     config["path"],
-                    use_fast=True
+                    **load_params
                 )
-    
-        # Configuration post-chargement
-        if config.get("quantization"):
-            model = self._apply_quantization(model, config["quantization"])
-        
-        model.eval()
-        model.requires_grad_(False)
-    
-        return LoadedModel(
-            model=model,
-            tokenizer=self.tokenizer_manager.tokenizer,
-            model_type=ModelType.CHAT,
-            model_name=model_name,
-            config=config,
-            loaded_at=torch.cuda.current_stream().record_event(),
-            device=next(model.parameters()).device
-        )
 
-    async def _load_embedding_model(self, model_name: str, config: Dict) -> LoadedModel:
-        """Charge un modèle d'embedding."""
-        device = self.cuda_manager.current_device
-        
-        model = SentenceTransformer(
-            config["path"],
-            device=str(device)
-        )
+            # Configuration post-chargement
+            model.eval()
+            model.requires_grad_(False)
 
-        # Optimisations pour l'inférence
-        model.eval()
-        if config.get("quantization"):
-            model = self._apply_quantization(model, config["quantization"])
+            return LoadedModel(
+                model=model,
+                tokenizer=self.tokenizer_manager.get_tokenizer(model_name, ModelType.CHAT),
+                model_type=ModelType.CHAT,
+                model_name=model_name,
+                config=config,
+                loaded_at=torch.cuda.current_stream().record_event(),
+                device=next(model.parameters()).device
+            )
 
-        return LoadedModel(
-            model=model,
-            tokenizer=None,  # SentenceTransformer gère son propre tokenizer
-            model_type=ModelType.EMBEDDING,
-            model_name=model_name,
-            config=config,
-            loaded_at=torch.cuda.current_stream().record_event(),
-            device=device
-        )
+        except Exception as e:
+            logger.error(f"Erreur chargement modèle {model_name}: {e}")
+            raise
 
     async def _load_summarizer_model(self, model_name: str, config: Dict) -> LoadedModel:
         """Charge un modèle de résumé."""
-        load_params = config["load_params"]
-        load_params.update(self.cuda_manager.get_model_load_parameters(model_name))
+        try:
+            # Récupération des paramètres de base du modèle
+            load_params = config["load_params"].copy()
+            
+            # Récupération des paramètres CUDA optimisés
+            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.MEDIUM)
+            load_params.update(cuda_params)
+            
+            # Application de la configuration de quantization si disponible
+            if "quantization_config" in config:
+                load_params.update(config["quantization_config"])
 
-        with torch.cuda.amp.autocast(enabled=True):
-            model = AutoModelForSeq2SeqLM.from_pretrained(
-                config["path"],
-                **load_params
+            with torch.cuda.amp.autocast(enabled=True):
+                model = AutoModelForSeq2SeqLM.from_pretrained(
+                    config["path"],
+                    **load_params
+                )
+                tokenizer = AutoTokenizer.from_pretrained(
+                    config["path"],
+                    use_fast=True
+                )
+
+            model.eval()
+            model.requires_grad_(False)
+
+            return LoadedModel(
+                model=model,
+                tokenizer=tokenizer,
+                model_type=ModelType.SUMMARIZER,
+                model_name=model_name,
+                config=config,
+                loaded_at=torch.cuda.current_stream().record_event(),
+                device=next(model.parameters()).device
             )
-            tokenizer = AutoTokenizer.from_pretrained(
+
+        except Exception as e:
+            logger.error(f"Erreur chargement summarizer {model_name}: {e}")
+            raise
+
+    async def _load_embedding_model(self, model_name: str, config: Dict) -> LoadedModel:
+        """Charge un modèle d'embedding."""
+        try:
+            # Récupération des paramètres de base du modèle
+            load_params = config["load_params"].copy()
+            
+            # Récupération des paramètres CUDA optimisés
+            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.LOW)
+            load_params.update(cuda_params)
+
+            device = self.cuda_manager.device
+            model = SentenceTransformer(
                 config["path"],
-                use_fast=True
+                device=str(device)
             )
 
-        # Configuration post-chargement
-        if config.get("quantization"):
-            model = self._apply_quantization(model, config["quantization"])
-        
-        model.eval()
-        model.requires_grad_(False)
+            # Optimisations pour l'inférence
+            model.eval()
 
-        return LoadedModel(
-            model=model,
-            tokenizer=tokenizer,
-            model_type=ModelType.SUMMARIZER,
-            model_name=model_name,
-            config=config,
-            loaded_at=torch.cuda.current_stream().record_event(),
-            device=next(model.parameters()).device
-        )
+            return LoadedModel(
+                model=model,
+                tokenizer=None,  # SentenceTransformer gère son propre tokenizer
+                model_type=ModelType.EMBEDDING,
+                model_name=model_name,
+                config=config,
+                loaded_at=torch.cuda.current_stream().record_event(),
+                device=device
+            )
+
+        except Exception as e:
+            logger.error(f"Erreur chargement embedding {model_name}: {e}")
+            raise
 
     def _get_model_config(self, model_name: str, model_type: ModelType) -> Optional[Dict]:
         """Récupère la configuration d'un modèle selon son type."""
