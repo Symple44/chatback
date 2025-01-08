@@ -100,6 +100,13 @@ class ComponentManager:
                 await es_client.initialize()
                 self._components["es_client"] = es_client
                 logger.info("Elasticsearch initialisé")
+                
+                # Auth Manager
+                from core.llm.auth_manager import HuggingFaceAuthManager
+                auth_manager = HuggingFaceAuthManager()
+                await auth_manager.setup_auth()
+                self._components["auth_manager"] = auth_manager
+                logger.info("Auth Manager initialisé")
 
                 # CUDA Manager
                 cuda_manager = CUDAManager()
@@ -114,6 +121,12 @@ class ComponentManager:
                 self._components["tokenizer_manager"] = tokenizer_manager
                 logger.info("Tokenizer Manager initialisé")
 
+                # Model Loader (nouveau)
+                from core.llm.model_loader import ModelLoader
+                model_loader = ModelLoader(cuda_manager, tokenizer_manager)
+                self._components["model_loader"] = model_loader
+                logger.info("Model Loader initialisé")
+                
                 # Model Manager
                 from core.llm.model_manager import ModelManager
                 model_manager = ModelManager(cuda_manager, tokenizer_manager)
