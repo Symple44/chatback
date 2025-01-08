@@ -228,9 +228,6 @@ class PDFProcessor:
                     if attempt == retries - 1:
                         raise
                     await asyncio.sleep(1 * (2 ** attempt))
-
-            if success:
-                logger.info(f"PDF {filename} indexé avec succès pour l'application {application}")
             
             return success
 

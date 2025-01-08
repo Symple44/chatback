@@ -278,11 +278,38 @@ class ModelManager:
     async def _save_model_states(self):
         """Sauvegarde l'état des modèles."""
         try:
+            # Fonction helper pour la sérialisation
+            def serialize_value(val):
+                if hasattr(val, 'item'):  # Pour les tensors et types numpy
+                    return val.item()
+                if isinstance(val, torch.dtype):
+                    return str(val)
+                if hasattr(val, '__dict__'):  # Pour les objets complexes
+                    return str(val)
+                return val
+
+            # Copie et nettoyage des infos modèles
+            serializable_info = {}
+            for model_key, info in self.model_info.items():
+                cleaned_info = {}
+                for k, v in info.items():
+                    if isinstance(v, dict):
+                        cleaned_info[k] = {
+                            sub_k: serialize_value(sub_v)
+                            for sub_k, sub_v in v.items()
+                        }
+                    else:
+                        cleaned_info[k] = serialize_value(v)
+                serializable_info[model_key] = cleaned_info
+
             data = {
-                "model_info": self.model_info,
+                "model_info": serializable_info,
                 "last_updated": datetime.utcnow().isoformat()
             }
+            
             self.model_states_file.write_text(json.dumps(data, indent=2))
+            logger.debug("États des modèles sauvegardés avec succès")
+            
         except Exception as e:
             logger.warning(f"Erreur sauvegarde états modèles: {e}")
             

@@ -211,8 +211,7 @@ class ComponentManager:
                                 }
                             )
                             if success:
-                                indexed_count += 1
-                                logger.info(f"Document indexé: {app_name}/{pdf_path.name}")
+                                indexed_count += 1s
                     except Exception as e:
                         logger.error(f"Erreur indexation {pdf_path}: {e}")
 
