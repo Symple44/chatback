@@ -28,35 +28,34 @@ class ModelInference:
         self._initialized = False
         self.summarizer = None
         
-    async def initialize(self):
+    async def initialize(self, components=None):  # Ajout du paramètre components
         """Initialise tous les composants de manière asynchrone."""
         if not self._initialized:
             try:
                 logger.info("Démarrage de l'initialisation du système d'inférence")
 
-                # 1. Authentification Hugging Face
-                if not await self.auth_manager.setup_auth():
-                    raise ValueError("Échec de l'authentification Hugging Face")
+                if components:  # Utilisation des composants passés
+                    # Réutilisation des composants déjà initialisés
+                    self.cuda_manager = components.cuda_manager
+                    self.tokenizer_manager = components.tokenizer_manager
+                    self.model_manager = components.model_manager
+                    self.auth_manager = components.auth_manager
+                    self.embedding_manager = components.embedding_manager
+                    self.summarizer = components.summarizer
+                else:
+                    # 1. Authentification Hugging Face
+                    if not await self.auth_manager.setup_auth():
+                        raise ValueError("Échec de l'authentification Hugging Face")
 
-                # 2. Vérification de l'accès aux modèles
-                models_to_check = [
-                    settings.MODEL_NAME,
-                    settings.EMBEDDING_MODEL,
-                    settings.MODEL_NAME_SUMMARIZER
-                ]
-                for model in models_to_check:
-                    if not self.auth_manager.get_model_access(model):
-                        raise ValueError(f"Accès non autorisé au modèle {model}")
-
-                # Réutilisation des composants déjà initialisés
-                self.cuda_manager = components.cuda_manager
-                self.tokenizer_manager = components.tokenizer_manager
-                self.model_manager = components.model_manager
-                self.auth_manager = components.auth_manager
-                
-                # Ces composants sont spécifiques à ModelInference
-                self.embedding_manager = components.embedding_manager
-                self.summarizer = components.summarizer
+                    # 2. Vérification de l'accès aux modèles
+                    models_to_check = [
+                        settings.MODEL_NAME,
+                        settings.EMBEDDING_MODEL,
+                        settings.MODEL_NAME_SUMMARIZER
+                    ]
+                    for model in models_to_check:
+                        if not self.auth_manager.get_model_access(model):
+                            raise ValueError(f"Accès non autorisé au modèle {model}")
 
                 self._initialized = True
                 logger.info("Initialisation complète du système d'inférence")
