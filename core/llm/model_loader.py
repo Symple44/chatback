@@ -130,7 +130,6 @@ class ModelLoader:
             with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForCausalLM.from_pretrained(
                     config["path"],
-                    trust_remote_code=True,
                     **load_params
                 )
 
