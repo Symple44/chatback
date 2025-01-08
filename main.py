@@ -123,8 +123,7 @@ class ComponentManager:
 
                 # Initialisation du model loader avant tout
                 self.model_loader = ModelLoader(self.cuda_manager, self.tokenizer_manager)
-                await self.model_loader.initialize()
-                self._components["model_loader"] = self.model_loader
+                self._components["model_loader"] = model_loader
 
                 # Initialisation du model manager
                 model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
