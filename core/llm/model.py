@@ -13,6 +13,7 @@ from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 
+
 logger = get_logger("model")
 
 class ModelInference:
@@ -134,9 +135,7 @@ class ModelInference:
         try:
             # Récupération de la config complète du modèle
             model = self.model_manager.current_models[ModelType.CHAT]
-            model_name = model.model_name.lower()
-            model_config = MODEL_PERFORMANCE_CONFIGS[model_name]
-            generation_config = model_config.get("generation_config", {}).copy()
+            generation_config = model.config.get("generation_config", {}).copy()
 
             # Surcharge des paramètres spécifiques si response_type spécifié
             if response_type and response_type in settings.RESPONSE_TYPES:
