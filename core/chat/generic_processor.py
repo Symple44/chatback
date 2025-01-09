@@ -70,7 +70,6 @@ class GenericProcessor(BaseProcessor):
             else:
                 logger.warning("Aucun document pertinent trouvé")
             
-            #context_summary = await self.summarizer.summarize_documents(relevant_docs)
             context_summary = None
             if filtered_docs:
                 try:
@@ -85,7 +84,7 @@ class GenericProcessor(BaseProcessor):
                         )
                     }
             
-            # Construction du prompt via PromptSystem
+            # Construction du prompt
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=filtered_docs,
@@ -93,7 +92,6 @@ class GenericProcessor(BaseProcessor):
                 conversation_history=context.get("history", []) if context else None,
                 language=request.get("language", "fr")
             )
-            logger.debug(f"Messages formatés: {messages}")
             
             # Génération de la réponse
             model_response = await self.model.generate_response(
@@ -102,44 +100,42 @@ class GenericProcessor(BaseProcessor):
                 response_type=request.get("response_type", "comprehensive")
             )
             
-            response_text = model_response.get("response", "")
+            # En cas d'erreur dans la génération
+            if "error" in model_response:
+                return self._create_error_response(model_response["error"])
             
-            # Mise à jour du contexte de session
-            await self.components.session_manager.update_session_context(
-                session_id,
-                {
-                    "history": self._update_conversation_history(
-                        context.get("history", []) if context else [],
-                        query,
-                        response_text
-                    ),
-                    "last_interaction": datetime.utcnow().isoformat()
-                }
-            )
+            response_text = model_response.get("response", "")
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+
+            # Logs de debug pour vérifier les valeurs avant la construction de la réponse
+            logger.debug("=== Debug values before ChatResponse creation ===")
+            logger.debug(f"response_text type: {type(response_text)}")
+            logger.debug(f"session_id type: {type(session_id)}")
+            logger.debug(f"processing_time type: {type(processing_time)}")
+            logger.debug(f"Tokens used: {model_response.get('tokens_used')}")
+            if filtered_docs:
+                for doc in filtered_docs:
+                    logger.debug(f"Document score type: {type(doc.get('score'))}, value: {doc.get('score')}")
+                    logger.debug(f"Document page type: {type(doc.get('metadata', {}).get('page'))}, value: {doc.get('metadata', {}).get('page')}")
             
             # Construction de la réponse
-            processing_time = (datetime.utcnow() - start_time).total_seconds()
-            
-            response = ChatResponse(
+            return ChatResponse(
                 response=response_text,
                 session_id=session_id,
                 conversation_id=str(uuid.uuid4()),
                 documents=[
                     DocumentReference(
                         title=doc.get("title", ""),
-                        page=int(doc.get("metadata", {}).get("page", 1)),  # Conversion explicite en int
-                        score=float(doc.get("score", 0.0)),  # Conversion explicite en float
+                        page=int(doc.get("metadata", {}).get("page", 1)),
+                        score=float(doc.get("score", 0.0)),
                         content=doc.get("content", ""),
                         metadata=doc.get("metadata", {})
                     ) for doc in filtered_docs
                 ],
-                confidence_score=float(self._calculate_confidence(filtered_docs)),  # Conversion explicite en float
-                processing_time=float(processing_time),  # Conversion explicite en float
-                tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),  # Conversion explicite en int
-                tokens_details={
-                    k: int(v) if isinstance(v, (int, str)) else v  # Conversion des valeurs en int si nécessaire
-                    for k, v in model_response.get("tokens_used", {}).items()
-                },
+                confidence_score=float(self._calculate_confidence(filtered_docs)),
+                processing_time=float(processing_time),
+                tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
+                tokens_details=model_response.get("tokens_used", {}),
                 metadata={
                     "processor_type": "generic",
                     "documents_found": len(filtered_docs),
@@ -150,22 +146,11 @@ class GenericProcessor(BaseProcessor):
                     }
                 }
             )
-            
-            # Sauvegarde en base de données
-            await self._save_interaction(
-                request=request,
-                response=response,
-                query_vector=query_vector,
-                response_vector=await self.model.create_embedding(response.response),
-                relevant_docs=relevant_docs,
-                messages=messages,
-                session_id=session_id
-            )
-            
-            return response
-            
+
         except Exception as e:
             logger.error(f"Erreur traitement générique: {e}")
+            # Log de l'erreur complète avec la stack trace
+            logger.exception("Stack trace complète:")
             return self._create_error_response(str(e))
 
     async def _save_interaction(
