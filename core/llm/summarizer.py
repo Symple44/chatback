@@ -96,7 +96,7 @@ class DocumentSummarizer:
                 inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
                 # Génération avec autocast pour optimisation mémoire
-                with torch.cuda.amp.autocast(enabled=True):
+                with torch.amp.autocast('cuda', enabled=True):
                     output_ids = self.model.model.generate(
                         **inputs,
                         **gen_config

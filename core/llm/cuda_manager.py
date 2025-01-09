@@ -196,7 +196,7 @@ class CUDAManager:
 
             # Application des optimisations
             if SYSTEM_CONFIG["optimization"]["enable_amp"]:
-                torch.cuda.amp.autocast(enabled=True).__enter__()
+                torch.amp.autocast(device_type='cuda', enabled=True)
 
             logger.info("Configuration système appliquée avec succès")
             
