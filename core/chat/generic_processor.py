@@ -128,7 +128,15 @@ class GenericProcessor(BaseProcessor):
                 confidence_score=float(self._calculate_confidence(filtered_docs)),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
-                referenced_docs=filtered_docs,
+                referenced_docs=[
+                    {
+                        "name": doc.get("title", doc.get("name", "Unknown Document")),
+                        "page": doc.get("metadata", {}).get("page", 1),
+                        "score": float(doc.get("score", 0.0)),
+                        "snippet": doc.get("content", ""),
+                        "metadata": doc.get("metadata", {})
+                    } for doc in filtered_docs
+                ],
                 metadata={
                     "processor_type": "generic",
                     "documents_found": len(filtered_docs),
