@@ -124,14 +124,14 @@ class ModelInference:
                 }
             }
 
-    except Exception as e:
-        logger.error(f"Erreur génération: {e}")
-        metrics.increment_counter("generation_errors")
-        return {
-            "response": "Une erreur est survenue lors de la génération.",
-            "tokens_used": {"total": 0},
-            "error": str(e)
-        }
+        except Exception as e:
+            logger.error(f"Erreur génération: {e}")
+            metrics.increment_counter("generation_errors")
+            return {
+                "response": "Une erreur est survenue lors de la génération.",
+                "tokens_used": {"total": 0},
+                "error": str(e)
+            }
 
     def _get_generation_config(self, response_type: str = "comprehensive") -> Dict[str, Any]:
         """
