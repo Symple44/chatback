@@ -313,22 +313,25 @@ class TokenizerManager:
                 clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
 
-            # Patterns de nettoyage selon le type de modèle
-            pattern = None
+            # Pour les modèles Mistral
             if "mistral" in str(tokenizer.__class__).lower():
-                pattern = r'\[/INST\](.*?)(?:\[INST\]|$)'
+                # Enlever tout ce qui est avant le premier [/INST]
+                parts = full_response.split("[/INST]")
+                if len(parts) > 1:
+                    response = parts[-1].strip()
+                else:
+                    response = full_response.strip()
             else:
+                # Pattern pour autres modèles
                 pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
-
-            if pattern:
                 match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
                 response = match.group(1).strip() if match else full_response.strip()
-            else:
-                response = full_response.strip()
 
             # Nettoyage supplémentaire
             response = re.sub(r'\s+', ' ', response)
             response = response.strip()
+            # Enlever les [INST] résiduels s'il y en a
+            response = re.sub(r'\[INST\].*?$', '', response)
 
             if len(response) < 5:
                 logger.warning(f"Réponse générée trop courte: {full_response}")

@@ -204,23 +204,48 @@ class PromptSystem:
         return history_messages
 
     def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
-        """Valide et corrige le format pour Mistral."""
-        validated = []
-        has_system = False
+        """
+        Valide et formate correctement les messages pour Mistral.
+        Les messages system doivent être intégrés au premier message utilisateur.
+        """
+        try:
+            # Extraction du message système et autres messages
+            system_messages = [msg for msg in messages if msg["role"] == "system"]
+            chat_messages = [msg for msg in messages if msg["role"] != "system"]
 
-        for msg in messages:
-            if msg["role"] == "system":
-                if not has_system:
-                    validated.append(msg)
-                    has_system = True
-            elif msg["role"] in ["user", "assistant"]:
-                validated.append(msg)
+            if not chat_messages:
+                chat_messages = [{
+                    "role": "user",
+                    "content": "Comment puis-je vous aider?"
+                }]
 
-        # S'assurer que le dernier message est de l'utilisateur
-        if validated and validated[-1]["role"] != "user":
-            validated.pop()
+            # Pour Mistral, intégrer le contenu système dans le premier message utilisateur
+            formatted_messages = []
+            if system_messages:
+                system_content = "\n\n".join(msg["content"] for msg in system_messages)
+                # Trouver le premier message utilisateur
+                for i, msg in enumerate(chat_messages):
+                    if msg["role"] == "user":
+                        # Combiner le contenu système avec le message utilisateur
+                        msg["content"] = system_content + "\n\n" + msg["content"]
+                        break
+                        
+            # Ajouter les messages de chat
+            formatted_messages.extend(chat_messages)
 
-        return validated
+            # Vérifier que le dernier message est de l'utilisateur
+            if formatted_messages[-1]["role"] != "user":
+                formatted_messages = formatted_messages[:-1]
+
+            return formatted_messages
+
+        except Exception as e:
+            logger.error(f"Erreur formatage Mistral: {e}")
+            # Format minimal en cas d'erreur
+            return [{
+                "role": "user",
+                "content": "Comment puis-je vous aider?"
+            }]
 
     def _validate_llama_format(self, messages: List[Dict]) -> List[Dict]:
         """Valide et corrige le format pour Llama."""

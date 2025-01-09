@@ -118,6 +118,31 @@ class GenericProcessor(BaseProcessor):
                     logger.debug(f"Document score type: {type(doc.get('score'))}, value: {doc.get('score')}")
                     logger.debug(f"Document page type: {type(doc.get('metadata', {}).get('page'))}, value: {doc.get('metadata', {}).get('page')}")
             
+            chat_history_id = await self.components.db_manager.save_chat_interaction(
+                session_id=session_id,
+                user_id=request.get("user_id"),
+                query=query,
+                response=response_text,
+                query_vector=query_vector,
+                response_vector=await self.model.create_embedding(response_text),
+                confidence_score=float(self._calculate_confidence(filtered_docs)),
+                tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
+                processing_time=float(processing_time),
+                referenced_docs=filtered_docs,
+                metadata={
+                    "processor_type": "generic",
+                    "documents_found": len(filtered_docs),
+                    "language": request.get("language", "fr"),
+                    "response_type": request.get("response_type", "comprehensive"),
+                    "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None
+                }
+            )
+            
+            if chat_history_id:
+                logger.info(f"Interaction sauvegardée avec ID: {chat_history_id}")
+            else:
+                logger.warning("Échec de la sauvegarde de l'interaction")
+        
             # Construction de la réponse
             return ChatResponse(
                 response=response_text,
