@@ -276,8 +276,19 @@ class GenericProcessor(BaseProcessor):
         )
 
     def _calculate_confidence(self, docs: List[Dict]) -> float:
-        """Calcule le score de confiance moyen des documents."""
+        """
+        Calcule le score de confiance basé sur les documents.
+        Args:
+            docs: Liste des documents avec leurs scores
+        Returns:
+            Score de confiance entre 0 et 1
+        """
         if not docs:
             return 0.0
-        scores = [doc.get("score", 0.0) for doc in docs]
-        return sum(scores) / len(scores) if scores else 0.0
+        try:
+            # Convertir explicitement tous les scores en float
+            scores = [float(doc.get("score", 0.0)) for doc in docs]
+            return sum(scores) / len(scores) if scores else 0.0
+        except (ValueError, TypeError) as e:
+            logger.error(f"Erreur conversion scores: {e}")
+            return 0.0
