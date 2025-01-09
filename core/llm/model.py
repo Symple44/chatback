@@ -91,12 +91,21 @@ class ModelInference:
             # Transfert vers le device approprié
             inputs = {k: v.to(chat_model.device) for k, v in inputs.items()}
             
-            # Génération avec config adaptée
+            # Récupération de la configuration de génération
             generation_config = self._get_generation_config(response_type)
-            with torch.cuda.amp.autocast(enabled=True):
+            
+            # Ajout des tokens spéciaux depuis le tokenizer du modèle
+            generation_config.update({
+                "pad_token_id": chat_model.tokenizer.pad_token_id,
+                "bos_token_id": chat_model.tokenizer.bos_token_id,
+                "eos_token_id": chat_model.tokenizer.eos_token_id
+            })
+
+            # Génération avec config adaptée en utilisant le nouveau format torch.amp.autocast
+            with torch.amp.autocast('cuda', enabled=True):
                 outputs = chat_model.model.generate(
                     **inputs,
-                    generation_config=generation_config
+                    **generation_config
                 )
 
             # Décodage et nettoyage
@@ -115,14 +124,14 @@ class ModelInference:
                 }
             }
 
-        except Exception as e:
-            logger.error(f"Erreur génération: {e}")
-            metrics.increment_counter("generation_errors")
-            return {
-                "response": "Une erreur est survenue lors de la génération.",
-                "tokens_used": {"total": 0},
-                "error": str(e)
-            }
+    except Exception as e:
+        logger.error(f"Erreur génération: {e}")
+        metrics.increment_counter("generation_errors")
+        return {
+            "response": "Une erreur est survenue lors de la génération.",
+            "tokens_used": {"total": 0},
+            "error": str(e)
+        }
 
     def _get_generation_config(self, response_type: str = "comprehensive") -> Dict[str, Any]:
         """
