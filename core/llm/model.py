@@ -150,9 +150,10 @@ class ModelInference:
             if response_type and response_type in settings.RESPONSE_TYPES:
                 response_config = settings.RESPONSE_TYPES[response_type]
                 if "temperature" in response_config:
-                    generation_config["temperature"] = response_config["temperature"]
+                    generation_config["temperature"] = float(response_config["temperature"])
+                    generation_config["do_sample"] = True  # Activer do_sample si température est définie
                 if "max_tokens" in response_config:
-                    generation_config["max_length"] = response_config["max_tokens"]
+                    generation_config["max_length"] = int(response_config["max_tokens"])
 
             return generation_config
 
