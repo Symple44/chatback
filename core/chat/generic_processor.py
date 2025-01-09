@@ -122,25 +122,28 @@ class GenericProcessor(BaseProcessor):
             
             response = ChatResponse(
                 response=response_text,
-                session_id=session_id, 
+                session_id=session_id,
                 conversation_id=str(uuid.uuid4()),
                 documents=[
                     DocumentReference(
                         title=doc.get("title", ""),
-                        page=doc.get("metadata", {}).get("page", 1),
-                        score=float(doc.get("score", 0.0)),
+                        page=int(doc.get("metadata", {}).get("page", 1)),  # Conversion explicite en int
+                        score=float(doc.get("score", 0.0)),  # Conversion explicite en float
                         content=doc.get("content", ""),
                         metadata=doc.get("metadata", {})
-                    ) for doc in relevant_docs
+                    ) for doc in filtered_docs
                 ],
-                confidence_score=self._calculate_confidence(relevant_docs),
-                processing_time=processing_time,
-                tokens_used=model_response.get("tokens_used", {}).get("total", 0),
-                tokens_details=model_response.get("tokens_used", {}),
+                confidence_score=float(self._calculate_confidence(filtered_docs)),  # Conversion explicite en float
+                processing_time=float(processing_time),  # Conversion explicite en float
+                tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),  # Conversion explicite en int
+                tokens_details={
+                    k: int(v) if isinstance(v, (int, str)) else v  # Conversion des valeurs en int si nécessaire
+                    for k, v in model_response.get("tokens_used", {}).items()
+                },
                 metadata={
                     "processor_type": "generic",
                     "documents_found": len(filtered_docs),
-                    "context_quality": sum(doc["score"] for doc in filtered_docs) / len(filtered_docs) if filtered_docs else 0,
+                    "context_quality": float(sum(doc.get("score", 0) for doc in filtered_docs) / len(filtered_docs)) if filtered_docs else 0.0,
                     "processing_info": {
                         "embedding_generated": query_vector is not None,
                         "context_summarized": context_summary is not None,
