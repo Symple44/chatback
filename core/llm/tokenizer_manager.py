@@ -315,26 +315,31 @@ class TokenizerManager:
 
             # Pour les modèles Mistral
             if "mistral" in str(tokenizer.__class__).lower():
-                # Enlever tout ce qui est avant le premier [/INST]
-                parts = full_response.split("[/INST]")
-                if len(parts) > 1:
-                    response = parts[-1].strip()
+                # Si on trouve [/INST], prendre tout ce qui suit
+                if "[/INST]" in full_response:
+                    response = full_response.split("[/INST]")[-1]
+                # Si on trouve [INST], prendre ce qui précède
+                elif "[INST]" in full_response:
+                    response = full_response.split("[INST]")[0]
                 else:
-                    response = full_response.strip()
+                    response = full_response
+                
+                # Nettoyage supplémentaire
+                response = response.strip()
+                # Enlever tout autre tag [INST] ou [/INST] résiduel
+                response = re.sub(r'\[/?INST\]', '', response)
             else:
                 # Pattern pour autres modèles
                 pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
                 match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
                 response = match.group(1).strip() if match else full_response.strip()
 
-            # Nettoyage supplémentaire
+            # Nettoyage final
             response = re.sub(r'\s+', ' ', response)
             response = response.strip()
-            # Enlever les [INST] résiduels s'il y en a
-            response = re.sub(r'\[INST\].*?$', '', response)
 
-            if len(response) < 5:
-                logger.warning(f"Réponse générée trop courte: {full_response}")
+            if not response or len(response) < 5 or any(c in response for c in ['误', '전', 'レ']):
+                logger.warning(f"Réponse générée invalide: {full_response}")
                 return "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
 
             return response

@@ -167,7 +167,11 @@ class ModelInference:
             raise RuntimeError("Système non initialisé")
             
         try:
-            return await self.embedding_manager.get_embeddings(text, use_cache=True)
+            embeddings = await self.embedding_manager.get_embeddings(text, use_cache=True)
+            # Si on reçoit une liste de listes (2D), prendre le premier vecteur
+            if embeddings and isinstance(embeddings[0], list):
+                return embeddings[0]
+            return embeddings
             
         except Exception as e:
             logger.error(f"Erreur création embedding: {e}")
