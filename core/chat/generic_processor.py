@@ -213,17 +213,18 @@ class GenericProcessor(BaseProcessor):
                 session.add(chat_history)
 
                 # Ajout des documents référencés
-                for doc in relevant_docs:
-                    ref_doc = ReferencedDocument(
-                        id=uuid.uuid4(),
-                        chat_history_id=chat_history.id,
-                        document_name=doc.get("title", "Unknown"),
-                        page_number=doc.get("page", 1),
-                        relevance_score=float(doc.get("score", 0.0)),
-                        content_snippet=doc.get("content", ""),
-                        document_metadata=doc.get("metadata", {})
-                    )
-                    session.add(ref_doc)
+                if referenced_docs:
+                    for doc in referenced_docs:
+                        ref_doc = ReferencedDocument(
+                            id=uuid.uuid4(),
+                            chat_history_id=chat_history.id,
+                            document_name=doc.get("title", "Unknown Document"), 
+                            page_number=doc.get("metadata", {}).get("page", 1), 
+                            relevance_score=float(doc.get("score", 0.0)),
+                            content_snippet=doc.get("content", ""),
+                            metadata=doc.get("metadata", {})
+                        )
+                        session.add(ref_doc)
 
                 await session.commit()
                 logger.info(f"Interaction sauvegardée - ID: {chat_history.id}")
