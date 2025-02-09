@@ -7,11 +7,12 @@ import uuid
 import re
 import traceback
 from pathlib import Path
-from core.utils.system_optimizer import SystemOptimizer
 from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.chat.context_analyzer import context_analyzer
+from core.utils.system_optimizer import SystemOptimizer
+from core.chat.context_analyzer import context_analyze
+from core.search.search_manager import SearchManagerr
 
 from api.models.requests import ChatRequest
 from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
@@ -29,6 +30,8 @@ class ChatProcessor:
         self.max_clarification_attempts = settings.MAX_CLARIFICATION_ATTEMPTS
         self.min_query_length = settings.MIN_QUERY_LENGTH
         self.max_context_docs = settings.MAX_CONTEXT_DOCS
+        # Initialisation du SearchManager
+        self.search_manager = SearchManager(components)
 
     async def process_message(
         self,
@@ -42,41 +45,45 @@ class ChatProcessor:
         metrics.increment_counter("chat_requests")
 
         try:
-            # 1. Génération du vecteur de requête
-            query_vector = await self.components.model.create_embedding(request.query)
-            if not isinstance(query_vector, list) or len(query_vector) == 0:
-                raise ValueError("Vecteur de requête invalide")
+            # Configuration de la recherche vectorielle selon la requête
+            vector_search_enabled = request.vector_search
+            self.search_manager.set_enabled(vector_search_enabled)
 
-            # 2. Recherche des documents pertinents
-            relevant_docs = await self.components.es_client.search_documents(
-                query=request.query,
-                vector=query_vector,
-                metadata_filter={"application": request.application} if request.application else None,
-                size=settings.MAX_RELEVANT_DOCS
-            )
+            # 1. Génération du vecteur de requête si la recherche est activée
+            relevant_docs = []
+            query_vector = None
+            if vector_search_enabled:
+                query_vector = await self.components.model.create_embedding(request.query)
+                if query_vector:
+                    relevant_docs = await self.search_manager.search_context(
+                        query=request.query,
+                        metadata_filter={"application": request.application} if request.application else None,
+                        min_score=self.confidence_threshold,
+                        max_docs=self.max_context_docs
+                    )
 
-            # 3. Analyse du contexte actuel
+            # 2. Analyse du contexte avec ou sans documents
             context_analysis = await self._analyze_context(
                 query=request.query,
                 relevant_docs=relevant_docs,
                 context_confidence=self._calculate_context_confidence(relevant_docs)
             )
 
-            # 4. Vérification du contexte de session pour les clarifications en cours
+            # 3. Vérification du contexte de session pour les clarifications en cours
             if chat_session and chat_session.session_context.get("pending_clarification"):
                 if await self._should_handle_clarification(request, chat_session):
                     return await self._handle_clarification_response(
                         request, chat_session, context_analysis
                     )
 
-            # 5. Décision: clarification ou réponse directe
+            # 4. Décision: clarification ou réponse directe
             if context_analysis.get("needs_clarification"):
                 if await self._should_ask_clarification(chat_session):
                     return await self._create_clarification_response(
                         request, chat_session, context_analysis
                     )
 
-            # 6. Génération de la réponse finale
+            # 5. Génération de la réponse finale
             response = await self._generate_final_response(
                 request=request,
                 chat_session=chat_session,
@@ -85,13 +92,14 @@ class ChatProcessor:
                 start_time=start_time
             )
 
-            # 7. Mise à jour du contexte de session
+            # 6. Mise à jour du contexte de session
             if chat_session:
                 await self._update_session_context(
                     chat_session=chat_session,
                     request=request,
                     response=response,
-                    context_analysis=context_analysis
+                    context_analysis=context_analysis,
+                    vector_search_enabled=vector_search_enabled
                 )
             
             await self._cleanup_session_context(chat_session)
@@ -288,7 +296,7 @@ class ChatProcessor:
         context_analysis: Dict,
         start_time: datetime
     ) -> ChatResponse:
-        """Génère la réponse finale."""
+        """Génère la réponse finale avec ou sans contexte documentaire."""
         try:
             # Sélection du type de réponse et configuration
             response_type = context_analysis.get("response_type", "comprehensive")
@@ -298,15 +306,19 @@ class ChatProcessor:
             prompt_prefix = response_config.get("style", "")
 
             # Génération de la réponse
+            conversation_history = chat_session.session_context.get("history", []) if chat_session else []
+            
             response = await self.components.model.generate_response(
                 query=request.query,
-                context_docs=relevant_docs,
-                conversation_history=chat_session.session_context.get("history", []) if chat_session else [],
+                context_docs=relevant_docs if relevant_docs else None,
+                conversation_history=conversation_history,
                 response_type=response_type,
                 prompt_prefix=prompt_prefix
             )
 
             # Construction de la réponse finale
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            
             final_response = ChatResponse(
                 response=response.get("response", ""),
                 session_id=str(chat_session.session_id) if chat_session else None,
@@ -321,26 +333,25 @@ class ChatProcessor:
                     ) for doc in relevant_docs
                 ],
                 confidence_score=context_analysis.get("context_confidence", 0.0),
-                processing_time=(datetime.utcnow() - start_time).total_seconds(),
+                processing_time=processing_time,
                 tokens_used=response.get("tokens_used", {}).get("total", 0),
                 tokens_details=response.get("tokens_used", {}),
                 metadata={
                     "response_type": response_type,
                     "themes": context_analysis.get("themes", []),
                     "context_analysis": context_analysis,
+                    "vector_search_enabled": self.search_manager.enabled,
+                    "docs_used": len(relevant_docs),
                     "source": "model",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             )
-            
-            if chat_session:
-                await self._cleanup_session_context(chat_session)
 
             # Mise à jour des métriques
             metrics.increment_counter("responses_generated")
             metrics.record_time(
                 "response_generation",
-                (datetime.utcnow() - start_time).total_seconds()
+                processing_time
             )
 
             return final_response
@@ -353,46 +364,44 @@ class ChatProcessor:
         self,
         chat_session: ChatSession,
         request: ChatRequest,
-        context_update: Optional[Dict] = None,
-        response: Optional[ChatResponse] = None,
-        context_analysis: Optional[Dict] = None
+        response: ChatResponse,
+        context_analysis: Dict,
+        vector_search_enabled: bool
     ) -> None:
-        """Met à jour le contexte de la session."""
+        """Met à jour le contexte de la session avec l'état de la recherche."""
         try:
             current_context = chat_session.session_context or {}
 
             # Mise à jour de l'historique
             history = current_context.get("history", [])
-            if request and response:
-                history.append({
+            history.extend([
+                {
                     "role": "user",
                     "content": request.query,
                     "timestamp": datetime.utcnow().isoformat()
-                })
-                history.append({
+                },
+                {
                     "role": "assistant",
                     "content": response.response,
                     "timestamp": datetime.utcnow().isoformat()
-                })
-                # Limiter l'historique aux 5 dernières interactions
-                history = history[-10:]
+                }
+            ])
+            # Limiter l'historique aux 5 dernières interactions
+            history = history[-10:]
 
-            # Construction du nouveau contexte
+            # Construction du nouveau contexte avec l'état de la recherche
             new_context = {
                 **current_context,
                 "history": history,
                 "last_interaction": datetime.utcnow().isoformat(),
-                "last_query": request.query if request else None,
-                **(context_update or {}),
-            }
-
-            # Ajout des informations d'analyse si présentes
-            if context_analysis:
-                new_context["analysis"] = {
+                "last_query": request.query,
+                "vector_search_enabled": vector_search_enabled,
+                "analysis": {
                     "themes": context_analysis.get("themes", []),
                     "confidence": context_analysis.get("context_confidence"),
                     "response_type": context_analysis.get("response_type"),
                 }
+            }
 
             # Mise à jour de la session
             chat_session.session_context = new_context

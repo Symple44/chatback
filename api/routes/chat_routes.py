@@ -31,11 +31,24 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
+    vector_search: bool = Query(
+        default=True,
+        description="Activer/désactiver la recherche vectorielle"
+    ),
     background_tasks: BackgroundTasks,
     components=Depends(get_components)
 ) -> ChatResponse:
     """
     Traite une requête de chat et retourne une réponse complète.
+    
+    Args:
+        request: Requête de chat
+        vector_search: Active/désactive la recherche vectorielle
+        background_tasks: Tâches d'arrière-plan
+        components: Composants de l'application
+        
+    Returns:
+        Réponse du chat
     """
     try:
         # 1. Vérification de l'utilisateur
@@ -57,11 +70,12 @@ async def process_chat_message(
             request.metadata
         )
         
-        # Préparation du contexte complet pour le processeur
+        # Préparation du contexte avec le paramètre vector_search
         session_context = {
             "history": chat_session.session_context.get("history", []),
             "metadata": request.metadata,
-            "session_id": chat_session.session_id
+            "session_id": chat_session.session_id,
+            "vector_search": vector_search  # Ajout du paramètre
         }
         
         # Obtention du processeur approprié
@@ -70,30 +84,15 @@ async def process_chat_message(
             components=components
         )
         
-        # 3. Traitement du message avec le nouveau processeur
-        #chat_processor = ChatProcessor(components)
-        #response = await chat_processor.process_message(request, chat_session)
-        
-        # Traitement du message
+        # 3. Traitement du message avec le paramètre vector_search
         response = await processor.process_message(
             request={
                 **request.dict(exclude_unset=True),
                 "session_id": chat_session.session_id,
-                "context": session_context
+                "context": session_context,
+                "vector_search": vector_search  # Ajout du paramètre
             }
         )
-
-        # 4. Sauvegarde en arrière-plan
-        #background_tasks.add_task(
-        #    save_chat_interaction,
-        #    components,
-        #    chat_session.session_id,
-        #    request,
-        #    response.response,
-        #    response.query_vector if hasattr(response, 'query_vector') else None,
-        #    datetime.utcnow(),
-        #    response.documents
-        #)
 
         return response
 
@@ -112,19 +111,27 @@ async def process_chat_message(
 async def stream_chat_response(
     query: str = Query(..., min_length=1),
     user_id: str = Query(...),
+    vector_search: bool = Query(
+        default=True,
+        description="Activer/désactiver la recherche vectorielle"
+    ),
     session_id: Optional[str] = None,
     language: str = "fr",
     components=Depends(get_components)
 ):
+    """
+    Stream une réponse de chat.
+    
+    Args:
+        query: Question de l'utilisateur
+        user_id: ID de l'utilisateur
+        vector_search: Active/désactive la recherche vectorielle
+        session_id: ID de session optionnel
+        language: Code de langue
+        components: Composants de l'application
+    """
     async def event_generator():
         try:
-            try:
-                # Attempt to parse the UUID, adding missing character if needed
-                user_id_fixed = user_id + '0' if len(user_id) == 35 else user_id
-                user_uuid = uuid.UUID(user_id_fixed)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid user ID")
-                
             # Création de la requête de chat
             chat_request = ChatRequest(
                 query=query, 
@@ -136,16 +143,23 @@ async def stream_chat_response(
             chat_session = await components.session_manager.get_or_create_session(
                 str(session_id) if session_id else None,
                 str(user_id),
-                metadata={}
+                metadata={"vector_search": vector_search}  # Ajout dans les métadonnées
             )
 
-            # Préparation du contexte
-            query_vector = await components.model.create_embedding(query)
-            relevant_docs = await components.es_client.search_documents(
-                query=query,
-                vector=query_vector,
-                size=settings.MAX_RELEVANT_DOCS
-            )
+            # Configuration de la recherche vectorielle
+            search_manager = SearchManager(components)
+            search_manager.set_enabled(vector_search)
+
+            # Recherche du contexte si activée
+            relevant_docs = []
+            if vector_search:
+                query_vector = await components.model.create_embedding(query)
+                relevant_docs = await search_manager.search_context(
+                    query=query,
+                    metadata_filter=None,
+                    min_score=settings.CONFIDENCE_THRESHOLD,
+                    max_docs=settings.MAX_RELEVANT_DOCS
+                )
 
             # Streaming de la réponse
             async for token in components.model.generate_streaming_response(
@@ -168,6 +182,7 @@ async def stream_chat_response(
                     "status": "completed",
                     "metadata": {
                         "docs_used": len(relevant_docs),
+                        "vector_search_enabled": vector_search,
                         "processing_time": metrics.get_timer_value("chat_processing")
                     }
                 })

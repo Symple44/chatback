@@ -67,7 +67,8 @@ class ChatRequest(BaseModel):
                 "session_id": "987fcdeb-51d3-a456-426614174000",
                 "query": "Comment puis-je vous aider?",
                 "business": "steel",
-                "language": "fr"
+                "language": "fr",
+                "vector_search": True  # Ajout dans l'exemple
             }
         }
     )
@@ -108,7 +109,7 @@ class ChatRequest(BaseModel):
     )
     vector_search: bool = Field(
         default=True,
-        description="Activer/désactiver la recherche vectorielle"
+        description="Active ou désactive la recherche vectorielle"
     )
 
     @validator('query')
