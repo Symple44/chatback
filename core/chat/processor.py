@@ -11,8 +11,8 @@ from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
-from core.chat.context_analyzer import context_analyze
-from core.search.search_manager import SearchManagerr
+from core.chat.context_analyzer import context_analyzer
+from core.search.search_manager import SearchManager
 
 from api.models.requests import ChatRequest
 from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
