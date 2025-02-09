@@ -31,11 +31,11 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
+    background_tasks: BackgroundTasks,
     vector_search: bool = Query(
         default=True,
         description="Activer/désactiver la recherche vectorielle"
     ),
-    background_tasks: BackgroundTasks,
     components=Depends(get_components)
 ) -> ChatResponse:
     """
