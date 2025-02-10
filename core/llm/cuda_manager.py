@@ -334,12 +334,34 @@ class CUDAManager:
     async def cleanup(self):
         """Nettoie les ressources."""
         try:
-            self.cleanup_memory()
+            if torch.cuda.is_available():
+                try:
+                    # Forcer la synchronisation avant le nettoyage
+                    torch.cuda.synchronize()
+                    
+                    # Détacher tous les tenseurs CUDA
+                    for obj in gc.get_objects():
+                        try:
+                            if torch.is_tensor(obj):
+                                if obj.is_cuda:
+                                    obj.detach_()
+                        except:
+                            pass
+                    
+                    # Vider le cache
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_max_memory_allocated()
+                    torch.cuda.reset_peak_memory_stats()
+                    
+                except Exception as e:
+                    logger.error(f"Erreur nettoyage mémoire CUDA: {e}")
+                    
             self._initialized = False
             self.current_allocations = {
                 priority: 0 for priority in ModelPriority
             }
             logger.info("Ressources CUDA nettoyées")
+            
         except Exception as e:
             logger.error(f"Erreur nettoyage ressources: {e}")
             
