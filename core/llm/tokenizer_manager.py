@@ -296,6 +296,23 @@ class TokenizerManager:
             logger.error(f"Erreur d'encodage: {e}")
             raise
 
+    def _decode_mistral_response(self, response: str, model_name: str) -> str:
+        """Décode la réponse selon le modèle Mistral spécifique."""
+        
+        # Mistral Small 24B a un format spécifique
+        if "Mistral-Small-24B" in model_name:
+            last_intro = response.find("assistant:")
+            if last_intro != -1:
+                return response[last_intro + len("assistant:"):].strip()
+        
+        # Mixtral et Mistral standard utilisent [INST] [/INST]
+        elif "Mixtral" in model_name or "Mistral-7B" in model_name:
+            if "[/INST]" in response:
+                return response.split("[/INST]")[-1].strip()
+                
+        # Si aucun format spécifique n'est reconnu, retourner la réponse nettoyée
+        return response.strip()
+
     def decode_and_clean(
         self,
         token_ids: torch.Tensor,
@@ -307,45 +324,20 @@ class TokenizerManager:
         """Décode et nettoie le texte généré."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
-            full_response = tokenizer.decode(
+            response = tokenizer.decode(
                 token_ids,
                 skip_special_tokens=skip_special_tokens,
                 clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
 
-            # Pour les modèles Mistral
-            if "mistral" in str(tokenizer.__class__).lower():
-                # Si on trouve [/INST], prendre tout ce qui suit
-                if "[/INST]" in full_response:
-                    response = full_response.split("[/INST]")[-1]
-                # Si on trouve [INST], prendre ce qui précède
-                elif "[INST]" in full_response:
-                    response = full_response.split("[INST]")[0]
-                else:
-                    response = full_response
-                
-                # Nettoyage supplémentaire
-                response = response.strip()
-                # Enlever tout autre tag [INST] ou [/INST] résiduel
-                response = re.sub(r'\[/?INST\]', '', response)
-            else:
-                # Pattern pour autres modèles
-                pattern = r'<\|start_header_id\|>assistant<\|end_header_id\|>(.*?)(<\|eot_id\|>|$)'
-                match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
-                response = match.group(1).strip() if match else full_response.strip()
+            # Gestion spécifique des modèles Mistral
+            if model_name and any(name in model_name for name in ["Mistral", "Mixtral"]):
+                response = self._decode_mistral_response(response, model_name)
 
-            # Nettoyage final
-            response = re.sub(r'\s+', ' ', response)
-            response = response.strip()
-
-            if not response or len(response) < 5 or any(c in response for c in ['误', '전', 'レ']):
-                logger.warning(f"Réponse générée invalide: {full_response}")
-                return "Je m'excuse, je n'ai pas pu générer une réponse appropriée."
-
-            return response
+            return response.strip()
 
         except Exception as e:
-            logger.error(f"Erreur décodage: {e}")
+            logger.error(f"Erreur décodage pour {model_name}: {e}")
             return "Une erreur est survenue lors du décodage de la réponse."
 
     def count_tokens(
