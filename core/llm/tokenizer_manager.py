@@ -58,45 +58,45 @@ class TokenizerManager:
         return None
 
     async def _initialize_tokenizer(
-    self,
-    model_path: str,
-    config: TokenizerConfig,
-    tokenizer_type: TokenizerType
-) -> PreTrainedTokenizer:
-    """Initialise un tokenizer spécifique."""
-    try:
-        logger.info(f"Initialisation du tokenizer pour {model_path}")
-        
-        # Configuration de base
-        tokenizer_kwargs = {
-            "revision": settings.MODEL_REVISION,
-            "padding_side": config.padding_side,
-            "truncation_side": config.truncation_side,
-            "use_fast": config.use_fast,
-            "trust_remote_code": config.trust_remote_code
-        }
-        
-        # Ajout de la configuration legacy=False pour T5
-        if "t5" in model_path.lower():
-            tokenizer_kwargs["legacy"] = False
+        self,
+        model_path: str,
+        config: TokenizerConfig,
+        tokenizer_type: TokenizerType
+    ) -> PreTrainedTokenizer:
+        """Initialise un tokenizer spécifique."""
+        try:
+            logger.info(f"Initialisation du tokenizer pour {model_path}")
             
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            **tokenizer_kwargs
-        )
-
-        # Configuration spécifique pour Mistral
-        if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
-            tokenizer.pad_token = tokenizer.eos_token
-            special_tokens = {
-                "bos_token": "<s>",
-                "eos_token": "</s>",
-                "pad_token": "</s>",
-                "unk_token": "<unk>",
+            # Configuration de base
+            tokenizer_kwargs = {
+                "revision": settings.MODEL_REVISION,
+                "padding_side": config.padding_side,
+                "truncation_side": config.truncation_side,
+                "use_fast": config.use_fast,
+                "trust_remote_code": config.trust_remote_code
             }
-            tokenizer.add_special_tokens(special_tokens)
+            
+            # Ajout de la configuration legacy=False pour T5
+            if "t5" in model_path.lower():
+                tokenizer_kwargs["legacy"] = False
+                
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                **tokenizer_kwargs
+            )
 
-        return tokenizer
+            # Configuration spécifique pour Mistral
+            if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
+                tokenizer.pad_token = tokenizer.eos_token
+                special_tokens = {
+                    "bos_token": "<s>",
+                    "eos_token": "</s>",
+                    "pad_token": "</s>",
+                    "unk_token": "<unk>",
+                }
+                tokenizer.add_special_tokens(special_tokens)
+
+            return tokenizer
 
     except Exception as e:
         logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
