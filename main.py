@@ -250,15 +250,6 @@ async def lifespan(app: FastAPI):
         await logger_manager.initialize()
         await metrics.initialize()
         
-        # Forcer une synchronisation CUDA avant l'initialisation des composants
-        if torch.cuda.is_available():
-            try:
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-                logger.info("Synchronisation CUDA effectuée avec succès")
-            except Exception as cuda_error:
-                logger.error(f"Erreur synchronisation CUDA: {cuda_error}")
-                
         try:
             await components.initialize()
         except Exception as e:
@@ -273,39 +264,14 @@ async def lifespan(app: FastAPI):
         if settings.GOOGLE_DRIVE_SYNC_INTERVAL:
             asyncio.create_task(periodic_sync())
 
-        logger.info("Application démarrée avec succès")
         yield
-
-    except Exception as e:
-        logger.critical(f"Erreur fatale lors du démarrage: {e}")
-        if torch.cuda.is_available():
-            try:
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-            except:
-                pass
-        raise
 
     finally:
         # Nettoyage
         try:
             await components.cleanup()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                
             if settings.DEBUG and tracemalloc.is_tracing():
                 tracemalloc.stop()
-                
-            # S'assurer que toutes les tâches asynchrones sont terminées
-            pending = asyncio.all_tasks()
-            for task in pending:
-                if not task.done() and task != asyncio.current_task():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    
         except Exception as e:
             logger.error(f"Erreur pendant le nettoyage final: {e}")
         logger.info("Application arrêtée")
