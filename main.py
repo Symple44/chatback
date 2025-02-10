@@ -170,7 +170,7 @@ class ComponentManager:
                             logger.info(f"Synchronisation initiale terminée: {len(downloaded_files)} fichiers téléchargés")
                         else:
                             logger.info("Aucun nouveau fichier à synchroniser")
-                        logger.info("Google Drive manager initialisé"))
+                        logger.info("Google Drive manager initialisé")
                 
                 self.initialized = True
                 logger.info("Initialisation des composants terminée")
