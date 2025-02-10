@@ -161,7 +161,6 @@ class ComponentManager:
                     )
                     if await drive_manager.initialize():
                         self._components["drive_manager"] = drive_manager
-                        await self.sync_drive_documents()
                         logger.info("Google Drive manager initialisé")
                 
                 self.initialized = True
