@@ -172,7 +172,7 @@ SUMMARIZER_MODELS = {
             }
         }
     },
-    "mt5-base-multi-sum": {
+    "mt5-multilingual-base": {
         "display_name": "mT5 Base Multilingual Summarizer",
         "path": "csebuetnlp/mT5_multilingual_XLSum",
         "type": "summarization",

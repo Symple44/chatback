@@ -12,7 +12,7 @@ logger = get_logger("summarizer")
 class DocumentSummarizer:
     def __init__(self):
         """Initialise le résumeur de contexte avec analyse thématique."""
-        self.model_name = "mt5-base-multi-sum"  # Modèle par défaut
+        self.model_name = "mt5-multilingual-base"  # Modèle par défaut
         self.model: Optional[LoadedModel] = None
         self._initialized = False
         self.current_config = SUMMARIZER_MODELS[self.model_name]
