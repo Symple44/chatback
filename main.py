@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
-from pathlib import Path
+import signal
 import asyncio
 import uvicorn
 from datetime import datetime
@@ -10,8 +10,9 @@ import uuid
 import json
 import shutil
 from typing import Dict, Optional, List
+from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, HTTPException, Request # type: ignore
+from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -19,7 +20,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 from core.config.config import settings
-
 from core.utils.logger import get_logger, logger_manager
 from core.utils.metrics import metrics
 from core.utils.system_optimizer import SystemOptimizer
@@ -27,11 +27,8 @@ from core.utils.system_optimizer import SystemOptimizer
 from core.database.manager import DatabaseManager
 from core.database.base import get_session_manager
 from core.database.session_manager import SessionManager
-
 from core.cache import RedisCache
-
 from core.vectorstore import ElasticsearchClient
-
 from core.llm.auth_manager import HuggingFaceAuthManager
 from core.llm.model_manager import ModelManager
 from core.llm.model_loader import ModelLoader, ModelType
@@ -48,7 +45,6 @@ from core.document_processing.pdf_processor import PDFProcessor
 logger = get_logger("main")
 
 class CustomJSONEncoder(json.JSONEncoder):
-    """Encodeur JSON personnalisé."""
     def default(self, obj):
         if isinstance(obj, datetime):
             return obj.isoformat()
@@ -59,7 +55,6 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 class CustomJSONResponse(JSONResponse):
-    """Réponse JSON personnalisée."""
     def render(self, content) -> bytes:
         return json.dumps(
             content,
@@ -71,18 +66,15 @@ class CustomJSONResponse(JSONResponse):
         ).encode("utf-8")
 
 class ComponentManager:
-    """Gestionnaire des composants de l'application."""
-    
     def __init__(self):
-        """Initialisation du gestionnaire."""
         self.start_time = datetime.utcnow()
         self.initialized = False
         self._components = {}
         self._init_lock = asyncio.Lock()
         self.system_optimizer = SystemOptimizer()
+        self._shutdown_event = asyncio.Event()
 
     async def initialize(self):
-        """Initialise tous les composants."""
         async with self._init_lock:
             if self.initialized:
                 return
@@ -92,7 +84,6 @@ class ComponentManager:
                 await self.system_optimizer.optimize()
 
                 # Base de données
-
                 db_session_manager = get_session_manager(settings.get_database_url())
                 db_manager = DatabaseManager(db_session_manager.session_factory)
                 self._components["db_manager"] = db_manager
@@ -133,32 +124,32 @@ class ComponentManager:
                 self._components["tokenizer_manager"] = tokenizer_manager
                 logger.info("Tokenizer Manager initialisé")
 
-                # Initialisation du model loader avant tout
+                # Model Loader
                 model_loader = ModelLoader(self.cuda_manager, self.tokenizer_manager)
                 self._components["model_loader"] = model_loader
 
-                # Initialisation du model manager
+                # Model Manager
                 model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
                 await model_manager.initialize()
                 self._components["model_manager"] = model_manager
 
-                # Initialisation de l'embedding manager avec le model manager
+                # Embedding Manager
                 embedding_manager = EmbeddingManager()
                 await embedding_manager.initialize(model_manager)
                 self._components["embedding_manager"] = embedding_manager
 
-                # Initialisation du summarizer avec le model manager
+                # Summarizer
                 summarizer = DocumentSummarizer()
                 await summarizer.initialize(model_manager)
                 self._components["summarizer"] = summarizer
 
-                # Model Inference (utilise les composants déjà initialisés)
+                # Model Inference
                 model = ModelInference()
-                await model.initialize(self)  # Passage de self pour accéder aux composants
+                await model.initialize(self)
                 self._components["model"] = model
                 logger.info("Model Inference initialisé")
 
-                # Processeurs de documents
+                # Document Processing
                 self._components["doc_extractor"] = DocumentExtractor()
                 self._components["pdf_processor"] = PDFProcessor(es_client)
                 logger.info("Processeurs de documents initialisés")
@@ -181,102 +172,56 @@ class ComponentManager:
                 await self.cleanup()
                 raise
 
-    async def sync_drive_documents(self):
-        """Synchronise les documents."""
+    async def cleanup(self):
+        """Nettoie proprement toutes les ressources."""
         try:
-            downloaded_files = set()
-            if "drive_manager" in self._components:
-                downloaded_files = await self._components["drive_manager"].sync_drive_folder(
-                    settings.GOOGLE_DRIVE_FOLDER_ID,
-                    save_path="documents"
-                )
+            logger.info("Début du nettoyage des composants...")
+            cleanup_tasks = []
 
-            indexed_count = 0
-            for app_dir in Path("documents").iterdir():
-                if not app_dir.is_dir():
-                    continue
+            # Nettoyage des composants avec gestion des erreurs individuelles
+            for name, component in self._components.items():
+                try:
+                    if hasattr(component, 'cleanup'):
+                        task = asyncio.create_task(component.cleanup())
+                        cleanup_tasks.append(task)
+                        logger.info(f"Tâche de nettoyage créée pour {name}")
+                except Exception as e:
+                    logger.error(f"Erreur lors de la création de la tâche de nettoyage pour {name}: {e}")
 
-                app_name = app_dir.name
-                logger.info(f"Traitement de l'application: {app_name}")
-
-                for pdf_path in app_dir.glob("*.pdf"):
+            # Attendre la fin de tous les nettoyages avec timeout
+            if cleanup_tasks:
+                done, pending = await asyncio.wait(cleanup_tasks, timeout=30)
+                
+                # Annuler les tâches qui n'ont pas terminé
+                for task in pending:
+                    task.cancel()
                     try:
-                        if str(pdf_path) not in downloaded_files:
-                            success = await self._components["pdf_processor"].index_pdf(
-                                str(pdf_path),
-                                metadata={
-                                    "application": app_name,
-                                    "sync_date": datetime.utcnow().isoformat(),
-                                    "source": "local_filesystem"
-                                }
-                            )
-                            if success:
-                                indexed_count += 1
-                    except Exception as e:
-                        logger.error(f"Erreur indexation {pdf_path}: {e}")
+                        await task
+                    except asyncio.CancelledError:
+                        logger.warning(f"Une tâche de nettoyage a été annulée après timeout")
 
-            logger.info(f"Indexation terminée: {indexed_count} documents indexés")
-            return indexed_count
+            # Nettoyage des répertoires temporaires
+            temp_dirs = ["temp", "offload_folder", "cache"]
+            for dir_path in temp_dirs:
+                try:
+                    if os.path.exists(dir_path):
+                        shutil.rmtree(dir_path)
+                        logger.info(f"Répertoire {dir_path} nettoyé")
+                except Exception as e:
+                    logger.error(f"Erreur lors du nettoyage du répertoire {dir_path}: {e}")
+
+            self._components.clear()
+            self.initialized = False
+            logger.info("Nettoyage des composants terminé")
 
         except Exception as e:
-            logger.error(f"Erreur synchronisation: {e}")
-            return 0
-
-    async def cleanup(self):
-        """Nettoie les ressources."""
-        for name, component in self._components.items():
-            try:
-                if hasattr(component, 'cleanup'):
-                    await component.cleanup()
-                logger.info(f"Composant {name} nettoyé")
-            except Exception as e:
-                logger.error(f"Erreur nettoyage {name}: {e}")
-
-        self._components.clear()
-        self.initialized = False
+            logger.error(f"Erreur pendant le nettoyage final: {e}")
+            raise
 
     def __getattr__(self, name):
         if name in self._components:
             return self._components[name]
         raise AttributeError(f"Composant {name} non trouvé")
-
-async def setup_environment():
-    """Configure l'environnement complet avant le démarrage."""
-    try:
-        # Configuration des bibliothèques numériques
-        os.environ.update({
-            "MKL_NUM_THREADS": str(settings.MKL_NUM_THREADS),
-            "NUMEXPR_NUM_THREADS": str(settings.NUMEXPR_NUM_THREADS),
-            "OMP_NUM_THREADS": str(settings.OMP_NUM_THREADS),
-            "OPENBLAS_NUM_THREADS": str(settings.OPENBLAS_NUM_THREADS),
-            "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF,
-            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD).lower(),
-            "CUDA_MODULE_LOADING": settings.CUDA_MODULE_LOADING,
-            "CUDA_VISIBLE_DEVICES": str(settings.CUDA_VISIBLE_DEVICES)
-        })
-        
-        # Création des répertoires
-        REQUIRED_DIRS = [
-            "offload_folder",
-            "static",
-            "documents",
-            "model_cache",
-            "logs",
-            "data",
-            "temp",
-            str(settings.MODELS_DIR)
-        ]
-        
-        for dir_name in REQUIRED_DIRS:
-            path = Path(dir_name)
-            path.mkdir(parents=True, exist_ok=True)
-            path.chmod(0o755)  # Permissions sécurisées
-            
-        logger.info("Environnement configuré avec succès")
-            
-    except Exception as e:
-        logger.error(f"Erreur configuration environnement: {e}")
-        raise
 
 # Instance globale des composants
 components = ComponentManager()
@@ -290,7 +235,7 @@ async def lifespan(app: FastAPI):
             import tracemalloc
             tracemalloc.start()
             
-        # Configuration initiale de l'environnement
+        # Configuration initiale
         await setup_environment()
             
         # Initialisation des composants
@@ -313,9 +258,6 @@ async def lifespan(app: FastAPI):
 
         yield
 
-    except Exception as e:
-        logger.critical(f"Erreur fatale pendant le démarrage: {e}")
-        raise
     finally:
         # Nettoyage
         try:
@@ -326,11 +268,49 @@ async def lifespan(app: FastAPI):
             logger.error(f"Erreur pendant le nettoyage final: {e}")
         logger.info("Application arrêtée")
 
+async def setup_environment():
+    """Configure l'environnement."""
+    try:
+        # Configuration des bibliothèques numériques
+        os.environ.update({
+            "MKL_NUM_THREADS": str(settings.MKL_NUM_THREADS),
+            "NUMEXPR_NUM_THREADS": str(settings.NUMEXPR_NUM_THREADS),
+            "OMP_NUM_THREADS": str(settings.OMP_NUM_THREADS),
+            "OPENBLAS_NUM_THREADS": str(settings.OPENBLAS_NUM_THREADS),
+            "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF,
+            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD).lower(),
+            "CUDA_MODULE_LOADING": settings.CUDA_MODULE_LOADING,
+            "CUDA_VISIBLE_DEVICES": str(settings.CUDA_VISIBLE_DEVICES)
+        })
+        
+        # Création des répertoires
+        dirs = [
+            "offload_folder",
+            "static",
+            "documents",
+            "model_cache",
+            "logs",
+            "data",
+            "temp",
+            str(settings.MODELS_DIR)
+        ]
+        
+        for dir_name in dirs:
+            path = Path(dir_name)
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o755)
+            
+        logger.info("Environnement configuré avec succès")
+            
+    except Exception as e:
+        logger.error(f"Erreur configuration environnement: {e}")
+        raise
+
 async def periodic_sync():
     """Tâche périodique de synchronisation."""
     while True:
-        await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
         try:
+            await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
             await components.sync_drive_documents()
         except Exception as e:
             logger.error(f"Erreur sync périodique: {e}")
@@ -360,10 +340,9 @@ if static_path.exists():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Gestionnaire d'erreurs global avec gestion spéciale CUDA."""
+    """Gestionnaire d'erreurs global."""
     error_id = str(uuid.uuid4())
     
-    # Gestion spécifique selon le type d'erreur
     if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
         logger.error(f"Erreur CUDA [{error_id}]: {exc}", exc_info=True)
         if hasattr(components, 'cuda_manager'):
@@ -385,29 +364,38 @@ async def global_exception_handler(request: Request, exc: Exception):
             "timestamp": datetime.utcnow().isoformat()
         }
     )
-    
+
 async def shutdown():
-    """Nettoie proprement les ressources lors de l'arrêt."""
+    """Arrête proprement l'application."""
     try:
-        logger.info("Arrêt de l'application...")
+        logger.info("Début de l'arrêt de l'application...")
         
         # Nettoyage des composants
         await components.cleanup()
         
-        # Nettoyage des répertoires temporaires
-        temp_dirs = ["temp", "temp/pdf", "offload_folder"]
-        for dir_path in temp_dirs:
-            if os.path.exists(dir_path):
-                shutil.rmtree(dir_path)
-                logger.info(f"Répertoire {dir_path} nettoyé")
+        # Attente courte pour laisser le temps aux connexions de se fermer
+        await asyncio.sleep(1)
         
         logger.info("Application arrêtée proprement")
+        
     except Exception as e:
         logger.error(f"Erreur lors de l'arrêt: {e}")
+    finally:
+        # Force l'arrêt si nécessaire
+        sys.exit(0)
+
+def signal_handler(signum, frame):
+    """Gère les signaux d'interruption."""
+    logger.info(f"Signal {signum} reçu, arrêt en cours...")
+    asyncio.run(shutdown())
 
 if __name__ == "__main__":
     try:
-        # Configuration uvicorn optimisée
+        # Configuration des handlers de signaux
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Configuration uvicorn
         config = uvicorn.Config(
             "main:app",
             host="0.0.0.0",
@@ -426,8 +414,9 @@ if __name__ == "__main__":
         server.run()
 
     except KeyboardInterrupt:
-        logger.info("Arrêt manuel détecté")
+        logger.info("Interruption manuelle détectée")
         asyncio.run(shutdown())
     except Exception as e:
         logger.critical(f"Erreur fatale: {e}")
+        asyncio.run(shutdown())
         sys.exit(1)

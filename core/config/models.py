@@ -3,6 +3,89 @@ from typing import Dict, List, Any
 from pydantic import BaseModel
 import torch
 
+# Configuration des modèles de chat/instruction disponibles
+AVAILABLE_MODELS = {
+    "Mistral-7B-Instruct-v0.3": {
+        "display_name": "Mistral-7B Instruct v0.3",
+        "path": "mistralai/Mistral-7B-Instruct-v0.3",
+        "type": "chat",
+        "languages": ["fr", "en"],
+        "context_length": 8192,
+        "gpu_requirements": {
+            "vram_required": "16GB",
+            "recommended_batch_size": 32
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["chat", "instruction"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "16GiB", "cpu": "12GB"},
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True,
+                "llm_int8_enable_fp32_cpu_offload": True
+            },
+            "attn_implementation": "flash_attention_2"
+        }
+    },
+    "Mixtral-8x7B-Instruct-v0.1": {
+        "display_name": "Mixtral 8x7B Instruct",
+        "path": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "type": "chat",
+        "languages": ["fr", "en", "es", "de", "it"],
+        "context_length": 32768,
+        "gpu_requirements": {
+            "vram_required": "20GB",
+            "recommended_batch_size": 16
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["chat", "instruction", "function_calling"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "20GiB", "cpu": "24GB"},
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True,
+                "llm_int8_enable_fp32_cpu_offload": True
+            },
+            "low_cpu_mem_usage": True,
+            "offload_folder": "offload_folder",
+            "attn_implementation": "flash_attention_2"
+        }
+    },
+    "Mistral-Small-24B-Instruct-2501": {
+        "display_name": "Mistral Small 24B Instruct",
+        "path": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "type": "chat",
+        "languages": ["fr", "en", "es", "de", "it"],
+        "context_length": 32768,
+        "gpu_requirements": {
+            "vram_required": "22GB",
+            "recommended_batch_size": 8
+        },
+        "quantization": "bitsandbytes-4bit",
+        "capabilities": ["chat", "instruction", "function_calling"],
+        "load_params": {
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "22GiB", "cpu": "22GB"},
+            "quantization_config": {
+                "bnb_4bit_compute_dtype": torch.float16,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_use_double_quant": True,
+                "llm_int8_enable_fp32_cpu_offload": True
+            },
+            "low_cpu_mem_usage": True,
+            "offload_folder": "offload_folder",
+            "attn_implementation": "flash_attention_2"
+        }
+    }
+}
+
 # Configuration des modèles d'embedding disponibles
 EMBEDDING_MODELS = {
     "paraphrase-multilingual-mpnet-base-v2": {
@@ -110,63 +193,6 @@ SUMMARIZER_MODELS = {
                 "bnb_4bit_quant_type": "nf4",
                 "bnb_4bit_use_double_quant": True
             }
-        }
-    }
-}
-
-# Configuration des modèles de chat/instruction disponibles
-AVAILABLE_MODELS = {
-    # Dans AVAILABLE_MODELS, pour le modèle Mistral
-    "Mistral-7B-Instruct-v0.3": {
-        "display_name": "Mistral-7B Instruct v0.3",
-        "path": "mistralai/Mistral-7B-Instruct-v0.3",
-        "type": "chat",
-        "languages": ["fr", "en"],
-        "context_length": 8192,
-        "gpu_requirements": {
-            "vram_required": "16GB",
-            "recommended_batch_size": 32
-        },
-        "quantization": "bitsandbytes-4bit",
-        "capabilities": ["chat", "instruction"],
-        "load_params": {
-            "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "max_memory": {0: "16GiB", "cpu": "12GB"},
-            "quantization_config": {
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True,
-                "llm_int8_enable_fp32_cpu_offload": True
-            },
-            "attn_implementation": "flash_attention_2"
-        }
-    },
-    "Mixtral-8x7B-Instruct-v0.1": {
-        "display_name": "Mixtral 8x7B Instruct",
-        "path": "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "type": "chat",
-        "languages": ["fr", "en", "es", "de", "it"],
-        "context_length": 32768,
-        "gpu_requirements": {
-            "vram_required": "20GB",
-            "recommended_batch_size": 16
-        },
-        "quantization": "bitsandbytes-4bit",
-        "capabilities": ["chat", "instruction", "function_calling"],
-        "load_params": {
-            "device_map": "auto",
-            "torch_dtype": torch.float16,
-            "max_memory": {0: "20GiB", "cpu": "24GB"},
-            "quantization_config": {
-                "bnb_4bit_compute_dtype": torch.float16,
-                "bnb_4bit_quant_type": "nf4",
-                "bnb_4bit_use_double_quant": True,
-                "llm_int8_enable_fp32_cpu_offload": True
-            },
-            "low_cpu_mem_usage": True,
-            "offload_folder": "offload_folder",
-            "attn_implementation": "flash_attention_2"
         }
     }
 }
