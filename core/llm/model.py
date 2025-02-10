@@ -81,44 +81,38 @@ class ModelInference:
             if not chat_model:
                 raise RuntimeError("Modèle de chat non initialisé")
 
-            # Traitement des tokens avec vérification des dimensions
+            # Traitement des tokens
             inputs = self.tokenizer_manager.encode_with_truncation(
                 messages,
-                max_length=min(settings.MAX_INPUT_LENGTH, chat_model.model.config.max_position_embeddings),
+                max_length=settings.MAX_INPUT_LENGTH,
                 return_tensors="pt"
             )
-            
-            # Vérification des dimensions du tenseur d'entrée
-            if inputs["input_ids"].shape[1] > chat_model.model.config.max_position_embeddings:
-                logger.warning(f"Input sequence trop longue ({inputs['input_ids'].shape[1]}), troncature à {chat_model.model.config.max_position_embeddings}")
-                inputs = {k: v[:, :chat_model.model.config.max_position_embeddings] for k, v in inputs.items()}
             
             # Transfert vers le device approprié
             inputs = {k: v.to(chat_model.device) for k, v in inputs.items()}
             
-            # Configuration de génération avec limites adaptatives
-            generation_config = self._get_generation_config(response_type)
-            
-            # Assurer que la longueur max est dans les limites du modèle
-            max_total_tokens = chat_model.model.config.max_position_embeddings
-            current_length = inputs["input_ids"].shape[1]
-            max_new_tokens = min(
-                generation_config.get("max_length", settings.MAX_NEW_TOKENS),
-                max_total_tokens - current_length
-            )
-            generation_config["max_new_tokens"] = max_new_tokens
+            # Configuration de génération
+            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
+            generation_config = {
+                "do_sample": True,
+                "temperature": response_config.get('temperature', 0.7),
+                "max_new_tokens": response_config.get('max_tokens', 1024),
+                "top_p": settings.TOP_P,
+                "top_k": settings.TOP_K,
+                "repetition_penalty": settings.REPETITION_PENALTY,
+                "pad_token_id": chat_model.tokenizer.pad_token_id,
+                "eos_token_id": chat_model.tokenizer.eos_token_id,
+                "bos_token_id": chat_model.tokenizer.bos_token_id
+            }
 
-            # Génération avec autocast et synchronisation CUDA
-            with torch.cuda.amp.autocast(enabled=True):
+            # Génération avec le nouveau format d'autocast
+            with torch.amp.autocast(device_type='cuda', enabled=True):
                 outputs = chat_model.model.generate(
                     **inputs,
-                    **generation_config,
-                    pad_token_id=chat_model.tokenizer.pad_token_id,
-                    eos_token_id=chat_model.tokenizer.eos_token_id,
+                    **generation_config
                 )
-                torch.cuda.synchronize()  # Assurer que la génération est terminée
 
-            # Décodage et nettoyage
+            # Décodage
             response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
 
             return {
