@@ -213,12 +213,23 @@ class TokenizerManager:
 
     def get_tokenizer(
         self,
-        model_name: str,
-        tokenizer_type: TokenizerType = TokenizerType.CHAT
-    ) -> Optional[PreTrainedTokenizer]:
+        model_name: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT
+    ) -> PreTrainedTokenizer:
         """Récupère un tokenizer spécifique."""
+        if not self._initialized:
+            raise RuntimeError("TokenizerManager non initialisé")
+
+        if model_name is None:
+            model_name = self.current_models[tokenizer_type]
+            if model_name is None:
+                raise ValueError(f"Aucun modèle actif pour le type {tokenizer_type}")
+
         tokenizer_key = f"{tokenizer_type.value}_{model_name}"
-        return self.tokenizers.get(tokenizer_key)
+        if tokenizer_key not in self.tokenizers:
+            raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+
+        return self.tokenizers[tokenizer_key]
 
     async def change_model(
         self,
