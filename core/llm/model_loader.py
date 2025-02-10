@@ -163,7 +163,7 @@ class ModelLoader:
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
-            # Configuration de la quantization avec BitsAndBytesConfig
+            # Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
                 load_params["quantization_config"] = BitsAndBytesConfig(
@@ -183,15 +183,23 @@ class ModelLoader:
             cuda_params.update(load_params)
             load_params = cuda_params
 
+            # Ajout de paramètres spécifiques pour les modèles T5/MT5
+            if any(prefix in model_name.lower() for prefix in ['t5', 'mt5']):
+                load_params.update({
+                    "return_dict": True,
+                    "output_hidden_states": False,
+                    "output_attentions": False,
+                })
+
             with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     config["path"],
                     **load_params
                 )
-                tokenizer = AutoTokenizer.from_pretrained(
-                    config["path"],
-                    use_fast=True
-                )
+                tokenizer = self.tokenizer_manager.get_tokenizer(model_name, TokenizerType.SUMMARIZER)
+
+                if not tokenizer:
+                    raise ValueError(f"Tokenizer non trouvé pour {model_name}")
 
             model.eval()
             model.requires_grad_(False)

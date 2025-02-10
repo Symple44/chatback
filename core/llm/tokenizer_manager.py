@@ -76,16 +76,26 @@ class TokenizerManager:
                 "trust_remote_code": config.trust_remote_code
             }
             
-            # Ajout de la configuration legacy=False pour T5
+            # Configuration spécifique selon le type de modèle
             if "t5" in model_path.lower():
-                tokenizer_kwargs["legacy"] = False
+                tokenizer_kwargs.update({
+                    "legacy": False,
+                    "model_max_length": config.max_length,
+                    "use_fast": True  # Force l'utilisation du fast tokenizer
+                })
+            elif "mt5" in model_path.lower():
+                # Configuration spécifique pour MT5
+                tokenizer_kwargs.update({
+                    "model_max_length": config.max_length,
+                    "use_fast": False  # Utilise le slow tokenizer pour éviter les warnings
+                })
                 
             tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
                 **tokenizer_kwargs
             )
 
-            # Configuration spécifique pour Mistral
+            # Configuration spécifique post-chargement
             if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
                 tokenizer.pad_token = tokenizer.eos_token
                 special_tokens = {
