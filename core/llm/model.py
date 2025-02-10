@@ -91,15 +91,16 @@ class ModelInference:
             # Transfert vers le device approprié
             inputs = {k: v.to(chat_model.device) for k, v in inputs.items()}
             
-            # Configuration de génération
+            # Récupération de la configuration de génération depuis les settings
             response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
             generation_config = {
-                "do_sample": True,
-                "temperature": response_config.get('temperature', 0.7),
-                "max_new_tokens": response_config.get('max_tokens', 1024),
+                "do_sample": settings.DO_SAMPLE,
+                "temperature": response_config.get('temperature', settings.TEMPERATURE),
+                "max_new_tokens": response_config.get('max_tokens', settings.MAX_NEW_TOKENS),
                 "top_p": settings.TOP_P,
                 "top_k": settings.TOP_K,
                 "repetition_penalty": settings.REPETITION_PENALTY,
+                "length_penalty": settings.LENGTH_PENALTY,
                 "pad_token_id": chat_model.tokenizer.pad_token_id,
                 "eos_token_id": chat_model.tokenizer.eos_token_id,
                 "bos_token_id": chat_model.tokenizer.bos_token_id
@@ -112,7 +113,7 @@ class ModelInference:
                     **generation_config
                 )
 
-            # Décodage
+            # Décodage et nettoyage
             response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
 
             return {
