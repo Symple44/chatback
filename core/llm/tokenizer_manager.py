@@ -98,9 +98,9 @@ class TokenizerManager:
 
             return tokenizer
 
-    except Exception as e:
-        logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
+            raise
 
     async def initialize(self):
         """Initialise les tokenizers."""
