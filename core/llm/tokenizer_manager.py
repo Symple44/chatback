@@ -275,12 +275,31 @@ class TokenizerManager:
                 )
             else:
                 # Pour les conversations (chat)
-                encoded = tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    return_tensors=return_tensors
-                )
+                if hasattr(tokenizer, 'apply_chat_template'):
+                    encoded = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=True,
+                        add_generation_prompt=True,
+                        return_tensors=return_tensors
+                    )
+                else:
+                    # Fallback pour les modèles sans chat_template
+                    formatted_text = ""
+                    for msg in messages:
+                        if msg["role"] == "system":
+                            formatted_text += f"[INST] {msg['content']} [/INST]\n"
+                        elif msg["role"] == "user":
+                            formatted_text += f"[INST] {msg['content']} [/INST]\n"
+                        elif msg["role"] == "assistant":
+                            formatted_text += f"{msg['content']}\n"
+                    
+                    encoded = tokenizer(
+                        formatted_text,
+                        truncation=True,
+                        max_length=max_length,
+                        padding=True,
+                        return_tensors=return_tensors
+                    )
 
                 # Conversion en format attendu si nécessaire
                 if isinstance(encoded, torch.Tensor):
@@ -288,13 +307,6 @@ class TokenizerManager:
                         'input_ids': encoded,
                         'attention_mask': torch.ones_like(encoded)
                     }
-
-            # Tronquer si nécessaire
-            if encoded['input_ids'].shape[1] > max_length:
-                encoded = {
-                    'input_ids': encoded['input_ids'][:, :max_length],
-                    'attention_mask': encoded['attention_mask'][:, :max_length]
-                }
 
             return encoded
 

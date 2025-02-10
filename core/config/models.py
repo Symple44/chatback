@@ -222,6 +222,18 @@ MODEL_PERFORMANCE_CONFIGS = {
             "top_p": 0.95,
             "repetition_penalty": 1.1
         }
+    },
+    "mistral-small-24b-instruct": {
+        "batch_size": 8,
+        "prefetch_factor": 2,
+        "num_workers": 4,
+        "pin_memory": True,
+        "generation_config": {
+            "max_length": 8192,
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "repetition_penalty": 1.1
+        }
     }
 }
 
