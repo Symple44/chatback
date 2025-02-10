@@ -161,7 +161,16 @@ class ComponentManager:
                     )
                     if await drive_manager.initialize():
                         self._components["drive_manager"] = drive_manager
-                        logger.info("Google Drive manager initialisé")
+                        # Exécuter une synchronisation initiale
+                        downloaded_files = await drive_manager.sync_drive_folder(
+                            settings.GOOGLE_DRIVE_FOLDER_ID,
+                            save_path="documents"
+                        )
+                        if downloaded_files:
+                            logger.info(f"Synchronisation initiale terminée: {len(downloaded_files)} fichiers téléchargés")
+                        else:
+                            logger.info("Aucun nouveau fichier à synchroniser")
+                        logger.info("Google Drive manager initialisé"))
                 
                 self.initialized = True
                 logger.info("Initialisation des composants terminée")
@@ -310,9 +319,16 @@ async def periodic_sync():
     while True:
         try:
             await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
-            await components.sync_drive_documents()
+            if hasattr(components, 'drive_manager'):
+                downloaded_files = await components.drive_manager.sync_drive_folder(
+                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    save_path="documents"
+                )
+                if downloaded_files:
+                    logger.info(f"Synchronisation terminée: {len(downloaded_files)} fichiers téléchargés")
         except Exception as e:
             logger.error(f"Erreur sync périodique: {e}")
+            await asyncio.sleep(60)  # Attendre une minute avant de réessayer
 
 # Configuration FastAPI
 app = FastAPI(
