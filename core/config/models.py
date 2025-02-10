@@ -230,7 +230,7 @@ MODEL_PERFORMANCE_CONFIGS = {
         "pin_memory": True,
         "generation_config": {
             "max_length": 8192,
-            "temperature": 0.7,
+            "temperature": 0.15,
             "top_p": 0.95,
             "repetition_penalty": 1.1
         }
