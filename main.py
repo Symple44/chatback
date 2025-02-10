@@ -386,7 +386,12 @@ async def shutdown():
 def signal_handler(signum, frame):
     """Gère les signaux d'interruption."""
     logger.info(f"Signal {signum} reçu, arrêt en cours...")
-    asyncio.run(shutdown())
+    # Au lieu d'utiliser asyncio.run qui ne peut pas être appelé dans une event loop
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(shutdown())
+    else:
+        loop.run_until_complete(shutdown())
 
 if __name__ == "__main__":
     try:
