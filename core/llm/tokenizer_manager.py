@@ -261,6 +261,9 @@ class TokenizerManager:
         """Encode et tronque le texte avec gestion de la longueur maximale."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
+            if not tokenizer:
+                raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+
             config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
@@ -275,38 +278,24 @@ class TokenizerManager:
                 )
             else:
                 # Pour les conversations (chat)
-                if hasattr(tokenizer, 'apply_chat_template'):
-                    encoded = tokenizer.apply_chat_template(
-                        messages,
-                        tokenize=True,
-                        add_generation_prompt=True,
-                        return_tensors=return_tensors
-                    )
-                else:
-                    # Fallback pour les modèles sans chat_template
-                    formatted_text = ""
-                    for msg in messages:
-                        if msg["role"] == "system":
-                            formatted_text += f"[INST] {msg['content']} [/INST]\n"
-                        elif msg["role"] == "user":
-                            formatted_text += f"[INST] {msg['content']} [/INST]\n"
-                        elif msg["role"] == "assistant":
-                            formatted_text += f"{msg['content']}\n"
-                    
-                    encoded = tokenizer(
-                        formatted_text,
-                        truncation=True,
-                        max_length=max_length,
-                        padding=True,
-                        return_tensors=return_tensors
-                    )
+                formatted_text = ""
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "system":
+                        formatted_text += f"[INST] {content} [/INST]\n"
+                    elif role == "user":
+                        formatted_text += f"[INST] {content} [/INST]\n"
+                    elif role == "assistant":
+                        formatted_text += f"{content}\n"
 
-                # Conversion en format attendu si nécessaire
-                if isinstance(encoded, torch.Tensor):
-                    encoded = {
-                        'input_ids': encoded,
-                        'attention_mask': torch.ones_like(encoded)
-                    }
+                encoded = tokenizer(
+                    formatted_text.strip(),
+                    truncation=True,
+                    max_length=max_length,
+                    padding=True,
+                    return_tensors=return_tensors
+                )
 
             return encoded
 
