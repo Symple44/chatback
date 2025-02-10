@@ -296,7 +296,7 @@ SUMMARIZER_PERFORMANCE_CONFIGS = {
             "max_length": 1024
         }
     },
-    "mt5-base-multi-sum": {
+    "mt5-multilingual-base": {
         "batch_size": 16,
         "min_length": 50,
         "max_length": 150,

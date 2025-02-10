@@ -15,6 +15,11 @@ class DocumentSummarizer:
         self.model_name = "mt5-multilingual-base"  # Modèle par défaut
         self.model: Optional[LoadedModel] = None
         self._initialized = False
+         # Vérification de la présence des configurations
+        if self.model_name not in SUMMARIZER_MODELS:
+            raise ValueError(f"Configuration du modèle {self.model_name} non trouvée dans SUMMARIZER_MODELS")
+        if self.model_name not in SUMMARIZER_PERFORMANCE_CONFIGS:
+            raise ValueError(f"Configuration de performance pour {self.model_name} non trouvée dans SUMMARIZER_PERFORMANCE_CONFIGS")
         self.current_config = SUMMARIZER_MODELS[self.model_name]
         self.perf_config = SUMMARIZER_PERFORMANCE_CONFIGS[self.model_name]
         
