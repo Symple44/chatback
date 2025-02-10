@@ -145,11 +145,12 @@ class TokenizerManager:
                 )
                 
             # Chargement des tokenizers pour les summarizers
-            await self.load_tokenizer(
-                settings.MODEL_NAME_SUMMARIZER,
-                TokenizerType.SUMMARIZER,
-                configs[TokenizerType.SUMMARIZER]
-            )
+            for model_name in SUMMARIZER_MODELS.keys():
+                await self.load_tokenizer(
+                    model_name,
+                    TokenizerType.SUMMARIZER,
+                    configs[TokenizerType.SUMMARIZER]
+                )
                 
             # Chargement des tokenizers pour l'embedding
             await self.load_tokenizer(
@@ -174,9 +175,16 @@ class TokenizerManager:
     ) -> PreTrainedTokenizer:
         """Charge ou recharge un tokenizer."""
         try:
-            model_config = self._get_model_config(model_name, tokenizer_type)
+            # Récupération de la configuration du modèle
+            model_configs = {
+                TokenizerType.CHAT: AVAILABLE_MODELS,
+                TokenizerType.SUMMARIZER: SUMMARIZER_MODELS,
+                TokenizerType.EMBEDDING: EMBEDDING_MODELS
+            }
+            
+            model_config = model_configs[tokenizer_type].get(model_name)
             if not model_config:
-                raise ValueError(f"Configuration non trouvée pour {model_name} , {tokenizer_type} ")
+                raise ValueError(f"Configuration non trouvée pour {model_name}")
 
             tokenizer_key = f"{tokenizer_type.value}_{model_name}"
             
@@ -191,18 +199,7 @@ class TokenizerManager:
                 tokenizer_type
             )
             
-            # Configuration spécifique pour Mixtral
-            if "mixtral" in model_name.lower():
-                tokenizer.pad_token = tokenizer.eos_token
-                special_tokens = {
-                    "bos_token": "<s>",
-                    "eos_token": "</s>",
-                    "pad_token": "</s>",
-                    "unk_token": "<unk>",
-                }
-                tokenizer.add_special_tokens(special_tokens)
-
-            # Mise à jour des dictionnaires
+            # Stockage du tokenizer
             self.tokenizers[tokenizer_key] = tokenizer
             self.configs[tokenizer_key] = config
             self.current_models[tokenizer_type] = model_name
@@ -216,23 +213,12 @@ class TokenizerManager:
 
     def get_tokenizer(
         self,
-        model_name: Optional[str] = None,
-        tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT
-    ) -> PreTrainedTokenizer:
+        model_name: str,
+        tokenizer_type: TokenizerType = TokenizerType.CHAT
+    ) -> Optional[PreTrainedTokenizer]:
         """Récupère un tokenizer spécifique."""
-        if not self._initialized:
-            raise RuntimeError("TokenizerManager non initialisé")
-
-        if model_name is None:
-            model_name = self.current_models[tokenizer_type]
-            if model_name is None:
-                raise ValueError(f"Aucun modèle actif pour le type {tokenizer_type}")
-
         tokenizer_key = f"{tokenizer_type.value}_{model_name}"
-        if tokenizer_key not in self.tokenizers:
-            raise ValueError(f"Tokenizer non trouvé pour {model_name}")
-
-        return self.tokenizers[tokenizer_key]
+        return self.tokenizers.get(tokenizer_key)
 
     async def change_model(
         self,
