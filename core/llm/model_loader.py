@@ -24,6 +24,7 @@ from core.config.models import (
 )
 from core.utils.logger import get_logger
 from core.llm.cuda_manager import ModelPriority
+from core.llm.tokenizer_manager import TokenizerType
 
 logger = get_logger("model_loader")
 
