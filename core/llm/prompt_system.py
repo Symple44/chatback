@@ -48,36 +48,54 @@ class PromptSystem:
         response_type: str = "comprehensive"
     ) -> List[Dict]:
         """
-        Construit un prompt complet avec la nouvelle structure.
+        Construit un prompt complet avec structure améliorée.
         Compatible avec Mistral et Llama.
         """
         try:
             messages = []
             is_mistral = "mistral" in settings.MODEL_NAME.lower()
-            
-            # 1. Message système avec informations de base et prompt_prefix
+
+            # 1. Message système avec format amélioré
             system_content = [
-                f"Je suis {settings.APP_NAME}, votre assistant IA spécialisé dans le logiciel 2CM Manager pour le métier de la charpente métallique, serrurerie et métallerie.",
-                "Je fournis des réponses précises basées sur la documentation disponible."
+                "[SYSTEM_PROMPT]",
+                f"Je suis {settings.APP_NAME}, un assistant spécialisé dans le logiciel 2CM Manager, dédié aux métiers de la charpente métallique, serrurerie et métallerie.",
+                "\nPrincipes fondamentaux :",
+                "- Je fournis des informations précises basées sur la documentation 2CM Manager",
+                "- Je demande des clarifications si une question n'est pas claire",
+                "- Je reconnais quand une information est manquante",
+                "- Je me concentre sur des solutions pratiques et réalisables",
+                "- J'utilise un langage professionnel mais accessible",
+                "- Je m'adapte aux besoins spécifiques de chaque utilisateur",
+                f"\nDate actuelle : {datetime.utcnow().strftime('%d/%m/%Y')}",
+                "[/SYSTEM_PROMPT]"
             ]
 
-            # Ajout du prefix personnalisé
-            if prompt_prefix:
-                system_content.append(prompt_prefix)
-
-            # 2. Ajout du contexte
-            context_content = await self._build_context_section(
-                context_docs,
-                context_summary,
-                context_info
-            )
-            if context_content:
-                system_content.extend(context_content)
+            # 2. Ajout du contexte documentaire si disponible
+            if context_docs:
+                context_content = await self._build_context_section(
+                    context_docs,
+                    context_summary,
+                    context_info
+                )
+                if context_content:
+                    messages.append({
+                        "role": "system",
+                        "content": "\n".join([
+                            "[CONTEXT]",
+                            *context_content,
+                            "[/CONTEXT]"
+                        ])
+                    })
 
             # 3. Instructions spécifiques au type de réponse
-            instructions = self._build_instructions(response_type, context_info)
-            if instructions:
-                system_content.append(instructions)
+            if response_type in self.response_types:
+                response_config = self.response_types[response_type]
+                system_content.extend([
+                    "\n[RESPONSE_TYPE]",
+                    response_config["description"],
+                    response_config.get("style", ""),
+                    "[/RESPONSE_TYPE]"
+                ])
 
             # 4. Construction du message système final
             messages.append({
@@ -85,7 +103,7 @@ class PromptSystem:
                 "content": "\n".join(system_content)
             })
 
-            # 5. Ajout de l'historique avec gestion spécifique selon le modèle
+            # 5. Ajout de l'historique de conversation
             if conversation_history:
                 history_messages = await self._build_conversation_history(
                     conversation_history,
@@ -93,13 +111,13 @@ class PromptSystem:
                 )
                 messages.extend(history_messages)
 
-            # 6. Ajout de la question actuelle
+            # 6. Ajout de la question actuelle avec format clair
             messages.append({
                 "role": "user",
-                "content": query
+                "content": f"[INST]{query}[/INST]"
             })
 
-            # 7. Validation finale selon le modèle
+            # 7. Validation du format selon le modèle
             if is_mistral:
                 messages = self._validate_mistral_format(messages)
             else:
@@ -109,50 +127,10 @@ class PromptSystem:
 
         except Exception as e:
             logger.error(f"Erreur construction prompt: {e}")
-            # Format minimal en cas d'erreur
             return [
-                {"role": "system", "content": f"Je suis {settings.APP_NAME}, votre assistant."},
-                {"role": "user", "content": query}
+                {"role": "system", "content": f"[SYSTEM_PROMPT]You are {settings.APP_NAME}.[/SYSTEM_PROMPT]"},
+                {"role": "user", "content": f"[INST]{query}[/INST]"}
             ]
-
-    async def _build_context_section(
-        self,
-        context_docs: List[Dict],
-        context_summary: Optional[Union[str, Dict]],
-        context_info: Optional[Dict]
-    ) -> List[str]:
-        """Construit la section de contexte du prompt."""
-        context_content = []
-
-        # Ajout du résumé du contexte
-        if context_summary:
-            if isinstance(context_summary, dict):
-                summary_text = context_summary.get("structured_summary", "")
-                if summary_text:
-                    context_content.append(f"\nRésumé du contexte:\n{summary_text}")
-                
-                # Ajout des thèmes identifiés
-                if themes := context_summary.get("themes", []):
-                    context_content.append(f"\nThèmes principaux: {', '.join(themes)}")
-            else:
-                context_content.append(f"\nContexte:\n{str(context_summary)}")
-
-        # Ajout des documents pertinents
-        if context_docs:
-            context_content.append("\nSources pertinentes:")
-            for doc in context_docs[:3]:  # Limite aux 3 plus pertinents
-                title = doc.get("title", "Document")
-                content = doc.get("content", "")[:200]  # Limite de longueur
-                score = doc.get("score", 0)
-                context_content.append(f"• {title} (pertinence: {score:.2f}):\n{content}...")
-
-        # Ajout des informations de contexte additionnelles
-        if context_info and context_info.get("needs_clarification"):
-            context_content.append("\nPoints nécessitant clarification:")
-            if points := context_info.get("clarification_points", []):
-                context_content.extend([f"• {point}" for point in points])
-
-        return context_content
 
     def _build_instructions(
         self,
@@ -206,36 +184,62 @@ class PromptSystem:
     def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
         """
         Valide et formate correctement les messages pour Mistral.
-        Les messages system doivent être intégrés au premier message utilisateur.
+        Maintient la structure claire tout en respectant les contraintes Mistral.
         """
         try:
-            # Extraction du message système et autres messages
+            # Extraction des différentes parties
             system_messages = [msg for msg in messages if msg["role"] == "system"]
-            chat_messages = [msg for msg in messages if msg["role"] != "system"]
+            context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXT]")]
+            chat_messages = [msg for msg in messages if msg["role"] not in ["system"] and not msg.get("content", "").startswith("[CONTEXT]")]
 
             if not chat_messages:
                 chat_messages = [{
                     "role": "user",
-                    "content": "Comment puis-je vous aider?"
+                    "content": "[INST]Comment puis-je vous aider?[/INST]"
                 }]
 
-            # Pour Mistral, intégrer le contenu système dans le premier message utilisateur
+            # Construction du message formaté
             formatted_messages = []
+            
+            # Pour Mistral, on combine le contenu système dans le premier message utilisateur
+            system_content = []
             if system_messages:
-                system_content = "\n\n".join(msg["content"] for msg in system_messages)
-                # Trouver le premier message utilisateur
-                for i, msg in enumerate(chat_messages):
-                    if msg["role"] == "user":
-                        # Combiner le contenu système avec le message utilisateur
-                        msg["content"] = system_content + "\n\n" + msg["content"]
-                        break
+                # Fusion des messages système
+                for msg in system_messages:
+                    content = msg["content"]
+                    # Éviter la duplication des balises si déjà présentes
+                    if not content.startswith("[SYSTEM_PROMPT]"):
+                        content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
+                    system_content.append(content)
+
+            # Ajout du contexte s'il existe
+            if context_messages:
+                system_content.extend([msg["content"] for msg in context_messages])
+
+            # Trouver le premier message utilisateur et y injecter le contenu système
+            system_block = "\n\n".join(system_content)
+            first_user_msg_found = False
+            
+            for msg in chat_messages:
+                if msg["role"] == "user" and not first_user_msg_found:
+                    # Assurons-nous que le message utilisateur a les balises [INST]
+                    user_content = msg["content"]
+                    if not user_content.startswith("[INST]"):
+                        user_content = f"[INST]{user_content}[/INST]"
                         
-            # Ajouter les messages de chat
-            formatted_messages.extend(chat_messages)
+                    # Combinaison du contenu système avec le message utilisateur
+                    msg["content"] = f"{system_block}\n\n{user_content}"
+                    first_user_msg_found = True
+                formatted_messages.append(msg)
 
             # Vérifier que le dernier message est de l'utilisateur
             if formatted_messages[-1]["role"] != "user":
                 formatted_messages = formatted_messages[:-1]
+
+            # Validation finale des balises
+            for i, msg in enumerate(formatted_messages):
+                if msg["role"] == "user" and not msg["content"].strip().endswith("[/INST]"):
+                    formatted_messages[i]["content"] = f"{msg['content']}[/INST]"
 
             return formatted_messages
 
@@ -244,7 +248,7 @@ class PromptSystem:
             # Format minimal en cas d'erreur
             return [{
                 "role": "user",
-                "content": "Comment puis-je vous aider?"
+                "content": "[INST]Comment puis-je vous aider?[/INST]"
             }]
 
     def _validate_llama_format(self, messages: List[Dict]) -> List[Dict]:
