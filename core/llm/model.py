@@ -73,7 +73,6 @@ class ModelInference:
         response_type: str = "comprehensive",
         **kwargs
     ) -> Dict:
-        """Génère une réponse basée sur les messages."""
         try:
             metrics.increment_counter("generation_requests")
             chat_model = self.model_manager.current_models[ModelType.CHAT]
@@ -81,7 +80,7 @@ class ModelInference:
             if not chat_model:
                 raise RuntimeError("Modèle de chat non initialisé")
 
-            # Traitement des tokens
+            # Encodage des entrées
             inputs = self.tokenizer_manager.encode_with_truncation(
                 messages,
                 max_length=settings.MAX_INPUT_LENGTH,
@@ -91,22 +90,10 @@ class ModelInference:
             # Transfert vers le device approprié
             inputs = {k: v.to(chat_model.device) for k, v in inputs.items()}
             
-            # Récupération de la configuration de génération depuis les settings
-            response_config = settings.RESPONSE_TYPES.get(response_type, settings.RESPONSE_TYPES["comprehensive"])
-            generation_config = {
-                "do_sample": settings.DO_SAMPLE,
-                "temperature": response_config.get('temperature', settings.TEMPERATURE),
-                "max_new_tokens": response_config.get('max_tokens', settings.MAX_NEW_TOKENS),
-                "top_p": settings.TOP_P,
-                "top_k": settings.TOP_K,
-                "repetition_penalty": settings.REPETITION_PENALTY,
-                "length_penalty": settings.LENGTH_PENALTY,
-                "pad_token_id": chat_model.tokenizer.pad_token_id,
-                "eos_token_id": chat_model.tokenizer.eos_token_id,
-                "bos_token_id": chat_model.tokenizer.bos_token_id
-            }
+            # Obtention de la configuration de génération nettoyée
+            generation_config = self._get_generation_config(response_type)
 
-            # Génération avec le nouveau format d'autocast
+            # Génération avec autocast
             with torch.amp.autocast(device_type='cuda', enabled=True):
                 outputs = chat_model.model.generate(
                     **inputs,
@@ -114,7 +101,10 @@ class ModelInference:
                 )
 
             # Décodage et nettoyage
-            response_text = self.tokenizer_manager.decode_and_clean(outputs[0])
+            response_text = self.tokenizer_manager.decode_and_clean(
+                outputs[0],
+                model_name=chat_model.model_name
+            )
 
             return {
                 "response": response_text,
@@ -125,6 +115,7 @@ class ModelInference:
                     "model_type": "chat",
                     "language": language,
                     "response_type": response_type,
+                    "generation_config": generation_config,
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
