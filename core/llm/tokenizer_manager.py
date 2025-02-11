@@ -361,7 +361,9 @@ class TokenizerManager:
                     response = response[response_start:response_end]
             
             response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]\s*', '', response, flags=re.DOTALL)
-            
+            response = re.sub(r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]\s*', '', response, flags=re.DOTALL)
+            response = re.sub(r'\[CONTEXT\].*?\[/CONTEXT\]\s*', '', response, flags=re.DOTALL)
+
             # Nettoyage final des espaces
             response = response.strip()
 
