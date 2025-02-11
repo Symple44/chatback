@@ -221,10 +221,9 @@ class PromptSystem:
             # Supprimer le prompt Mistral par défaut et ne garder que notre système
             for msg in system_messages:
                 content = msg["content"]
-                if "You are Mistral" not in content:  # Ignorer le prompt Mistral par défaut
-                    if not content.startswith("[SYSTEM_PROMPT]"):
-                        content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
-                    system_content.append(content)
+                if not content.startswith("[SYSTEM_PROMPT]"):
+                    content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
+                system_content.append(content)
 
             # Ajout du contexte
             if context_messages:
