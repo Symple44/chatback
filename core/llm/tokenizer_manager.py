@@ -106,6 +106,10 @@ class TokenizerManager:
                 }
                 tokenizer.add_special_tokens(special_tokens)
 
+                # Définir explicitement le pad_token_id et eos_token_id
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+
             return tokenizer
 
         except Exception as e:
