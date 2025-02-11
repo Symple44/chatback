@@ -111,8 +111,8 @@ class ModelInference:
             # Récupérer la réponse brute avant décodage
             raw_response = chat_model.tokenizer.decode(
                 outputs[0],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False
             )   
 
             # Décodage et nettoyage
