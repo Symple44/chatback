@@ -341,19 +341,33 @@ class TokenizerManager:
             if not tokenizer:
                 raise ValueError(f"Tokenizer non trouvé pour {model_name}")
 
-            # Décodage simple avec les paramètres appropriés
+            # Décodage initial
             response = tokenizer.decode(
                 token_ids,
-                skip_special_tokens=skip_special_tokens,
-                clean_up_tokenization_spaces=clean_up_tokenization_spaces
+                skip_special_tokens=False,  # On garde les tokens spéciaux pour trouver les marqueurs
+                clean_up_tokenization_spaces=False
             )
 
-            # Le template Mistral gère déjà correctement le formatage,
-            # nous n'avons pas besoin de nettoyage supplémentaire
-            return response.strip()
+            # Extraction de la réponse selon le format Mistral
+            if "[/INST]" in response and "</s>" in response:
+                # Trouver le début de la réponse effective (après [/INST])
+                response_start = response.rfind("[/INST]") + len("[/INST]")
+                # Trouver la fin de la réponse (avant </s>)
+                response_end = response.find("</s>", response_start)
+
+                if response_end == -1:  # Si pas de </s>, prendre jusqu'à la fin
+                    response = response[response_start:]
+                else:
+                    response = response[response_start:response_end]
+
+            # Nettoyage final des espaces
+            response = response.strip()
+
+            return response
 
         except Exception as e:
             logger.error(f"Erreur décodage pour {model_name}: {e}")
+            logger.debug(f"Réponse avant nettoyage: {response}")
             return "Une erreur est survenue lors du décodage de la réponse."
 
     def count_tokens(
