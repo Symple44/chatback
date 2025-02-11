@@ -159,93 +159,106 @@ class PromptSystem:
         history: List[Dict],
         is_mistral: bool
     ) -> List[Dict]:
-        """Construit l'historique de conversation au format approprié."""
-        history_messages = []
-        max_messages = 5  # Limite aux 5 derniers messages
-        
-        filtered_history = [
-            msg for msg in history[-max_messages:]
-            if msg.get("role") in ["user", "assistant"] and msg.get("content")
-        ]
+        """
+        Construit l'historique de conversation.
+        Pour Mistral : assure l'alternance user/assistant et le bon formatage des balises.
+        """
+        try:
+            formatted_history = []
+            max_history = 5  # Limite aux 5 dernières interactions
 
-        if is_mistral:
-            # Pour Mistral : assurer l'alternance user/assistant
-            current_role = "user"
-            for msg in filtered_history:
-                if msg["role"] == current_role:
-                    history_messages.append(msg)
-                    current_role = "assistant" if current_role == "user" else "user"
-        else:
-            # Pour Llama : pas besoin d'alternance stricte
-            history_messages.extend(filtered_history)
+            if is_mistral:
+                # Pour Mistral : assurer l'alternance user/assistant
+                current_role = "user"
+                for msg in history[-max_history*2:]:  # *2 car on a user + assistant
+                    if msg["role"] == current_role:
+                        content = msg["content"]
+                        if current_role == "user" and not content.startswith("[INST]"):
+                            content = f"[INST]{content}[/INST]"
+                        formatted_history.append({
+                            "role": current_role,
+                            "content": content
+                        })
+                        current_role = "assistant" if current_role == "user" else "user"
+            else:
+                # Pour les autres modèles : garder l'ordre original
+                for msg in history[-max_history*2:]:
+                    if msg["role"] in ["user", "assistant"]:
+                        content = msg["content"]
+                        # Ajout des balises [INST] seulement pour user
+                        if msg["role"] == "user" and not content.startswith("[INST]"):
+                            content = f"[INST]{content}[/INST]"
+                        formatted_history.append({
+                            "role": msg["role"],
+                            "content": content
+                        })
 
-        return history_messages
+            return formatted_history
+
+        except Exception as e:
+            logger.error(f"Erreur formatage historique: {e}")
+            return []
 
     def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
         """
         Valide et formate correctement les messages pour Mistral.
-        Maintient la structure claire tout en respectant les contraintes Mistral.
+        Préserve la structure tout en respectant les contraintes Mistral.
         """
         try:
             # Extraction des différentes parties
             system_messages = [msg for msg in messages if msg["role"] == "system"]
-            context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXT]")]
-            chat_messages = [msg for msg in messages if msg["role"] not in ["system"] and not msg.get("content", "").startswith("[CONTEXT]")]
+            context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXTE]")]
+            response_type_messages = [msg for msg in messages if msg.get("content", "").startswith("[TYPE_REPONSE]")]
+            chat_messages = [msg for msg in messages if msg["role"] not in ["system"] and 
+                            not msg.get("content", "").startswith("[CONTEXTE]") and
+                            not msg.get("content", "").startswith("[TYPE_REPONSE]")]
 
-            if not chat_messages:
-                chat_messages = [{
-                    "role": "user",
-                    "content": "[INST]Comment puis-je vous aider?[/INST]"
-                }]
-
-            # Construction du message formaté
             formatted_messages = []
             
-            # Pour Mistral, on combine le contenu système dans le premier message utilisateur
+            # Construction du message système unifié
             system_content = []
-            if system_messages:
-                # Fusion des messages système
-                for msg in system_messages:
-                    content = msg["content"]
-                    # Éviter la duplication des balises si déjà présentes
-                    if not content.startswith("[SYSTEM_PROMPT]"):
-                        content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
-                    system_content.append(content)
+            
+            # Ajout de tous les messages système
+            for msg in system_messages:
+                content = msg["content"]
+                if not content.startswith("[SYSTEM_PROMPT]"):
+                    content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
+                system_content.append(content)
 
-            # Ajout du contexte s'il existe
+            # Ajout du contexte
             if context_messages:
                 system_content.extend([msg["content"] for msg in context_messages])
 
-            # Trouver le premier message utilisateur et y injecter le contenu système
-            system_block = "\n\n".join(system_content)
-            first_user_msg_found = False
-            
-            for msg in chat_messages:
-                if msg["role"] == "user" and not first_user_msg_found:
-                    # Assurons-nous que le message utilisateur a les balises [INST]
-                    user_content = msg["content"]
-                    if not user_content.startswith("[INST]"):
-                        user_content = f"[INST]{user_content}[/INST]"
-                        
-                    # Combinaison du contenu système avec le message utilisateur
-                    msg["content"] = f"{system_block}\n\n{user_content}"
-                    first_user_msg_found = True
-                formatted_messages.append(msg)
+            # Ajout du type de réponse
+            if response_type_messages:
+                system_content.extend([msg["content"] for msg in response_type_messages])
 
-            # Vérifier que le dernier message est de l'utilisateur
-            if formatted_messages[-1]["role"] != "user":
-                formatted_messages = formatted_messages[:-1]
+            # Premier message utilisateur avec le contexte système
+            if chat_messages:
+                first_user_msg = chat_messages[0]
+                complete_system = "\n\n".join(system_content + [first_user_msg["content"]])
+                
+                formatted_messages.append({
+                    "role": "user",
+                    "content": complete_system
+                })
+                
+                # Ajout des messages restants
+                formatted_messages.extend(chat_messages[1:])
 
-            # Validation finale des balises
+            # Nettoyage des balises en double
             for i, msg in enumerate(formatted_messages):
-                if msg["role"] == "user" and not msg["content"].strip().endswith("[/INST]"):
-                    formatted_messages[i]["content"] = f"{msg['content']}[/INST]"
+                content = msg["content"]
+                while "[INST][INST]" in content:
+                    content = content.replace("[INST][INST]", "[INST]")
+                while "[/INST][/INST]" in content:
+                    content = content.replace("[/INST][/INST]", "[/INST]")
+                formatted_messages[i]["content"] = content
 
             return formatted_messages
 
         except Exception as e:
             logger.error(f"Erreur formatage Mistral: {e}")
-            # Format minimal en cas d'erreur
             return [{
                 "role": "user",
                 "content": "[INST]Comment puis-je vous aider?[/INST]"
