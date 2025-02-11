@@ -359,7 +359,8 @@ class TokenizerManager:
                     response = response[response_start:]
                 else:
                     response = response[response_start:response_end]
-
+            # Nettoyage des balises système
+            response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]\s*', '', response, flags=re.DOTALL)
             # Nettoyage final des espaces
             response = response.strip()
 
