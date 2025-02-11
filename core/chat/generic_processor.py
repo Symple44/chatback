@@ -119,12 +119,12 @@ class GenericProcessor(BaseProcessor):
                     logger.debug(f"Document page type: {type(doc.get('metadata', {}).get('page'))}, value: {doc.get('metadata', {}).get('page')}")
             
             chat_history_id = await self.components.db_manager.save_chat_interaction(
-                session_id=chat_session.session_id,
+                session_id=session_id,
                 user_id=str(request.user_id),
-                query=request.query,
-                response=response.response,  # Réponse décodée
+                query=query,
+                response=response_text, 
                 query_vector=query_vector,
-                response_vector=response_vector,
+                response_vector=await self.model.create_embedding(response_text),
                 confidence_score=float(self._calculate_confidence(filtered_docs)),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
