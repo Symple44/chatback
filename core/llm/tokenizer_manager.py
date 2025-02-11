@@ -268,9 +268,8 @@ class TokenizerManager:
         model_name: Optional[str] = None,
         tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         return_tensors: str = "pt",
-        return_text: bool = False    # Nouveau paramètre
+        return_text: bool = False
     ) -> Union[Dict[str, torch.Tensor], str]:
-        """Encode et formate les messages pour le chat."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             if not tokenizer:
@@ -279,29 +278,25 @@ class TokenizerManager:
             config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
-            # Format Mistral pour les messages de chat
+            # Nouveau code pour template chat Mistral
             if isinstance(messages, list):
-                formatted_messages = []
+                # Filtrage et préparation des messages
+                chat_messages = []
                 for msg in messages:
-                    if msg["role"] == "system":
-                        formatted_messages.append({
-                            "role": "system", 
-                            "content": msg["content"]
-                        })
-                    elif msg["role"] == "user":
-                        formatted_messages.append({
-                            "role": "user", 
-                            "content": msg["content"]
-                        })
-                    elif msg["role"] == "assistant":
-                        formatted_messages.append({
-                            "role": "assistant", 
-                            "content": msg["content"]
-                        })
+                    role = msg["role"]
+                    content = msg["content"]
+                    
+                    if role == "system":
+                        # Les messages système sont ajoutés comme contexte
+                        chat_messages.append({"role": "system", "content": content})
+                    elif role == "user":
+                        chat_messages.append({"role": "user", "content": content})
+                    elif role == "assistant":
+                        chat_messages.append({"role": "assistant", "content": content})
 
-                # Utilisation du template de chat
+                # Utilisation du template de chat spécifique à Mistral
                 chat_text = tokenizer.apply_chat_template(
-                    formatted_messages,
+                    chat_messages,
                     tokenize=False,
                     add_generation_prompt=True
                 )
@@ -323,9 +318,9 @@ class TokenizerManager:
 
             return encoded
 
-        except Exception as e:
-            logger.error(f"Erreur d'encodage: {e}")
-            raise
+    except Exception as e:
+        logger.error(f"Erreur d'encodage: {e}")
+        raise
 
     def decode_and_clean(
         self,

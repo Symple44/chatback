@@ -202,57 +202,63 @@ class PromptSystem:
     def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
         """
         Valide et formate correctement les messages pour Mistral.
-        Préserve la structure tout en respectant les contraintes Mistral.
         """
         try:
             # Extraction des différentes parties
             system_messages = [msg for msg in messages if msg["role"] == "system"]
-            context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXTE]")]
-            response_type_messages = [msg for msg in messages if msg.get("content", "").startswith("[TYPE_REPONSE]")]
+            context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXT]")]
+            response_type_messages = [msg for msg in messages if msg.get("content", "").startswith("[RESPONSE_TYPE]")]
             chat_messages = [msg for msg in messages if msg["role"] not in ["system"] and 
-                            not msg.get("content", "").startswith("[CONTEXTE]") and
-                            not msg.get("content", "").startswith("[TYPE_REPONSE]")]
+                            not msg.get("content", "").startswith("[CONTEXT]") and
+                            not msg.get("content", "").startswith("[RESPONSE_TYPE]")]
 
-            formatted_messages = []
-            
             # Construction du message système unifié
             system_content = []
             
-            # Supprimer le prompt Mistral par défaut et ne garder que notre système
+            # Combiner tous les messages système
             for msg in system_messages:
                 content = msg["content"]
-                if not content.startswith("[SYSTEM_PROMPT]"):
-                    content = f"[SYSTEM_PROMPT]\n{content}\n[/SYSTEM_PROMPT]"
+                if "[SYSTEM_PROMPT]" not in content:
+                    content = f"[SYSTEM_PROMPT]{content}[/SYSTEM_PROMPT]"
                 system_content.append(content)
 
             # Ajout du contexte
-            if context_messages:
-                system_content.extend([msg["content"] for msg in context_messages])
+            context_content = [msg["content"] for msg in context_messages]
+            system_content.extend(context_content)
 
             # Ajout du type de réponse
-            if response_type_messages:
-                system_content.extend([msg["content"] for msg in response_type_messages])
+            response_type_content = [msg["content"] for msg in response_type_messages]
+            system_content.extend(response_type_content)
+
+            # Formatage final des messages
+            formatted_messages = []
 
             # Premier message utilisateur avec le contexte système
-            if chat_messages:
+            if system_content and chat_messages:
                 first_user_msg = chat_messages[0]
-                complete_system = "\n\n".join(system_content + [first_user_msg["content"]])
+                complete_system = "\n\n".join(system_content)
                 
                 formatted_messages.append({
-                    "role": "user",
+                    "role": "system",
                     "content": complete_system
                 })
                 
-                # Ajout des messages restants
-                formatted_messages.extend(chat_messages[1:])
+                # Ajouter les messages utilisateur avec balises [INST]
+                for msg in chat_messages:
+                    if msg["role"] == "user":
+                        formatted_messages.append({
+                            "role": "user",
+                            "content": f"[INST]{msg['content']}[/INST]"
+                        })
+                    else:
+                        formatted_messages.append(msg)
 
-            # Nettoyage des balises en double
+            # Nettoyage des balises en double et suppression des balises vides
             for i, msg in enumerate(formatted_messages):
                 content = msg["content"]
-                while "[INST][INST]" in content:
-                    content = content.replace("[INST][INST]", "[INST]")
-                while "[/INST][/INST]" in content:
-                    content = content.replace("[/INST][/INST]", "[/INST]")
+                content = re.sub(r'\[INST]\s*\[INST]', '[INST]', content)
+                content = re.sub(r'\[/INST]\s*\[/INST]', '[/INST]', content)
+                content = content.strip()
                 formatted_messages[i]["content"] = content
 
             return formatted_messages
@@ -263,7 +269,7 @@ class PromptSystem:
                 "role": "user",
                 "content": "[INST]Comment puis-je vous aider?[/INST]"
             }]
-
+    
     def _validate_llama_format(self, messages: List[Dict]) -> List[Dict]:
         """Valide et corrige le format pour Llama."""
         # Llama est plus flexible, on vérifie juste la présence des rôles valides
