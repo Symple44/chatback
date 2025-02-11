@@ -330,7 +330,6 @@ class TokenizerManager:
         tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         clean_up_tokenization_spaces: bool = True
     ) -> str:
-        """Décode et nettoie le texte généré."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             if not tokenizer:
@@ -339,34 +338,27 @@ class TokenizerManager:
             # Décodage initial
             response = tokenizer.decode(
                 token_ids,
-                skip_special_tokens=False,  # On garde les tokens spéciaux pour trouver les marqueurs
+                skip_special_tokens=False,
                 clean_up_tokenization_spaces=False
             )
 
+            # Nettoyage des balises multiples
+            response = re.sub(r'\[INST\]\s*\[INST\]', '[INST]', response)
+            response = re.sub(r'\[/INST\]\s*\[/INST\]', '[/INST]', response)
+
             # Extraction de la réponse selon le format Mistral
-            if "[/INST]" in response and "</s>" in response:
-                # Trouver le début de la réponse effective (après [/INST])
-                response_start = response.rfind("[/INST]") + len("[/INST]")
-                # Trouver la fin de la réponse (avant </s>)
-                response_end = response.find("</s>", response_start)
+            if "[/INST]" in response:
+                response = response.split("[/INST]")[-1].strip()
 
-                if response_end == -1:  # Si pas de </s>, prendre jusqu'à la fin
-                    response = response[response_start:]
-                else:
-                    response = response[response_start:response_end]
-            
-            response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]\s*', '', response, flags=re.DOTALL)
-            response = re.sub(r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]\s*', '', response, flags=re.DOTALL)
-            response = re.sub(r'\[CONTEXT\].*?\[/CONTEXT\]\s*', '', response, flags=re.DOTALL)
+            # Suppression des marqueurs système et autres
+            response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]', '', response, flags=re.DOTALL)
+            response = re.sub(r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]', '', response, flags=re.DOTALL)
+            response = re.sub(r'\[CONTEXT\].*?\[/CONTEXT\]', '', response, flags=re.DOTALL)
 
-            # Nettoyage final des espaces
-            response = response.strip()
-
-            return response
+            return response.strip()
 
         except Exception as e:
             logger.error(f"Erreur décodage pour {model_name}: {e}")
-            logger.debug(f"Réponse avant nettoyage: {response}")
             return "Une erreur est survenue lors du décodage de la réponse."
 
     def count_tokens(

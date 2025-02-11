@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, validator
 from datetime import datetime
 from core.config.config import settings
 from core.utils.logger import get_logger
+import re
 
 logger = get_logger("prompt_system")
 
@@ -235,7 +236,6 @@ class PromptSystem:
 
             # Premier message utilisateur avec le contexte système
             if system_content and chat_messages:
-                first_user_msg = chat_messages[0]
                 complete_system = "\n\n".join(system_content)
                 
                 formatted_messages.append({
@@ -252,14 +252,13 @@ class PromptSystem:
                         })
                     else:
                         formatted_messages.append(msg)
-
-            # Nettoyage des balises en double et suppression des balises vides
-            for i, msg in enumerate(formatted_messages):
-                content = msg["content"]
-                content = re.sub(r'\[INST]\s*\[INST]', '[INST]', content)
-                content = re.sub(r'\[/INST]\s*\[/INST]', '[/INST]', content)
-                content = content.strip()
-                formatted_messages[i]["content"] = content
+            
+            # Fallback si aucun message n'a été formaté
+            if not formatted_messages:
+                formatted_messages = [{
+                    "role": "user",
+                    "content": "[INST]Comment puis-je vous aider?[/INST]"
+                }]
 
             return formatted_messages
 
