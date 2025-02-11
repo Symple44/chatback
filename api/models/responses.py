@@ -165,14 +165,15 @@ class ChatResponse(BaseModel):
     processing_time: float = Field(..., ge=0.0)
     tokens_used: int = Field(..., ge=0)
     tokens_details: Optional[Dict[str, int]] = Field(default_factory=dict)
-    #cost: float = Field(default=0.0, ge=0.0)
     application: str = Field(default="chat_api") 
     fragments: List[DocumentFragment] = Field(default_factory=list)  
     similar_questions: List[SimilarQuestion] = Field(default_factory=list)  
     metadata: Dict[str, Any] = Field(default_factory=lambda: {
         "source": "model",
         "timestamp": datetime.utcnow().isoformat(),
-        "session_context": {}
+        "session_context": {},
+        "raw_response": None,  
+        "raw_prompt": None    
     })
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     query_vector: List[float] = Field(default_factory=list) 

@@ -135,13 +135,14 @@ class ChatHistory(Base):
     user_id = Column(UUID, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     query = Column(Text, nullable=False)
     response = Column(Text, nullable=False)
+    raw_response = Column(Text, nullable=True)  # Ajout de la réponse brute
+    raw_prompt = Column(Text, nullable=True)    # Ajout du prompt brut
     query_vector = Column(ARRAY(DOUBLE_PRECISION), nullable=True)
     response_vector = Column(ARRAY(DOUBLE_PRECISION), nullable=True)
     confidence_score = Column(Float, nullable=False, default=0.0)
     tokens_used = Column(Integer, nullable=False, default=0)
     processing_time = Column(Float, nullable=False, default=0.0)
-    #cost = Column(Float, default=0.0)
-    chat_metadata  = Column(JSONB, default={})
+    chat_metadata = Column(JSONB, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relations
@@ -157,6 +158,8 @@ class ChatHistory(Base):
         Index('idx_history_created', created_at.desc()),
         Index('idx_history_metadata', chat_metadata, postgresql_using='gin'),
         Index('idx_history_vector', query_vector, postgresql_using='gin'),
+        # Ajout d'un index sur les nouvelles colonnes pour la recherche
+        Index('idx_history_raw_response', raw_response, postgresql_using='gin'),
         CheckConstraint('confidence_score >= 0 AND confidence_score <= 1', name='confidence_score_check'),
         CheckConstraint('tokens_used >= 0', name='tokens_used_check'),
         CheckConstraint('processing_time >= 0', name='processing_time_check'),
@@ -170,10 +173,11 @@ class ChatHistory(Base):
             "user_id": str(self.user_id),
             "query": self.query,
             "response": self.response,
+            "raw_response": self.raw_response,  # Ajout
+            "raw_prompt": self.raw_prompt,      # Ajout
             "confidence_score": self.confidence_score,
             "tokens_used": self.tokens_used,
             "processing_time": self.processing_time,
-            #"cost": self.cost,
             "metadata": self.chat_metadata,
             "created_at": self.created_at.isoformat()
         }

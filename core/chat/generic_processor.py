@@ -119,31 +119,31 @@ class GenericProcessor(BaseProcessor):
                     logger.debug(f"Document page type: {type(doc.get('metadata', {}).get('page'))}, value: {doc.get('metadata', {}).get('page')}")
             
             chat_history_id = await self.components.db_manager.save_chat_interaction(
-                session_id=session_id,
-                user_id=request.get("user_id"),
-                query=query,
-                response=response_text,
+                session_id=chat_session.session_id,
+                user_id=str(request.user_id),
+                query=request.query,
+                response=response.response,  # Réponse décodée
                 query_vector=query_vector,
-                response_vector=await self.model.create_embedding(response_text),
+                response_vector=response_vector,
                 confidence_score=float(self._calculate_confidence(filtered_docs)),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
-                referenced_docs=[
-                    {
-                        "name": doc.get("title", doc.get("name", "Unknown Document")),
-                        "page": doc.get("metadata", {}).get("page", 1),
-                        "score": float(doc.get("score", 0.0)),
-                        "snippet": doc.get("content", ""),
-                        "metadata": doc.get("metadata", {})
-                    } for doc in filtered_docs
-                ],
+                referenced_docs=[{
+                    "name": doc.get("title", doc.get("name", "Unknown Document")),
+                    "page": doc.get("metadata", {}).get("page", 1),
+                    "score": float(doc.get("score", 0.0)),
+                    "snippet": doc.get("content", ""),
+                    "metadata": doc.get("metadata", {})
+                } for doc in filtered_docs] if filtered_docs else None,
                 metadata={
                     "processor_type": "generic",
                     "documents_found": len(filtered_docs),
                     "language": request.get("language", "fr"),
                     "response_type": request.get("response_type", "comprehensive"),
                     "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None
-                }
+                },
+                raw_response=model_response.get("metadata", {}).get("raw_response"),  # Réponse brute
+                raw_prompt=model_response.get("metadata", {}).get("raw_prompt")       # Prompt brut
             )
             
             if chat_history_id:

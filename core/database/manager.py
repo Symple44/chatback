@@ -78,7 +78,9 @@ class DatabaseManager:
         tokens_used: int,
         processing_time: float,
         referenced_docs: Optional[List[Dict]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        raw_response: Optional[str] = None,  # Ajout du paramètre raw_response
+        raw_prompt: Optional[str] = None     # Ajout du paramètre raw_prompt
     ) -> Optional[str]:
         """
         Sauvegarde une interaction de chat complète.
@@ -95,25 +97,29 @@ class DatabaseManager:
             processing_time: Temps de traitement
             referenced_docs: Documents référencés
             metadata: Métadonnées additionnelles
+            raw_response: Réponse brute du modèle
+            raw_prompt: Prompt brut envoyé au modèle
             
         Returns:
             ID de l'historique créé ou None en cas d'erreur
         """
         async with self.session_factory() as session:
             try:
-                # Création de l'historique
+                # Création de l'historique avec les nouveaux champs
                 chat_history = ChatHistory(
                     id=uuid.uuid4(),
                     session_id=session_id,
                     user_id=user_id,
                     query=query,
                     response=response,
+                    raw_response=raw_response,    # Ajout de raw_response
+                    raw_prompt=raw_prompt,        # Ajout de raw_prompt
                     query_vector=query_vector,
                     response_vector=response_vector,
                     confidence_score=confidence_score,
                     tokens_used=tokens_used,
                     processing_time=processing_time,
-                    metadata=metadata or {}
+                    chat_metadata=metadata or {}
                 )
                 session.add(chat_history)
 
@@ -140,7 +146,10 @@ class DatabaseManager:
                             embedding_type=vec_type,
                             vector=vector,
                             model_version=settings.VERSION,
-                            metadata={"timestamp": datetime.utcnow().isoformat()}
+                            metadata={
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "has_raw_data": bool(raw_response if vec_type == "response" else raw_prompt)
+                            }
                         )
                         session.add(embedding)
 
@@ -153,7 +162,7 @@ class DatabaseManager:
                 logger.error(f"Erreur sauvegarde chat: {e}")
                 metrics.increment_counter("database_chat_save_errors")
                 return None
-
+            
     async def find_similar_questions(
         self,
         vector: List[float],
