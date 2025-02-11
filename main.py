@@ -385,8 +385,19 @@ async def shutdown():
     try:
         logger.info("Début de l'arrêt de l'application...")
         
+        # Import ici pour éviter les problèmes de cycle d'import
+        import torch
+        
         # Nettoyage des composants
         await components.cleanup()
+        
+        # Nettoyage CUDA si disponible
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            except:
+                pass
         
         # Attente courte pour laisser le temps aux connexions de se fermer
         await asyncio.sleep(1)
@@ -402,20 +413,15 @@ async def shutdown():
 def signal_handler(signum, frame):
     """Gère les signaux d'interruption."""
     logger.info(f"Signal {signum} reçu, arrêt en cours...")
-    
-    # Forcer le nettoyage CUDA avant de quitter
-    if torch.cuda.is_available():
-        try:
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-        except:
-            pass
-            
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(shutdown())
-    else:
-        loop.run_until_complete(shutdown())
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(shutdown())
+        else:
+            loop.run_until_complete(shutdown())
+    except Exception as e:
+        logger.error(f"Erreur dans le gestionnaire de signal: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:

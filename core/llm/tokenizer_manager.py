@@ -269,7 +269,7 @@ class TokenizerManager:
         tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         return_tensors: str = "pt"
     ) -> Dict[str, torch.Tensor]:
-        """Encode et tronque le texte avec gestion de la longueur maximale."""
+        """Encode et formate les messages pour le chat."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             if not tokenizer:
@@ -278,58 +278,49 @@ class TokenizerManager:
             config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
-            # Gestion différente selon le type d'entrée
-            if isinstance(messages, str):
-                encoded = tokenizer(
-                    messages,
-                    truncation=True,
-                    max_length=max_length,
-                    padding=True,
-                    return_tensors=return_tensors
+            # Format Mistral officiel pour les messages de chat
+            if isinstance(messages, list):
+                formatted_messages = []
+                for msg in messages:
+                    if msg["role"] == "system":
+                        formatted_messages.append({
+                            "role": "system", 
+                            "content": msg["content"]
+                        })
+                    elif msg["role"] == "user":
+                        formatted_messages.append({
+                            "role": "user", 
+                            "content": msg["content"]
+                        })
+                    elif msg["role"] == "assistant":
+                        formatted_messages.append({
+                            "role": "assistant", 
+                            "content": msg["content"]
+                        })
+
+                # Utilisation de la méthode apply_chat_template de Mistral
+                chat_text = tokenizer.apply_chat_template(
+                    formatted_messages,
+                    tokenize=False,
+                    add_generation_prompt=True
                 )
             else:
-                # Pour les conversations (chat)
-                formatted_text = ""
-                for msg in messages:
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    if role == "system":
-                        formatted_text += f"[INST] {content} [/INST]\n"
-                    elif role == "user":
-                        formatted_text += f"[INST] {content} [/INST]\n"
-                    elif role == "assistant":
-                        formatted_text += f"{content}\n"
+                chat_text = messages
 
-                encoded = tokenizer(
-                    formatted_text.strip(),
-                    truncation=True,
-                    max_length=max_length,
-                    padding=True,
-                    return_tensors=return_tensors
-                )
+            # Tokenisation avec les paramètres appropriés
+            encoded = tokenizer(
+                chat_text,
+                truncation=True,
+                max_length=max_length,
+                padding=True,
+                return_tensors=return_tensors
+            )
 
             return encoded
 
         except Exception as e:
             logger.error(f"Erreur d'encodage: {e}")
             raise
-
-    def _decode_mistral_response(self, response: str, model_name: str) -> str:
-        """Décode la réponse selon le modèle Mistral spécifique."""
-        
-        # Mistral Small 24B a un format spécifique
-        if "Mistral-Small-24B" in model_name:
-            last_intro = response.find("assistant:")
-            if last_intro != -1:
-                return response[last_intro + len("assistant:"):].strip()
-        
-        # Mixtral et Mistral standard utilisent [INST] [/INST]
-        elif "Mixtral" in model_name or "Mistral-7B" in model_name:
-            if "[/INST]" in response:
-                return response.split("[/INST]")[-1].strip()
-                
-        # Si aucun format spécifique n'est reconnu, retourner la réponse nettoyée
-        return response.strip()
 
     def decode_and_clean(
         self,
@@ -342,16 +333,18 @@ class TokenizerManager:
         """Décode et nettoie le texte généré."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
+            if not tokenizer:
+                raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+
+            # Décodage simple avec les paramètres appropriés
             response = tokenizer.decode(
                 token_ids,
                 skip_special_tokens=skip_special_tokens,
                 clean_up_tokenization_spaces=clean_up_tokenization_spaces
             )
 
-            # Gestion spécifique des modèles Mistral
-            if model_name and any(name in model_name for name in ["Mistral", "Mixtral"]):
-                response = self._decode_mistral_response(response, model_name)
-
+            # Le template Mistral gère déjà correctement le formatage,
+            # nous n'avons pas besoin de nettoyage supplémentaire
             return response.strip()
 
         except Exception as e:

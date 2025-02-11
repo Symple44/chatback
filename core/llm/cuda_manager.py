@@ -1,6 +1,7 @@
 # core/llm/cuda_manager.py
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Union, List
+import gc
 import torch
 import torch.cuda
 import torch.backends.cudnn as cudnn
@@ -61,11 +62,7 @@ class CUDAManager:
         self.device = None
         self._initialized = False
         self.memory_stats = {}
-        self.current_allocations = {
-            ModelPriority.HIGH: 0,
-            ModelPriority.MEDIUM: 0,
-            ModelPriority.LOW: 0
-        }
+        self.current_allocations = {p: 0 for p in ModelPriority}
 
     def _setup_device(self) -> torch.device:
         """Configure le device PyTorch."""
@@ -324,46 +321,62 @@ class CUDAManager:
 
     def cleanup_memory(self):
         """Nettoie la mémoire CUDA."""
-        if self.config.device_type == DeviceType.CUDA:
+        if torch.cuda.is_available():
             try:
                 torch.cuda.empty_cache()
+                gc.collect()  # Forcer la collection des objets Python
                 torch.cuda.synchronize()
             except Exception as e:
                 logger.error(f"Erreur nettoyage mémoire CUDA: {e}")
 
     async def cleanup(self):
-        """Nettoie les ressources."""
+        """Nettoie proprement toutes les ressources."""
         try:
+            logger.info("Début du nettoyage des ressources CUDA...")
+            
+            # 1. Libérer toutes les allocations
+            for priority in ModelPriority:
+                self.current_allocations[priority] = 0
+            
+            # 2. Nettoyage mémoire CUDA si disponible
             if torch.cuda.is_available():
                 try:
-                    # Forcer la synchronisation avant le nettoyage
+                    # Synchronisation des opérations en cours
                     torch.cuda.synchronize()
                     
-                    # Détacher tous les tenseurs CUDA
-                    for obj in gc.get_objects():
-                        try:
-                            if torch.is_tensor(obj):
-                                if obj.is_cuda:
-                                    obj.detach_()
-                        except:
-                            pass
-                    
-                    # Vider le cache
+                    # Nettoyage du cache CUDA
                     torch.cuda.empty_cache()
-                    torch.cuda.reset_max_memory_allocated()
-                    torch.cuda.reset_peak_memory_stats()
                     
-                except Exception as e:
-                    logger.error(f"Erreur nettoyage mémoire CUDA: {e}")
+                    # Forcer la collection des objets Python
+                    gc.collect()
                     
+                    # Attendre que toutes les opérations soient terminées
+                    torch.cuda.synchronize()
+                    
+                    logger.info(f"Mémoire CUDA libérée: {torch.cuda.memory_allocated()/1024**2:.2f}MB allouée, {torch.cuda.memory_reserved()/1024**2:.2f}MB réservée")
+                except Exception as cuda_error:
+                    logger.error(f"Erreur nettoyage mémoire CUDA: {cuda_error}")
+            
+            # 3. Réinitialisation des configurations
+            if hasattr(torch.backends, 'cudnn'):
+                torch.backends.cudnn.enabled = False
+                torch.backends.cudnn.benchmark = False
+                
+            # 4. Nettoyage de la RAM si nécessaire
+            if psutil.virtual_memory().percent > 90:
+                gc.collect()
+                
+            # 5. Réinitialisation des états
             self._initialized = False
-            self.current_allocations = {
-                priority: 0 for priority in ModelPriority
-            }
-            logger.info("Ressources CUDA nettoyées")
+            self.memory_stats.clear()
+            
+            logger.info("Ressources CUDA nettoyées avec succès")
             
         except Exception as e:
-            logger.error(f"Erreur nettoyage ressources: {e}")
+            logger.error(f"Erreur nettoyage ressources CUDA: {e}")
+            # Même en cas d'erreur, on tente de réinitialiser les états
+            self._initialized = False
+            self.current_allocations = {p: 0 for p in ModelPriority}
             
     def _log_system_info(self):
         """Log les informations système détaillées."""
