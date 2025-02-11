@@ -114,7 +114,7 @@ class PromptSystem:
             # 6. Ajout de la question actuelle avec format clair
             messages.append({
                 "role": "user",
-                "content": f"[INST]{query}[/INST]"
+                "content": query
             })
 
             # 7. Validation du format selon le modèle
