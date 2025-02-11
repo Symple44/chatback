@@ -318,9 +318,9 @@ class TokenizerManager:
 
             return encoded
 
-    except Exception as e:
-        logger.error(f"Erreur d'encodage: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"Erreur d'encodage: {e}")
+            raise
 
     def decode_and_clean(
         self,
