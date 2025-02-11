@@ -108,6 +108,11 @@ class ModelLoader:
             if not tokenizer:
                 raise ValueError(f"Tokenizer non trouvé pour {model_name}")
             
+            # Définir explicitement pad_token_id comme eos_token_id
+            if not hasattr(tokenizer, 'pad_token') or tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+                logger.info("pad_token_id configuré sur eos_token_id")
+            
             # Récupération des paramètres de base du modèle
             load_params = config["load_params"].copy()
             
