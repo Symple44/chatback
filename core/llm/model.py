@@ -80,6 +80,14 @@ class ModelInference:
             if not chat_model:
                 raise RuntimeError("Modèle de chat non initialisé")
 
+            # Génération du prompt formaté (à sauvegarder comme raw_prompt)
+            formatted_prompt = self.tokenizer_manager.encode_with_truncation(
+                messages,
+                max_length=settings.MAX_INPUT_LENGTH,
+                model_name=chat_model.model_name,
+                return_text=True  # Nouveau paramètre pour obtenir le texte formaté
+            )
+
             # Encodage des entrées
             inputs = self.tokenizer_manager.encode_with_truncation(
                 messages,
@@ -105,7 +113,7 @@ class ModelInference:
                 outputs[0],
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=True
-        )
+            )   
 
             # Décodage et nettoyage
             response_text = self.tokenizer_manager.decode_and_clean(
@@ -124,7 +132,7 @@ class ModelInference:
                     "response_type": response_type,
                     "generation_config": generation_config,
                     "raw_response": raw_response,  
-                    "messages": messages,
+                    "raw_prompt": formatted_prompt,
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }

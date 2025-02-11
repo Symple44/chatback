@@ -267,8 +267,9 @@ class TokenizerManager:
         max_length: Optional[int] = None,
         model_name: Optional[str] = None,
         tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
-        return_tensors: str = "pt"
-    ) -> Dict[str, torch.Tensor]:
+        return_tensors: str = "pt",
+        return_text: bool = False    # Nouveau paramètre
+    ) -> Union[Dict[str, torch.Tensor], str]:
         """Encode et formate les messages pour le chat."""
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
@@ -278,7 +279,7 @@ class TokenizerManager:
             config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
-            # Format Mistral officiel pour les messages de chat
+            # Format Mistral pour les messages de chat
             if isinstance(messages, list):
                 formatted_messages = []
                 for msg in messages:
@@ -298,7 +299,7 @@ class TokenizerManager:
                             "content": msg["content"]
                         })
 
-                # Utilisation de la méthode apply_chat_template de Mistral
+                # Utilisation du template de chat
                 chat_text = tokenizer.apply_chat_template(
                     formatted_messages,
                     tokenize=False,
@@ -307,7 +308,11 @@ class TokenizerManager:
             else:
                 chat_text = messages
 
-            # Tokenisation avec les paramètres appropriés
+            # Retourner le texte formaté si demandé
+            if return_text:
+                return chat_text
+
+            # Sinon, retourner les tokens encodés
             encoded = tokenizer(
                 chat_text,
                 truncation=True,
