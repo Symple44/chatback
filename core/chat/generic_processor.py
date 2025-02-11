@@ -120,7 +120,7 @@ class GenericProcessor(BaseProcessor):
             
             chat_history_id = await self.components.db_manager.save_chat_interaction(
                 session_id=session_id,
-                user_id=str(request.user_id),
+                user_id=request.get("user_id"),
                 query=query,
                 response=response_text, 
                 query_vector=query_vector,
