@@ -100,6 +100,13 @@ class ModelInference:
                     **generation_config
                 )
 
+            # Récupérer la réponse brute avant décodage
+            raw_response = chat_model.tokenizer.decode(
+                outputs[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+        )
+
             # Décodage et nettoyage
             response_text = self.tokenizer_manager.decode_and_clean(
                 outputs[0],
@@ -116,6 +123,8 @@ class ModelInference:
                     "language": language,
                     "response_type": response_type,
                     "generation_config": generation_config,
+                    "raw_response": raw_response,  
+                    "messages": messages,  e
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
