@@ -124,7 +124,7 @@ class ModelInference:
                     "response_type": response_type,
                     "generation_config": generation_config,
                     "raw_response": raw_response,  
-                    "messages": messages,  e
+                    "messages": messages,
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
