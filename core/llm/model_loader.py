@@ -138,6 +138,10 @@ class ModelLoader:
                     **load_params
                 )
 
+                # Configurer le pad_token_id dans la configuration du modèle
+                if model.config.pad_token_id is None:
+                    model.config.pad_token_id = model.config.eos_token_id
+
             # Configuration post-chargement
             model.eval()
             model.requires_grad_(False)
