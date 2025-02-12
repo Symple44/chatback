@@ -276,51 +276,23 @@ class TokenizerManager:
     ) -> Union[Dict[str, torch.Tensor], str]:
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
-            if not tokenizer:
-                raise ValueError(f"Tokenizer non trouvé pour {model_name}")
-
             config = self.configs[f"{tokenizer_type.value}_{self.current_models[tokenizer_type]}"]
             max_length = max_length or config.max_length
 
-            # Nouveau code pour template chat Mistral
-            if isinstance(messages, list):
-                # Filtrage et préparation des messages
-                chat_messages = []
-                for msg in messages:
-                    role = msg["role"]
-                    content = msg["content"]
-                    
-                    if role == "system":
-                        # Les messages système sont ajoutés comme contexte
-                        chat_messages.append({"role": "system", "content": content})
-                    elif role == "user":
-                        chat_messages.append({"role": "user", "content": content})
-                    elif role == "assistant":
-                        chat_messages.append({"role": "assistant", "content": content})
-
-                # Utilisation du template de chat spécifique à Mistral
-                chat_text = tokenizer.apply_chat_template(
-                    chat_messages,
-                    tokenize=False,
-                    add_generation_prompt=True
-                )
-            else:
-                chat_text = messages
-
-            # Retourner le texte formaté si demandé
+            # Pour le texte brut
+            text_to_encode = messages[0]["content"] if isinstance(messages, list) else messages
+            
             if return_text:
-                return chat_text
+                return text_to_encode
 
-            # Sinon, retourner les tokens encodés
-            encoded = tokenizer(
-                chat_text,
+            # Sinon, on fait uniquement la tokenisation sans appliquer de template
+            return tokenizer(
+                text_to_encode,
                 truncation=True,
                 max_length=max_length,
                 padding=True,
                 return_tensors=return_tensors
             )
-
-            return encoded
 
         except Exception as e:
             logger.error(f"Erreur d'encodage: {e}")
