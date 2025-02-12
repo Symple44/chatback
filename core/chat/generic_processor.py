@@ -92,7 +92,7 @@ class GenericProcessor(BaseProcessor):
             ]
 
             # Construction du prompt avec l'historique
-            messages = await self.components.prompt_system.build_chat_prompt(
+            messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=filtered_docs,
                 conversation_history=conversation_history,  # Ajout de l'historique
