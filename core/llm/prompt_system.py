@@ -285,28 +285,21 @@ class PromptSystem:
 
             if is_mistral:
                 # Format spécifique pour Mistral
-                for i, msg in enumerate(recent_history):
-                    content = msg['content']
-                    role = msg['role']
-
-                    # Nettoyer les balises existantes
-                    content = re.sub(r'\[/?INST\]', '', content)
-
-                    # Ajouter le préfixe selon le rôle
-                    prefix = "Utilisateur :" if role == 'user' else "Assistant :"
-                    content = f"{prefix} {content}"
-
-                    if role == 'user':
-                        content = f"[INST]{content}[/INST]"
-                    elif role == 'assistant':
-                        # S'assurer qu'il n'y a pas de balises INST dans la réponse
-                        content = content.replace('[INST]', '').replace('[/INST]', '')
-
-                    # Ajouter seulement si le rôle est valide
-                    if role in ['user', 'assistant']:
+                formatted_history.append({
+                    'role': 'system',
+                    'content': f"{MessageTag.CONVERSATION_HISTORY[0]}Voici les échanges précédents :{MessageTag.CONVERSATION_HISTORY[1]}"
+                })
+                
+                for msg in recent_history:
+                    if msg['role'] == 'user':
                         formatted_history.append({
-                            'role': role,
-                            'content': content
+                            'role': 'user',
+                            'content': f"[INST]{msg['content']}[/INST]"
+                        })
+                    elif msg['role'] == 'assistant':
+                        formatted_history.append({
+                            'role': 'assistant',
+                            'content': msg['content']
                         })
             else:
                 # Format standard pour les autres modèles
@@ -355,6 +348,7 @@ class PromptSystem:
         formatted_messages = []
         system_content = []
         user_messages = []
+        conversation_history = []
 
         # Regroupement et nettoyage des messages
         for msg in messages:
@@ -362,6 +356,8 @@ class PromptSystem:
                 system_content.append(msg['content'])
             elif msg['role'] == MessageRole.USER:
                 user_messages.append(msg['content'])
+            elif 'CONVERSATION_HISTORY' in msg.get('content', ''):
+                conversation_history.append(msg['content'])
 
         # Création du message système unifié
         if system_content:
@@ -370,11 +366,18 @@ class PromptSystem:
                 "content": "\n\n".join(system_content)
             })
 
+        # Ajout de l'historique de conversation
+        if conversation_history:
+            formatted_messages.append({
+                "role": "system",
+                "content": conversation_history[0]
+            })
+
         # Formatage des messages utilisateur
         for user_msg in user_messages:
             formatted_messages.append({
                 "role": MessageRole.USER,
-                "content": f"{MessageTag.INSTRUCTION[0]}{user_msg}{MessageTag.INSTRUCTION[1]}"
+                "content": f"[INST]{user_msg}[/INST]"
             })
 
         return formatted_messages or self._fallback_prompt("Comment puis-je vous aider ?")
