@@ -254,59 +254,49 @@ class PromptSystem:
         """
         try:
             # Extraction des différentes parties
-            system_messages = [msg for msg in messages if msg["role"] == "system"]
+            system_messages = [msg for msg in messages if msg["role"] == "system" and not any(tag in msg["content"] for tag in ["[CONVERSATION_HISTORY]", "[CONTEXT]", "[RESPONSE_TYPE]"])]
             context_messages = [msg for msg in messages if msg.get("content", "").startswith("[CONTEXT]")]
             response_type_messages = [msg for msg in messages if msg.get("content", "").startswith("[RESPONSE_TYPE]")]
-            chat_messages = [msg for msg in messages if msg["role"] not in ["system"] and 
-                            not msg.get("content", "").startswith("[CONTEXT]") and
-                            not msg.get("content", "").startswith("[RESPONSE_TYPE]")]
+            history_messages = [msg for msg in messages if "[CONVERSATION_HISTORY]" in msg.get("content", "")]
+            chat_messages = [msg for msg in messages if msg["role"] in ["user", "assistant"]]
 
             # Construction du message système unifié
-            system_content = []
-            
-            # Combiner tous les messages système
-            for msg in system_messages:
-                content = msg["content"]
-                if "[SYSTEM_PROMPT]" not in content:
-                    content = f"[SYSTEM_PROMPT]{content}[/SYSTEM_PROMPT]"
-                system_content.append(content)
-
-            # Ajout du contexte
-            context_content = [msg["content"] for msg in context_messages]
-            system_content.extend(context_content)
-
-            # Ajout du type de réponse
-            response_type_content = [msg["content"] for msg in response_type_messages]
-            system_content.extend(response_type_content)
-
-            # Formatage final des messages
             formatted_messages = []
-
-            # Premier message utilisateur avec le contexte système
-            if system_content and chat_messages:
-                complete_system = "\n\n".join(system_content)
-                
+            
+            # 1. Message système principal
+            if system_messages:
+                system_content = system_messages[0]["content"]
+                if not system_content.startswith("[SYSTEM_PROMPT]"):
+                    system_content = f"[SYSTEM_PROMPT]\n{system_content}\n[/SYSTEM_PROMPT]"
                 formatted_messages.append({
                     "role": "system",
-                    "content": complete_system
+                    "content": system_content
                 })
-                
-                # Ajouter les messages utilisateur avec balises [INST]
-                for msg in chat_messages:
-                    if msg["role"] == "user":
-                        formatted_messages.append({
-                            "role": "user",
-                            "content": f"[INST]{msg['content']}[/INST]"
-                        })
-                    else:
-                        formatted_messages.append(msg)
-            
-            # Fallback si aucun message n'a été formaté
-            if not formatted_messages:
-                formatted_messages = [{
-                    "role": "user",
-                    "content": "[INST]Comment puis-je vous aider?[/INST]"
-                }]
+
+            # 2. Contexte
+            if context_messages:
+                formatted_messages.extend(context_messages)
+
+            # 3. Type de réponse
+            if response_type_messages:
+                formatted_messages.extend(response_type_messages)
+
+            # 4. Historique de conversation
+            if history_messages:
+                formatted_messages.extend(history_messages)
+
+            # 5. Messages de chat
+            for msg in chat_messages:
+                if msg["role"] == "user":
+                    content = msg["content"]
+                    if not content.startswith("[INST]"):
+                        content = f"[INST]{content}[/INST]"
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": content
+                    })
+                else:
+                    formatted_messages.append(msg)
 
             return formatted_messages
 
