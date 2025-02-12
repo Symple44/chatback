@@ -52,30 +52,27 @@ class GenericProcessor(BaseProcessor):
             if context and "history" in context:
                 conversation_history = context["history"]
             elif session_id:
-                # Récupération de l'historique depuis la base de données
-                async with self.components.db.session_factory() as session:
-                    history = await session.execute(
-                        select(ChatHistory)
-                        .where(ChatHistory.session_id == session_id)
-                        .order_by(ChatHistory.created_at.desc())
-                        .limit(settings.MAX_HISTORY_MESSAGES)
-                    )
-                    history_records = history.scalars().all()
-                    
-                    conversation_history = []
-                    for record in reversed(history_records):
-                        conversation_history.extend([
-                            {
-                                "role": "user",
-                                "content": record.query,
-                                "timestamp": record.created_at.isoformat()
-                            },
-                            {
-                                "role": "assistant",
-                                "content": record.response,
-                                "timestamp": record.created_at.isoformat()
-                            }
-                        ])
+                # Récupération de l'historique de conversation depuis la base de données
+                history = await self.components.session_manager.get_chat_history(
+                    session_id,
+                    limit=settings.MAX_HISTORY_MESSAGES
+                )
+                # Formatage de l'historique pour le prompt
+                conversation_history = []
+                for msg in history:
+                    # msg est un Record SQL, nous extrayons les champs nécessaires
+                    conversation_history.extend([
+                        {
+                            "role": "user",
+                            "content": msg.query,
+                            "timestamp": msg.created_at.isoformat() if hasattr(msg, 'created_at') else datetime.utcnow().isoformat()
+                        },
+                        {
+                            "role": "assistant",
+                            "content": msg.response,
+                            "timestamp": msg.created_at.isoformat() if hasattr(msg, 'created_at') else datetime.utcnow().isoformat()
+                        }
+                    ])  # Ajout des messages utilisateur et assistant
 
             # Génération de l'embedding pour la recherche
             query_vector = await self.model.create_embedding(query)
