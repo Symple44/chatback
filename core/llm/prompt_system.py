@@ -242,82 +242,29 @@ class PromptSystem:
         history: List[Dict],
         is_mistral: bool
     ) -> List[Dict]:
-        """
-        Construit l'historique de conversation.
-        Pour Mistral : assure l'alternance user/assistant et le bon formatage des balises.
-        """
+        if not is_mistral:
+            return []
+
         try:
-            formatted_history = []
-            max_history = settings.MAX_HISTORY_MESSAGES  # Utiliser la configuration globale
-            
-            # Valider et trier l'historique par timestamp si présent
-            valid_history = []
-            for msg in history:
-                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                    # S'assurer que le contenu est bien une chaîne
-                    content = str(msg['content']).strip()
-                    if content:  # Ignorer les messages vides
-                        timestamp = msg.get('timestamp')
-                        if timestamp:
-                            if isinstance(timestamp, str):
-                                try:
-                                    timestamp = datetime.fromisoformat(timestamp)
-                                except ValueError:
-                                    timestamp = datetime.utcnow()
-                        else:
-                            timestamp = datetime.utcnow()
-                            
-                        valid_history.append({
-                            'role': msg['role'],
-                            'content': content,
-                            'timestamp': timestamp
-                        })
+            # Filtrer et limiter l'historique
+            valid_history = [
+                msg for msg in history 
+                if isinstance(msg, dict) and 
+                'role' in msg and 
+                'content' in msg and 
+                str(msg['content']).strip()
+            ][-settings.MAX_HISTORY_MESSAGES * 2:]
 
-            # Trier par timestamp et prendre les messages les plus récents
-            valid_history.sort(key=lambda x: x['timestamp'])
-            recent_history = valid_history[-(max_history*2):]  # *2 car on a user + assistant
+            # Construire l'historique textuel
+            history_text = "Historique des échanges précédents :\n"
+            for msg in valid_history:
+                role = "Utilisateur" if msg['role'] == 'user' else "Assistant"
+                history_text += f"{role} : {msg['content']}\n"
 
-            # Ajouter l'en-tête de l'historique
-            formatted_history.append({
+            return [{
                 'role': 'system',
-                'content': '[CONVERSATION_HISTORY]\nVoici les échanges précédents :'
-            })
-
-            if is_mistral:
-                # Format spécifique pour Mistral
-                formatted_history.append({
-                    'role': 'system',
-                    'content': f"{MessageTag.CONVERSATION_HISTORY[0]}Voici les échanges précédents :{MessageTag.CONVERSATION_HISTORY[1]}"
-                })
-                
-                for msg in recent_history:
-                    if msg['role'] == 'user':
-                        formatted_history.append({
-                            'role': 'user',
-                            'content': f"[INST]{msg['content']}[/INST]"
-                        })
-                    elif msg['role'] == 'assistant':
-                        formatted_history.append({
-                            'role': 'assistant',
-                            'content': msg['content']
-                        })
-            else:
-                # Format standard pour les autres modèles
-                for msg in recent_history:
-                    if msg['role'] in ['user', 'assistant']:
-                        prefix = "Utilisateur :" if msg['role'] == 'user' else "Assistant :"
-                        formatted_history.append({
-                            'role': msg['role'],
-                            'content': f"{prefix} {msg['content']}"
-                        })
-
-            # Ajouter la balise de fin de l'historique
-            formatted_history.append({
-                'role': 'system',
-                'content': '[/CONVERSATION_HISTORY]\n'
-            })
-
-            return formatted_history
+                'content': f'[CONVERSATION_HISTORY]{history_text.strip()}[/CONVERSATION_HISTORY]'
+            }]
 
         except Exception as e:
             logger.error(f"Erreur formatage historique: {e}", exc_info=True)
@@ -345,38 +292,51 @@ class PromptSystem:
         :param messages: Liste des messages à formater
         :return: Messages formatés pour Mistral
         """
-        formatted_messages = []
+        # Extraction et consolidation du contenu système
         system_content = []
-        user_messages = []
         conversation_history = []
+        user_messages = []
 
-        # Regroupement et nettoyage des messages
         for msg in messages:
             if msg['role'] in [MessageRole.SYSTEM, MessageRole.CONTEXT, "context"]:
-                system_content.append(msg['content'])
+                # Nettoyer et extraire le contenu système
+                clean_content = msg['content'].replace('[SYSTEM_PROMPT]', '').replace('[/SYSTEM_PROMPT]', '').strip()
+                if clean_content:
+                    system_content.append(clean_content)
+            
+            elif 'CONVERSATION_HISTORY' in msg.get('content', ''):
+                # Extraire l'historique de conversation
+                clean_history = msg['content'].replace('[CONVERSATION_HISTORY]', '').replace('[/CONVERSATION_HISTORY]', '').strip()
+                if clean_history:
+                    conversation_history.append(clean_history)
+            
             elif msg['role'] == MessageRole.USER:
                 user_messages.append(msg['content'])
-            elif 'CONVERSATION_HISTORY' in msg.get('content', ''):
-                conversation_history.append(msg['content'])
 
-        # Création du message système unifié
+        # Construction du message système
+        system_message = "<s>"
+        
+        # Ajouter le contenu système
         if system_content:
-            formatted_messages.append({
-                "role": MessageRole.SYSTEM,
-                "content": "\n\n".join(system_content)
-            })
+            system_message += "[SYSTEM_PROMPT]" + "\n".join(system_content) + "[/SYSTEM_PROMPT]"
 
-        # Ajout de l'historique de conversation
+        # Ajouter l'historique de conversation
         if conversation_history:
-            formatted_messages.append({
-                "role": "system",
-                "content": conversation_history[0]
-            })
+            system_message += "[CONVERSATION_HISTORY]" + "\n".join(conversation_history) + "[/CONVERSATION_HISTORY]"
 
-        # Formatage des messages utilisateur
+        # Finaliser le message système
+        system_message += "</s>"
+
+        # Préparer les messages formatés
+        formatted_messages = [{
+            "role": "system", 
+            "content": system_message
+        }]
+
+        # Formater les messages utilisateur
         for user_msg in user_messages:
             formatted_messages.append({
-                "role": MessageRole.USER,
+                "role": "user",
                 "content": f"[INST]{user_msg}[/INST]"
             })
 
