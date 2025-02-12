@@ -182,25 +182,21 @@ class Settings(BaseSettings):
         "comprehensive": {
             "description": "Réponse détaillée et approfondie",
             "temperature": 0.6,
-            "max_tokens": 1024,
             "style": "Je vais vous donner une explication détaillée et complète."
         },
         "concise": {
             "description": "Réponse courte et directe",
             "temperature": 0.5,
-            "max_tokens": 512,
             "style": "Voici une réponse brève et précise."
         },
         "technical": {
             "description": "Réponse technique avec détails d'implémentation",
             "temperature": 0.3,
-            "max_tokens": 1024,
             "style": "Je vais vous fournir les détails techniques."
         },
         "clarification": {
             "description": "Demande de clarification",
             "temperature": 0.4,
-            "max_tokens": 256,
             "style": "Pour mieux vous répondre, j'ai besoin de quelques précisions."
         }
     }
