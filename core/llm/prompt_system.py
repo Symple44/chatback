@@ -156,7 +156,7 @@ class PromptSystem:
         return "\n".join(instructions)
 
     async def _build_conversation_history(
-      self,
+        self,
         history: List[Dict],
         is_mistral: bool
     ) -> List[Dict]:
@@ -195,6 +195,12 @@ class PromptSystem:
             valid_history.sort(key=lambda x: x['timestamp'])
             recent_history = valid_history[-(max_history*2):]  # *2 car on a user + assistant
 
+            # Ajouter l'en-tête de l'historique
+            formatted_history.append({
+                'role': 'system',
+                'content': '[CONVERSATION_HISTORY]\nVoici les échanges précédents :'
+            })
+
             if is_mistral:
                 # Format spécifique pour Mistral
                 for i, msg in enumerate(recent_history):
@@ -203,6 +209,10 @@ class PromptSystem:
 
                     # Nettoyer les balises existantes
                     content = re.sub(r'\[/?INST\]', '', content)
+
+                    # Ajouter le préfixe selon le rôle
+                    prefix = "Utilisateur :" if role == 'user' else "Assistant :"
+                    content = f"{prefix} {content}"
 
                     if role == 'user':
                         content = f"[INST]{content}[/INST]"
@@ -220,10 +230,17 @@ class PromptSystem:
                 # Format standard pour les autres modèles
                 for msg in recent_history:
                     if msg['role'] in ['user', 'assistant']:
+                        prefix = "Utilisateur :" if msg['role'] == 'user' else "Assistant :"
                         formatted_history.append({
                             'role': msg['role'],
-                            'content': msg['content']
+                            'content': f"{prefix} {msg['content']}"
                         })
+
+            # Ajouter la balise de fin de l'historique
+            formatted_history.append({
+                'role': 'system',
+                'content': '[/CONVERSATION_HISTORY]\n'
+            })
 
             return formatted_history
 
