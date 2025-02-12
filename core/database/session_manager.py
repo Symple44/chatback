@@ -236,6 +236,7 @@ class SessionManager:
                 await session.rollback()
                 logger.error(f"Erreur lors de la création de la session: {e}")
                 raise
+
     async def get_or_create_session(
         self,
         session_id: Optional[str],
@@ -252,18 +253,18 @@ class SessionManager:
                 chat_session = result.scalar_one_or_none()
                 
                 if chat_session:
-                    # Expiration manuelle de chat_history pour éviter le lazy loading
-                    session.expunge(chat_session)
-                    chat_session = ChatSession(
-                        id=chat_session.id,
-                        user_id=chat_session.user_id,
-                        session_id=chat_session.session_id,
-                        session_context=chat_session.session_context,
-                        chat_history=[]
-                    )
+                    # Mise à jour des métadonnées existantes
+                    if metadata:
+                        chat_session.session_metadata = {
+                            **chat_session.session_metadata,
+                            **metadata,
+                            "last_updated": datetime.utcnow().isoformat()
+                        }
+                    chat_session.updated_at = datetime.utcnow()
+                    await session.commit()
                     return chat_session
 
-            # Création d'une nouvelle session
+            # Création d'une nouvelle session avec métadonnées enrichies
             new_session = ChatSession(
                 user_id=user_id,
                 session_id=str(uuid.uuid4()),
@@ -275,14 +276,18 @@ class SessionManager:
                         "language": "fr",
                         "model": settings.MODEL_NAME,
                         "max_history": 5
-                    }),
-                    "metadata": {
-                        **metadata,
-                        "user_id": str(user_id),
-                        "created_from": "chat_api"
+                    })
+                },
+                session_metadata={  # Ajout des métadonnées
+                    **metadata,
+                    "created_from": "chat_api",
+                    "user_id": str(user_id),
+                    "creation_timestamp": datetime.utcnow().isoformat(),
+                    "system_info": {
+                        "model_version": settings.VERSION,
+                        "api_version": "1.0"
                     }
                 },
-                metadata=metadata,
                 is_active=True
             )
 

@@ -47,6 +47,36 @@ class GenericProcessor(BaseProcessor):
             if not session_id:
                 return self._create_error_response("Session ID is required")
                 
+            # Récupération de l'historique de conversation si un context existe
+            conversation_history = []
+            if context and "history" in context:
+                conversation_history = context["history"]
+            elif session_id:
+                # Récupération de l'historique depuis la base de données
+                async with self.components.db.session_factory() as session:
+                    history = await session.execute(
+                        select(ChatHistory)
+                        .where(ChatHistory.session_id == session_id)
+                        .order_by(ChatHistory.created_at.desc())
+                        .limit(settings.MAX_HISTORY_MESSAGES)
+                    )
+                    history_records = history.scalars().all()
+                    
+                    conversation_history = []
+                    for record in reversed(history_records):
+                        conversation_history.extend([
+                            {
+                                "role": "user",
+                                "content": record.query,
+                                "timestamp": record.created_at.isoformat()
+                            },
+                            {
+                                "role": "assistant",
+                                "content": record.response,
+                                "timestamp": record.created_at.isoformat()
+                            }
+                        ])
+
             # Génération de l'embedding pour la recherche
             query_vector = await self.model.create_embedding(query)
             
@@ -65,34 +95,14 @@ class GenericProcessor(BaseProcessor):
                 if doc["score"] >= settings.CONFIDENCE_THRESHOLD
             ]
 
-            if filtered_docs:
-                logger.info(f"Documents trouvés: {len(filtered_docs)}, scores: {[doc['score'] for doc in filtered_docs]}")
-            else:
-                logger.warning("Aucun document pertinent trouvé")
-            
-            context_summary = None
-            if filtered_docs:
-                try:
-                    context_summary = await self.model.summarizer.summarize_documents(filtered_docs)
-                    logger.debug(f"Résumé généré: {context_summary}")
-                except Exception as e:
-                    logger.error(f"Erreur génération résumé: {e}")
-                    context_summary = {
-                        "structured_summary": "\n".join(
-                            f"Document {i+1}: {doc.get('content', '')[:200]}"
-                            for i, doc in enumerate(filtered_docs[:2])
-                        )
-                    }
-            
-            # Construction du prompt
-            messages = await self.prompt_system.build_chat_prompt(
+            # Construction du prompt avec l'historique
+            messages = await self.components.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=filtered_docs,
-                context_summary=context_summary,
-                conversation_history=context.get("history", []) if context else None,
+                conversation_history=conversation_history,  # Ajout de l'historique
                 language=request.get("language", "fr")
             )
-            
+
             # Génération de la réponse
             model_response = await self.model.generate_response(
                 messages=messages,
@@ -100,29 +110,15 @@ class GenericProcessor(BaseProcessor):
                 response_type=request.get("response_type", "comprehensive")
             )
             
-            # En cas d'erreur dans la génération
-            if "error" in model_response:
-                return self._create_error_response(model_response["error"])
-            
             response_text = model_response.get("response", "")
             processing_time = (datetime.utcnow() - start_time).total_seconds()
 
-            # Logs de debug pour vérifier les valeurs avant la construction de la réponse
-            logger.debug("=== Debug values before ChatResponse creation ===")
-            logger.debug(f"response_text type: {type(response_text)}")
-            logger.debug(f"session_id type: {type(session_id)}")
-            logger.debug(f"processing_time type: {type(processing_time)}")
-            logger.debug(f"Tokens used: {model_response.get('tokens_used')}")
-            if filtered_docs:
-                for doc in filtered_docs:
-                    logger.debug(f"Document score type: {type(doc.get('score'))}, value: {doc.get('score')}")
-                    logger.debug(f"Document page type: {type(doc.get('metadata', {}).get('page'))}, value: {doc.get('metadata', {}).get('page')}")
-            
+            # Sauvegarde de l'interaction
             chat_history_id = await self.components.db_manager.save_chat_interaction(
                 session_id=session_id,
                 user_id=request.get("user_id"),
                 query=query,
-                response=response_text, 
+                response=response_text,
                 query_vector=query_vector,
                 response_vector=await self.model.create_embedding(response_text),
                 confidence_score=float(self._calculate_confidence(filtered_docs)),
@@ -140,18 +136,14 @@ class GenericProcessor(BaseProcessor):
                     "documents_found": len(filtered_docs),
                     "language": request.get("language", "fr"),
                     "response_type": request.get("response_type", "comprehensive"),
-                    "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None
+                    "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None,
+                    "history_used": bool(conversation_history),  # Ajout d'un indicateur d'utilisation de l'historique
+                    "history_length": len(conversation_history) if conversation_history else 0
                 },
-                raw_response=model_response.get("metadata", {}).get("raw_response"),  # Réponse brute
-                raw_prompt=model_response.get("metadata", {}).get("raw_prompt")       # Prompt brut
+                raw_response=model_response.get("metadata", {}).get("raw_response"),
+                raw_prompt=model_response.get("metadata", {}).get("raw_prompt")
             )
-            
-            if chat_history_id:
-                logger.info(f"Interaction sauvegardée avec ID: {chat_history_id}")
-            else:
-                logger.warning("Échec de la sauvegarde de l'interaction")
-        
-            # Construction de la réponse
+
             return ChatResponse(
                 response=response_text,
                 session_id=session_id,
@@ -175,15 +167,14 @@ class GenericProcessor(BaseProcessor):
                     "context_quality": float(sum(doc.get("score", 0) for doc in filtered_docs) / len(filtered_docs)) if filtered_docs else 0.0,
                     "processing_info": {
                         "embedding_generated": query_vector is not None,
-                        "context_summarized": context_summary is not None,
+                        "history_used": bool(conversation_history),
+                        "history_messages": len(conversation_history) if conversation_history else 0,
                     }
                 }
             )
 
         except Exception as e:
             logger.error(f"Erreur traitement générique: {e}")
-            # Log de l'erreur complète avec la stack trace
-            logger.exception("Stack trace complète:")
             return self._create_error_response(str(e))
 
     async def _save_interaction(
