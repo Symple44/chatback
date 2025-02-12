@@ -166,6 +166,9 @@ class Settings(BaseSettings):
     MAX_CLARIFICATION_ATTEMPTS: int = 3
     MIN_QUERY_LENGTH: int = 2
     MAX_CONTEXT_DOCS: int = 6
+
+    # Paramètres de configuration utilisateur (chat)
+    MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
     
     SYSTEM_ROLES: Dict[str, str] = {
         "system": "Je suis {app_name}, votre assistant IA spécialisé.",
