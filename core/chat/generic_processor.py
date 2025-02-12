@@ -52,9 +52,8 @@ class GenericProcessor(BaseProcessor):
             if context and "history" in context:
                 conversation_history = context["history"]
             elif session_id:
-                # Récupération de l'historique de conversation depuis la base de données
-                history = await self.components.session_manager.get_chat_history(
-                    session_id,
+                history = await self.components.session_manager.get_session_history(
+                    session_id=session_id,
                     limit=settings.MAX_HISTORY_MESSAGES
                 )
                 # Formatage de l'historique pour le prompt
