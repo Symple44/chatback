@@ -156,7 +156,7 @@ class PromptSystem:
         return "\n".join(instructions)
 
     async def _build_conversation_history(
-        self,
+      self,
         history: List[Dict],
         is_mistral: bool
     ) -> List[Dict]:
@@ -166,38 +166,69 @@ class PromptSystem:
         """
         try:
             formatted_history = []
-            max_history = 5  # Limite aux 5 dernières interactions
+            max_history = settings.MAX_HISTORY_MESSAGES  # Utiliser la configuration globale
+            
+            # Valider et trier l'historique par timestamp si présent
+            valid_history = []
+            for msg in history:
+                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                    # S'assurer que le contenu est bien une chaîne
+                    content = str(msg['content']).strip()
+                    if content:  # Ignorer les messages vides
+                        timestamp = msg.get('timestamp')
+                        if timestamp:
+                            if isinstance(timestamp, str):
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp)
+                                except ValueError:
+                                    timestamp = datetime.utcnow()
+                        else:
+                            timestamp = datetime.utcnow()
+                            
+                        valid_history.append({
+                            'role': msg['role'],
+                            'content': content,
+                            'timestamp': timestamp
+                        })
+
+            # Trier par timestamp et prendre les messages les plus récents
+            valid_history.sort(key=lambda x: x['timestamp'])
+            recent_history = valid_history[-(max_history*2):]  # *2 car on a user + assistant
 
             if is_mistral:
-                # Pour Mistral : assurer l'alternance user/assistant
-                current_role = "user"
-                for msg in history[-max_history*2:]:  # *2 car on a user + assistant
-                    if msg["role"] == current_role:
-                        content = msg["content"]
-                        if current_role == "user" and not content.startswith("[INST]"):
-                            content = f"[INST]{content}[/INST]"
+                # Format spécifique pour Mistral
+                for i, msg in enumerate(recent_history):
+                    content = msg['content']
+                    role = msg['role']
+
+                    # Nettoyer les balises existantes
+                    content = re.sub(r'\[/?INST\]', '', content)
+
+                    if role == 'user':
+                        content = f"[INST]{content}[/INST]"
+                    elif role == 'assistant':
+                        # S'assurer qu'il n'y a pas de balises INST dans la réponse
+                        content = content.replace('[INST]', '').replace('[/INST]', '')
+
+                    # Ajouter seulement si le rôle est valide
+                    if role in ['user', 'assistant']:
                         formatted_history.append({
-                            "role": current_role,
-                            "content": content
+                            'role': role,
+                            'content': content
                         })
-                        current_role = "assistant" if current_role == "user" else "user"
             else:
-                # Pour les autres modèles : garder l'ordre original
-                for msg in history[-max_history*2:]:
-                    if msg["role"] in ["user", "assistant"]:
-                        content = msg["content"]
-                        # Ajout des balises [INST] seulement pour user
-                        if msg["role"] == "user" and not content.startswith("[INST]"):
-                            content = f"[INST]{content}[/INST]"
+                # Format standard pour les autres modèles
+                for msg in recent_history:
+                    if msg['role'] in ['user', 'assistant']:
                         formatted_history.append({
-                            "role": msg["role"],
-                            "content": content
+                            'role': msg['role'],
+                            'content': msg['content']
                         })
 
             return formatted_history
 
         except Exception as e:
-            logger.error(f"Erreur formatage historique: {e}")
+            logger.error(f"Erreur formatage historique: {e}", exc_info=True)
             return []
 
     def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
