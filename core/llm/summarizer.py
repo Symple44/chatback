@@ -5,7 +5,7 @@ from datetime import datetime
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.llm.model_loader import ModelType, LoadedModel
-from core.config.models import SUMMARIZER_MODELS, SUMMARIZER_PERFORMANCE_CONFIGS
+from core.config.models import SUMMARIZER_MODELS
 
 logger = get_logger("summarizer")
 
