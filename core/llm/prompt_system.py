@@ -1,71 +1,107 @@
 # core/llm/prompt_system.py
 from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from datetime import datetime
 from core.config.config import settings
+from core.config.models import (
+    AVAILABLE_MODELS,
+    EMBEDDING_MODELS,
+    SUMMARIZER_MODELS
+)
 from core.utils.logger import get_logger
-import re
-import json
 
 logger = get_logger("prompt_system")
 
+class ModelType:
+    """Types de modèles supportés."""
+    MISTRAL = "mistral"
+    LLAMA = "llama"
+    T5 = "t5"
+    MT5 = "mt5"
+    FALCON = "falcon"
+    MIXTRAL = "mixtral"
+
 class MessageRole:
-    """Enumération des rôles de message."""
+    """Rôles de message."""
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
     CONTEXT = "context"
     TOOL = "tool"
 
-class MessageTag:
-    """Gestion centralisée des balises de message."""
-    SYSTEM_PROMPT = ("[SYSTEM_PROMPT]", "[/SYSTEM_PROMPT]")
-    CONTEXT = ("[CONTEXT]", "[/CONTEXT]")
-    RESPONSE_TYPE = ("[RESPONSE_TYPE]", "[/RESPONSE_TYPE]")
-    CONVERSATION_HISTORY = ("[CONVERSATION_HISTORY]", "[/CONVERSATION_HISTORY]")
-    INSTRUCTION = ("[INST]", "[/INST]")
+class PromptTemplates:
+    """Templates de prompts par type de modèle."""
+    
+    @staticmethod
+    def format_mistral(role: str, content: str) -> str:
+        """Format pour modèles Mistral."""
+        if role == MessageRole.SYSTEM:
+            return f"<s>[SYSTEM_PROMPT]{content}[/SYSTEM_PROMPT]</s>"
+        elif role == MessageRole.USER:
+            return f"<s>[INST]{content}[/INST]</s>"
+        elif role == MessageRole.CONTEXT:
+            return f"<s>[CONTEXT]{content}[/CONTEXT]</s>"
+        return content
+        
+    @staticmethod
+    def format_mixtral(role: str, content: str) -> str:
+        """Format pour modèles Mixtral."""
+        if role == MessageRole.SYSTEM:
+            return f"<s><|system|>{content}</s>"
+        elif role == MessageRole.USER:
+            return f"<s><|user|>{content}</s>"
+        elif role == MessageRole.ASSISTANT:
+            return f"<s><|assistant|>{content}</s>"
+        elif role == MessageRole.CONTEXT:
+            return f"<s><|context|>{content}</s>"
+        return content
 
-class Message(BaseModel):
-    """Modèle de message avec validation enrichie."""
-    role: str = Field(..., description="Rôle du message")
-    content: str = Field(..., description="Contenu du message")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    language: Optional[str] = Field(default=None)
-
-    @validator('role')
-    def validate_role(cls, v):
-        valid_roles = {
-            MessageRole.SYSTEM, 
-            MessageRole.USER, 
-            MessageRole.ASSISTANT, 
-            MessageRole.CONTEXT, 
-            MessageRole.TOOL
-        }
-        if v not in valid_roles:
-            raise ValueError(f"Rôle invalide. Valeurs acceptées: {valid_roles}")
-        return v
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convertit le message en dictionnaire."""
-        return {
-            "role": self.role,
-            "content": self.content,
-            "timestamp": self.timestamp.isoformat(),
-            "metadata": self.metadata,
-            "language": self.language
-        }
+    @staticmethod
+    def format_llama(role: str, content: str) -> str:
+        """Format pour modèles Llama."""
+        if role == MessageRole.SYSTEM:
+            return f"<<SYS>>{content}<</SYS>>"
+        elif role == MessageRole.USER:
+            return f"[INST]{content}[/INST]"
+        elif role == MessageRole.CONTEXT:
+            return f"[CTX]{content}[/CTX]"
+        return content
+        
+    @staticmethod
+    def format_t5(role: str, content: str) -> str:
+        """Format pour modèles T5."""
+        if role == MessageRole.SYSTEM:
+            return f"system: {content}"
+        elif role == MessageRole.USER:
+            return f"question: {content}"
+        elif role == MessageRole.ASSISTANT:
+            return f"answer: {content}"
+        elif role == MessageRole.CONTEXT:
+            return f"context: {content}"
+        return content
+        
+    @staticmethod
+    def format_mt5(role: str, content: str) -> str:
+        """Format pour modèles MT5."""
+        return PromptTemplates.format_t5(role, content)
+        
+    @staticmethod
+    def format_falcon(role: str, content: str) -> str:
+        """Format pour modèles Falcon."""
+        if role == MessageRole.SYSTEM:
+            return f"System: {content}\n"
+        elif role == MessageRole.USER:
+            return f"User: {content}\n"
+        elif role == MessageRole.ASSISTANT:
+            return f"Assistant: {content}\n"
+        elif role == MessageRole.CONTEXT:
+            return f"Context: {content}\n"
+        return content
 
 class PromptSystem:
-    """Gestionnaire avancé de prompts pour modèles LLM."""
+    """Gestionnaire de prompts pour les modèles LLM."""
     
-    def __init__(self, config=None):
-        """
-        Initialise le système de prompts avec configuration personnalisable.
-        
-        :param config: Configuration optionnelle pour personnaliser le comportement
-        """
-        self.config = config or {}
+    def __init__(self):
         self.system_roles = settings.SYSTEM_ROLES
         self.response_types = settings.RESPONSE_TYPES or {}
         self.max_context_length = settings.MAX_CONTEXT_LENGTH
@@ -75,101 +111,62 @@ class PromptSystem:
             "es": "Responda en español",
             "de": "Antworten Sie auf Deutsch"
         }
-
-    async def build_chat_prompt(
-        self,
-        query: str,
-        context_docs: Optional[List[Dict]] = None,
-        context_summary: Optional[Union[str, Dict]] = None,
-        conversation_history: Optional[List[Dict]] = None,
-        context_info: Optional[Dict] = None,
-        prompt_prefix: Optional[str] = None,
-        language: str = "fr",
-        response_type: str = "comprehensive"
-    ) -> List[Dict]:
-        """
-        Construit un prompt complet avec une structure modulaire et flexible.
         
-        :param query: La requête utilisateur
-        :param context_docs: Documents de contexte
-        :param context_summary: Résumé du contexte
-        :param conversation_history: Historique de conversation
-        :param context_info: Informations supplémentaires sur le contexte
-        :param prompt_prefix: Préfixe personnalisé pour le prompt
-        :param language: Langue de réponse
-        :param response_type: Type de réponse souhaité
-        :return: Liste de messages formatés
-        """
-        try:
-            messages = []
-            is_mistral = "mistral" in str(settings.MODEL_NAME).lower()
+        # Mapping des modèles vers leurs templates
+        self.model_templates = {
+            ModelType.MISTRAL: PromptTemplates.format_mistral,
+            ModelType.MIXTRAL: PromptTemplates.format_mixtral,
+            ModelType.LLAMA: PromptTemplates.format_llama,
+            ModelType.T5: PromptTemplates.format_t5,
+            ModelType.MT5: PromptTemplates.format_mt5,
+            ModelType.FALCON: PromptTemplates.format_falcon
+        }
 
-            # 1. Message système principal
-            system_content = self._generate_system_message(
-                response_type, 
-                language, 
-                prompt_prefix
-            )
-            messages.append({
-                "role": MessageRole.SYSTEM,
-                "content": system_content
-            })
+    def _detect_model_type(self, model_name: str) -> str:
+        """Détecte le type de modèle à partir de son nom."""
+        model_name = model_name.lower()
+        if "mistral" in model_name:
+            return ModelType.MISTRAL
+        elif "mixtral" in model_name:
+            return ModelType.MIXTRAL
+        elif "llama" in model_name:
+            return ModelType.LLAMA
+        elif "mt5" in model_name:
+            return ModelType.MT5
+        elif "t5" in model_name:
+            return ModelType.T5
+        elif "falcon" in model_name:
+            return ModelType.FALCON
+        logger.warning(f"Type de modèle non reconnu pour {model_name}, utilisation du format Mistral par défaut")
+        return ModelType.MISTRAL
 
-            # 2. Gestion du contexte documentaire
-            if context_docs:
-                context_message = await self._build_context_section(
-                    context_docs, 
-                    context_summary, 
-                    context_info
-                )
-                if context_message:
-                    messages.append({
-                        "role": MessageRole.CONTEXT,
-                        "content": context_message
-                    })
+    def _get_model_config(self, model_name: str) -> Optional[Dict]:
+        """Récupère la configuration du modèle."""
+        if model_name in AVAILABLE_MODELS:
+            return AVAILABLE_MODELS[model_name]
+        elif model_name in EMBEDDING_MODELS:
+            return EMBEDDING_MODELS[model_name]
+        elif model_name in SUMMARIZER_MODELS:
+            return SUMMARIZER_MODELS[model_name]
+        return None
 
-            # 3. Historique de conversation
-            if conversation_history:
-                history_messages = await self._build_conversation_history(
-                    conversation_history, 
-                    is_mistral
-                )
-                messages.extend(history_messages)
+    def _get_template(self, model_name: str) -> callable:
+        """Retourne le template approprié pour le modèle."""
+        model_type = self._detect_model_type(model_name)
+        return self.model_templates.get(model_type, PromptTemplates.format_mistral)
 
-            # 4. Message utilisateur
-            messages.append({
-                "role": MessageRole.USER,
-                "content": query
-            })
-
-            # 5. Validation et formatage final
-            return (
-                self._validate_mistral_format(messages) 
-                if is_mistral 
-                else self._validate_llama_format(messages)
-            )
-
-        except Exception as e:
-            logger.error(f"Erreur lors de la construction du prompt: {e}", exc_info=True)
-            return self._fallback_prompt(query)
-
-    def _generate_system_message(
+    def _build_system_message(
         self, 
-        response_type: str, 
-        language: str, 
+        response_type: str,
+        language: str,
+        model_name: str,
         prompt_prefix: Optional[str] = None
     ) -> str:
-        """
-        Génère un message système personnalisé.
+        """Construit le message système avec formatage spécifique au modèle."""
+        model_config = self._get_model_config(model_name)
+        model_type = self._detect_model_type(model_name)
         
-        :param response_type: Type de réponse
-        :param language: Langue de réponse
-        :param prompt_prefix: Préfixe personnalisé
-        :return: Message système formaté
-        """
-        # Construction du message système
-        system_parts = [
-            f"{MessageTag.SYSTEM_PROMPT[0]}",
+        parts = [
             f"Je suis {settings.APP_NAME}, un assistant spécialisé.",
             "\nPrincipes fondamentaux :",
             "- Je fournis des informations précises",
@@ -177,184 +174,189 @@ class PromptSystem:
             "- Je reconnais mes limites",
             "- Je me concentre sur des solutions pratiques",
             f"\nDate actuelle : {datetime.utcnow().strftime('%d/%m/%Y')}",
-            f"\nLangue : {self.language_indicators.get(language, 'Français')}",
+            f"\nLangue : {self.language_indicators.get(language, 'Français')}"
         ]
 
-        # Ajout des instructions de type de réponse
+        # Ajout des instructions spécifiques au modèle
+        if model_config and "instructions" in model_config:
+            parts.append(f"\nInstructions modèle :")
+            parts.extend([f"- {instr}" for instr in model_config["instructions"]])
+
+        # Ajout du type de réponse si spécifié
         if response_type in self.response_types:
-            system_parts.extend([
-                f"{MessageTag.RESPONSE_TYPE[0]}",
-                self.response_types[response_type].get("description", ""),
-                self.response_types[response_type].get("style", ""),
-                f"{MessageTag.RESPONSE_TYPE[1]}"
-            ])
+            if model_type in [ModelType.T5, ModelType.MT5]:
+                # Format spécifique pour T5/MT5
+                parts.extend([
+                    f"\nstyle: {self.response_types[response_type].get('description', '')}",
+                    f"instructions: {self.response_types[response_type].get('style', '')}"
+                ])
+            else:
+                parts.extend([
+                    "\n[RESPONSE_TYPE]",
+                    self.response_types[response_type].get("description", ""),
+                    self.response_types[response_type].get("style", ""),
+                    "[/RESPONSE_TYPE]"
+                ])
 
-        # Ajout d'un préfixe personnalisé si fourni
+        # Ajout du préfixe personnalisé
         if prompt_prefix:
-            system_parts.append(f"\nInstructions spécifiques : {prompt_prefix}")
+            parts.append(f"\nInstructions spécifiques : {prompt_prefix}")
 
-        system_parts.append(f"{MessageTag.SYSTEM_PROMPT[1]}")
-        return "\n".join(system_parts)
+        return "\n".join(parts)
 
     async def _build_context_section(
-        self, 
-        context_docs: List[Dict], 
-        context_summary: Optional[Union[str, Dict]] = None,
-        context_info: Optional[Dict] = None
+        self,
+        context_docs: List[Dict],
+        model_name: str,
+        include_metadata: bool = True
     ) -> Optional[str]:
-        """
-        Construit la section de contexte de manière robuste.
-        
-        :param context_docs: Documents de contexte
-        :param context_summary: Résumé du contexte
-        :param context_info: Informations supplémentaires
-        :return: Section de contexte formatée
-        """
+        """Construit la section de contexte selon le modèle."""
         if not context_docs:
             return None
 
-        context_parts = [f"{MessageTag.CONTEXT[0]}"]
-        
-        # Ajout du résumé de contexte
-        if context_summary:
-            context_parts.append("Résumé du contexte :")
-            context_parts.append(
-                json.dumps(context_summary) 
-                if isinstance(context_summary, dict) 
-                else str(context_summary)
-            )
+        model_type = self._detect_model_type(model_name)
+        sorted_docs = sorted(
+            context_docs,
+            key=lambda x: float(x.get("score", 0)),
+            reverse=True
+        )
 
-        # Ajout des documents de contexte
-        context_parts.append("Documents de contexte :")
-        for doc in context_docs[:self.max_context_length]:
-            context_parts.append(json.dumps(doc))
+        context_parts = []
 
-        # Ajout d'informations supplémentaires
-        if context_info:
-            context_parts.append("Informations supplémentaires :")
-            context_parts.append(json.dumps(context_info))
+        # Format spécifique selon le type de modèle
+        for doc in sorted_docs:
+            if not doc.get("content"):
+                continue
 
-        context_parts.append(f"{MessageTag.CONTEXT[1]}")
-        return "\n".join(context_parts)
+            doc_parts = []
+            
+            if model_type in [ModelType.T5, ModelType.MT5]:
+                # Format plus concis pour T5/MT5
+                doc_parts.append(f"text: {doc['content']}")
+                if include_metadata and doc.get("metadata"):
+                    doc_parts.append(f"source: {doc['metadata'].get('source', 'unknown')}")
+            else:
+                # Format standard pour autres modèles
+                if include_metadata:
+                    if doc.get("title"):
+                        doc_parts.append(f"Document: {doc['title']}")
+                    metadata = doc.get("metadata", {})
+                    if metadata.get("page"):
+                        doc_parts.append(f"Page: {metadata['page']}")
+                    if metadata.get("section"):
+                        doc_parts.append(f"Section: {metadata['section']}")
+                    doc_parts.append(f"Pertinence: {doc.get('score', 0):.2f}")
+                
+                doc_parts.append(f"Contenu: {doc['content']}")
+            
+            context_parts.append("\n".join(doc_parts))
+
+        return "\n\n".join(context_parts)
 
     async def _build_conversation_history(
         self,
         history: List[Dict],
-        is_mistral: bool
+        model_name: str,
+        max_messages: int = 5
+    ) -> str:
+        """Construit l'historique de conversation selon le modèle."""
+        if not history:
+            return ""
+
+        model_type = self._detect_model_type(model_name)
+        recent_history = history[-max_messages*2:]
+        history_parts = []
+
+        for msg in recent_history:
+            if not (msg.get("role") and msg.get("content")):
+                continue
+
+            if model_type in [ModelType.T5, ModelType.MT5]:
+                # Format T5/MT5
+                role = "question" if msg["role"] == "user" else "response"
+                history_parts.append(f"{role}: {msg['content']}")
+            elif model_type == ModelType.FALCON:
+                # Format Falcon
+                role = "User" if msg["role"] == "user" else "Assistant"
+                history_parts.append(f"{role}: {msg['content']}")
+            else:
+                # Format standard
+                role = "Utilisateur" if msg["role"] == "user" else "Assistant"
+                history_parts.append(f"{role}: {msg['content']}")
+
+        return "\n".join(history_parts)
+
+    async def build_chat_prompt(
+        self,
+        query: str,
+        context_docs: Optional[List[Dict]] = None,
+        conversation_history: Optional[List[Dict]] = None,
+        language: str = "fr",
+        response_type: str = "comprehensive",
+        model_name: Optional[str] = None,
+        prompt_prefix: Optional[str] = None,
+        include_metadata: bool = True
     ) -> List[Dict]:
-        if not is_mistral:
-            return []
-
+        """
+        Construit le prompt complet pour le chat.
+        """
         try:
-            # Filtrer et limiter l'historique
-            valid_history = [
-                msg for msg in history 
-                if isinstance(msg, dict) and 
-                'role' in msg and 
-                'content' in msg and 
-                str(msg['content']).strip()
-            ][-settings.MAX_HISTORY_MESSAGES * 2:]
+            model_name = model_name or settings.MODEL_NAME
+            template = self._get_template(model_name)
+            messages = []
 
-            # Construire l'historique textuel
-            history_text = "Historique des échanges précédents :\n"
-            for msg in valid_history:
-                role = "Utilisateur" if msg['role'] == 'user' else "Assistant"
-                history_text += f"{role} : {msg['content']}\n"
-
-            return [{
-                'role': 'system',
-                'content': f'[CONVERSATION_HISTORY]{history_text.strip()}[/CONVERSATION_HISTORY]'
-            }]
-
-        except Exception as e:
-            logger.error(f"Erreur formatage historique: {e}", exc_info=True)
-            return []
-
-    def _fallback_prompt(self, query: str) -> List[Dict]:
-        """
-        Génère un prompt de secours en cas d'erreur.
-        
-        :param query: Requête utilisateur
-        :return: Liste de messages de secours
-        """
-        return [{
-            "role": MessageRole.SYSTEM,
-            "content": f"{MessageTag.SYSTEM_PROMPT[0]}Assistant générique{MessageTag.SYSTEM_PROMPT[1]}"
-        }, {
-            "role": MessageRole.USER,
-            "content": query
-        }]
-
-    def _validate_mistral_format(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Validation et formatage spécifique pour Mistral.
-        
-        :param messages: Liste des messages à formater
-        :return: Messages formatés pour Mistral
-        """
-        # Extraction et consolidation du contenu système
-        system_content = []
-        conversation_history = []
-        user_messages = []
-
-        for msg in messages:
-            if msg['role'] in [MessageRole.SYSTEM, MessageRole.CONTEXT, "context"]:
-                # Nettoyer et extraire le contenu système
-                clean_content = msg['content'].replace('[SYSTEM_PROMPT]', '').replace('[/SYSTEM_PROMPT]', '').strip()
-                if clean_content:
-                    system_content.append(clean_content)
-            
-            elif 'CONVERSATION_HISTORY' in msg.get('content', ''):
-                # Extraire l'historique de conversation
-                clean_history = msg['content'].replace('[CONVERSATION_HISTORY]', '').replace('[/CONVERSATION_HISTORY]', '').strip()
-                if clean_history:
-                    conversation_history.append(clean_history)
-            
-            elif msg['role'] == MessageRole.USER:
-                user_messages.append(msg['content'])
-
-        # Construction du message système
-        system_message = "<s>"
-        
-        # Ajouter le contenu système
-        if system_content:
-            system_message += "[SYSTEM_PROMPT]" + "\n".join(system_content) + "[/SYSTEM_PROMPT]"
-
-        # Ajouter l'historique de conversation
-        if conversation_history:
-            system_message += "[CONVERSATION_HISTORY]" + "\n".join(conversation_history) + "[/CONVERSATION_HISTORY]"
-
-        # Finaliser le message système
-        system_message += "</s>"
-
-        # Préparer les messages formatés
-        formatted_messages = [{
-            "role": "system", 
-            "content": system_message
-        }]
-
-        # Formater les messages utilisateur
-        for user_msg in user_messages:
-            formatted_messages.append({
-                "role": "user",
-                "content": f"[INST]{user_msg}[/INST]"
+            # 1. Message système
+            system_content = self._build_system_message(
+                response_type=response_type,
+                language=language,
+                model_name=model_name,
+                prompt_prefix=prompt_prefix
+            )
+            messages.append({
+                "role": MessageRole.SYSTEM,
+                "content": template(MessageRole.SYSTEM, system_content)
             })
 
-        return formatted_messages or self._fallback_prompt("Comment puis-je vous aider ?")
+            # 2. Contexte documentaire
+            if context_docs:
+                context_content = await self._build_context_section(
+                    context_docs=context_docs,
+                    model_name=model_name,
+                    include_metadata=include_metadata
+                )
+                if context_content:
+                    messages.append({
+                        "role": MessageRole.CONTEXT,
+                        "content": template(MessageRole.CONTEXT, context_content)
+                    })
 
-    def _validate_llama_format(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Validation et formatage pour les modèles de type Llama.
-        
-        :param messages: Liste des messages à formater
-        :return: Messages formatés pour Llama
-        """
-        return [
-            msg for msg in messages
-            if msg.get("role") in [
-                MessageRole.SYSTEM, 
-                MessageRole.USER, 
-                MessageRole.ASSISTANT
-            ]
-            and msg.get("content")
-        ] or self._fallback_prompt("Comment puis-je vous aider ?")
+            # 3. Historique de conversation
+            if conversation_history:
+                history_content = await self._build_conversation_history(
+                    history=conversation_history,
+                    model_name=model_name,
+                    max_messages=settings.MAX_HISTORY_MESSAGES
+                )
+                if history_content:
+                    messages.append({
+                        "role": MessageRole.SYSTEM,
+                        "content": template(
+                            MessageRole.SYSTEM,
+                            f"[CONVERSATION_HISTORY]{history_content}[/CONVERSATION_HISTORY]"
+                        )
+                    })
+
+            # 4. Question de l'utilisateur
+            messages.append({
+                "role": MessageRole.USER,
+                "content": template(MessageRole.USER, query)
+            })
+
+            return messages
+
+        except Exception as e:
+            logger.error(f"Erreur construction prompt: {e}")
+            return [{
+                "role": MessageRole.USER,
+                "content": template(MessageRole.USER, query)
+            }]
