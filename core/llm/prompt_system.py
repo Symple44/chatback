@@ -321,7 +321,7 @@ class PromptSystem:
                     model_name=model_name,
                     prompt_prefix=prompt_prefix
                 )
-                prompt_parts.append(template(MessageRole.SYSTEM, f"[SYSTEM_PROMPT]{system_content}[/SYSTEM_PROMPT]", True))
+                prompt_parts.append(f"<s>[SYSTEM_PROMPT]{system_content}[/SYSTEM_PROMPT]</s>")
                 
                 # Ajout du contexte si présent
                 if context_docs:
@@ -331,19 +331,25 @@ class PromptSystem:
                         include_metadata=include_metadata
                     )
                     if context_content:
-                        prompt_parts.append(template(MessageRole.CONTEXT, context_content))
+                        prompt_parts.append(f"<s>[CONTEXT]{context_content}[/CONTEXT]</s>")
                 
                 # Ajout de l'historique de conversation
                 if conversation_history:
-                    history_parts = []
-                    for msg in conversation_history[-settings.MAX_HISTORY_MESSAGES*2:]:
-                        if msg["role"] == "user":
-                            history_parts.append(template(MessageRole.USER, msg["content"]))
-                        elif msg["role"] == "assistant":
-                            history_parts.append(template(MessageRole.ASSISTANT, msg["content"]))
+                    for i in range(0, len(conversation_history), 2):
+                        if i + 1 < len(conversation_history):
+                            user_msg = conversation_history[i]
+                            assistant_msg = conversation_history[i + 1]
+                            if user_msg["role"] == "user" and assistant_msg["role"] == "assistant":
+                                # Format Mistral pour chaque paire de messages
+                                prompt_parts.append(f"<s>[INST] {user_msg['content']} [/INST]{assistant_msg['content']}</s>")
                 
-                # Ajout de la question utilisateur
-                prompt_parts.append(template(MessageRole.USER, query))
+                # Ajout de la question utilisateur finale
+                prompt_parts.append(f"<s>[INST] {query} [/INST]</s>")
+                
+                # Log pour debugging
+                logger.debug("Context docs présents: %s", bool(context_docs))
+                logger.debug("Nombre de messages dans l'historique: %s", len(conversation_history) if conversation_history else 0)
+                logger.debug("Nombre de parties dans le prompt: %s", len(prompt_parts))
                 
                 return " ".join(prompt_parts)
                 
