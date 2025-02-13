@@ -335,16 +335,23 @@ class PromptSystem:
                 
                 # Ajout de l'historique de conversation
                 if conversation_history:
+                    history_parts = []
+                    history_pairs = []
+                    
                     for i in range(0, len(conversation_history), 2):
                         if i + 1 < len(conversation_history):
                             user_msg = conversation_history[i]
                             assistant_msg = conversation_history[i + 1]
                             if user_msg["role"] == "user" and assistant_msg["role"] == "assistant":
-                                # Format Mistral pour chaque paire de messages
-                                prompt_parts.append(f"<s>[INST] {user_msg['content']} [/INST]{assistant_msg['content']}</s>")
+                                pair = f"<s>[INST] {user_msg['content'].strip()} [/INST]{assistant_msg['content'].strip()}</s>"
+                                history_pairs.append(pair)
+                    
+                    if history_pairs:
+                        history_content = " ".join(history_pairs)
+                        prompt_parts.append(f"<s>[CONVERSATION_HISTORY]{history_content}[/CONVERSATION_HISTORY]</s>")
                 
                 # Ajout de la question utilisateur finale
-                prompt_parts.append(f"<s>[INST] {query} [/INST]</s>")
+                prompt_parts.append(f"<s>[INST] {query.strip()} [/INST]</s>")
                 
                 # Log pour debugging
                 logger.debug("Context docs présents: %s", bool(context_docs))
