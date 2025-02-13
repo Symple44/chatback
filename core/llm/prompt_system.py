@@ -159,6 +159,24 @@ class PromptSystem:
         """Retourne le template approprié pour le modèle."""
         model_type = self._detect_model_type(model_name)
         return self.model_templates.get(model_type, PromptTemplates.format_mistral)
+    
+    def _clean_message_content(self, content: str) -> str:
+        """Nettoie le contenu d'un message utilisateur en enlevant toutes les balises."""
+        if not content:
+            return ""
+            
+        # Suppression des balises spécifiques
+        patterns = [
+            r'\[/?(?:INST|SYSTEM_PROMPT|CONTEXT|RESPONSE_TYPE|CONVERSATION_HISTORY)\]',
+            r'</?s>',
+            r'\s+'  # Espaces multiples
+        ]
+        
+        cleaned = content
+        for pattern in patterns:
+            cleaned = re.sub(pattern, ' ', cleaned)
+        
+        return cleaned.strip()
 
     def _build_system_message(
         self, 
@@ -254,6 +272,9 @@ class PromptSystem:
                 
                 doc_parts.append(f"Contenu: {doc['content']}")
             
+            # Nettoyage du contenu
+            cleaned_content = self._clean_message_content(doc.get("content", ""))
+            doc_parts.append(f"Contenu: {cleaned_content}")
             context_parts.append("\n".join(doc_parts))
 
         return "\n\n".join(context_parts)
@@ -360,8 +381,8 @@ class PromptSystem:
                             user_msg = conversation_history[i]
                             assistant_msg = conversation_history[i + 1]
                             if user_msg["role"] == "user" and assistant_msg["role"] == "assistant":
-                                user_content = user_msg["content"].strip()
-                                assistant_content = assistant_msg["content"].strip()
+                                user_content = self._clean_message_content(user_msg["content"])
+                                assistant_content = self._clean_message_content(assistant_msg["content"])
                                 pair = f"<s>[INST] {user_content} [/INST]{assistant_content}</s>"
                                 history_parts.append(pair)
                     
@@ -370,8 +391,9 @@ class PromptSystem:
                         history_content = " ".join(history_parts)
                         prompt_parts.append(f"<s>[CONVERSATION_HISTORY]{history_content}[/CONVERSATION_HISTORY]</s>")
                 
-                # Ajout de la question utilisateur finale
-                prompt_parts.append(f"<s>[INST] {query.strip()} [/INST]</s>")
+                # Ajout de la question utilisateur finale après nettoyage
+                clean_query = self._clean_message_content(query)
+                prompt_parts.append(f"<s>[INST] {clean_query} [/INST]</s>")
                 
                 # Log pour debugging
                 logger.debug("Context docs présents: %s", bool(context_docs))
@@ -412,22 +434,26 @@ class PromptSystem:
                 # Historique de conversation
                 if conversation_history:
                     for msg in conversation_history[-settings.MAX_HISTORY_MESSAGES*2:]:
+                        clean_content = self._clean_message_content(msg["content"])
                         messages.append({
                             "role": msg["role"],
-                            "content": template(msg["role"], msg["content"])
+                            "content": template(msg["role"], clean_content)
                         })
 
                 # Question utilisateur
+                clean_query = self._clean_message_content(query)
                 messages.append({
                     "role": MessageRole.USER,
-                    "content": template(MessageRole.USER, query)
+                    "content": template(MessageRole.USER, clean_query)
                 })
 
                 return messages
 
         except Exception as e:
             logger.error(f"Erreur construction prompt: {e}")
+            # En cas d'erreur, retourner un prompt minimal avec contenu nettoyé
+            clean_query = self._clean_message_content(query)
             return [{
                 "role": MessageRole.USER,
-                "content": template(MessageRole.USER, query)
+                "content": template(MessageRole.USER, clean_query)
             }]
