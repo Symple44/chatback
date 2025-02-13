@@ -6,7 +6,7 @@ from datetime import datetime
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .model_loader import ModelType, LoadedModel
-from core.config.models import EMBEDDING_MODELS, EMBEDDING_PERFORMANCE_CONFIGS
+from core.config.models import EMBEDDING_MODELS
 from core.config.config import settings
 
 logger = get_logger("embedding_manager")
