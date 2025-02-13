@@ -84,6 +84,13 @@ class ModelLoader:
                     logger.info(f"Utilisation du modèle déjà chargé: {model_name}")
                     return self.loaded_models[model_key]
 
+                # Déterminer la priorité du modèle
+                model_priority = {
+                    ModelType.CHAT: ModelPriority.HIGH,
+                    ModelType.SUMMARIZER: ModelPriority.MEDIUM,
+                    ModelType.EMBEDDING: ModelPriority.LOW
+                }[model_type]
+
                 # Vérifier la mémoire disponible
                 if not self.cuda_manager._check_memory_availability(model_priority):
                     raise RuntimeError(f"Mémoire insuffisante pour charger {model_name}")
