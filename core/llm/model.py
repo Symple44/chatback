@@ -12,6 +12,13 @@ from .embedding_manager import EmbeddingManager
 from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
+from core.config.models import (
+    AVAILABLE_MODELS,
+    EMBEDDING_MODELS,
+    SUMMARIZER_MODELS,
+    MODEL_PERFORMANCE_CONFIGS,
+    CUDA_CONFIG
+)
 
 
 logger = get_logger("model")
@@ -156,19 +163,17 @@ class ModelInference:
         """
         try:
             # Récupération de la config complète du modèle
-            model = self.model_manager.current_models[ModelType.CHAT]
-            generation_config = model.config.get("generation_config", {}).copy()
-
-            # Surcharge des paramètres spécifiques si response_type spécifié
-            if response_type and response_type in settings.RESPONSE_TYPES:
-                response_config = settings.RESPONSE_TYPES[response_type]
-                if "temperature" in response_config:
-                    generation_config["temperature"] = float(response_config["temperature"])
-                    generation_config["do_sample"] = True  # Activer do_sample si température est définie
-                if "max_tokens" in response_config: # Ajout de la gestion de max_tokens si défini
-                    generation_config["max_length"] = int(response_config["max_tokens"])
-
-            return generation_config
+            model_config = AVAILABLE_MODELS.get(model_name, {})
+            generation_config = model_config.get("generation_config", {})
+            
+            # Configuration de base
+            config = generation_config.get("generation_params", {}).copy()
+            
+            # Surcharge avec les paramètres spécifiques au type de réponse
+            response_config = generation_config.get("response_types", {}).get(response_type, {})
+            config.update(response_config)
+            
+            return config
 
         except Exception as e:
             logger.error(f"Erreur récupération config génération: {e}")

@@ -22,7 +22,7 @@ class DocumentSummarizer:
             
         # Récupération des configurations
         self.model_config = SUMMARIZER_MODELS[self.model_name]
-        self.perf_config = SUMMARIZER_PERFORMANCE_CONFIGS[self.model_name]
+        self.perf_config = self.model_config.get("generation_config", {})
         
     async def initialize(self, model_manager):
         """Initialise le modèle de résumé."""

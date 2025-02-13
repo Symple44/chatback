@@ -18,9 +18,7 @@ from core.config.models import (
     AVAILABLE_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
-    MODEL_PERFORMANCE_CONFIGS,
-    EMBEDDING_PERFORMANCE_CONFIGS,
-    SUMMARIZER_PERFORMANCE_CONFIGS
+    MODEL_PERFORMANCE_CONFIGS
 )
 from core.utils.logger import get_logger
 from core.llm.cuda_manager import ModelPriority

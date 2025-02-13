@@ -28,7 +28,7 @@ class EmbeddingManager:
             
         # Récupération des configurations
         self.model_config = EMBEDDING_MODELS[self.model_name]
-        self.perf_config = EMBEDDING_PERFORMANCE_CONFIGS[self.model_name]
+        self.perf_config = self.model_config.get("generation_config", {})
 
     async def initialize(self, model_manager):
         """Initialise le modèle d'embedding."""
