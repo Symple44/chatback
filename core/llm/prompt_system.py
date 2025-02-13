@@ -9,6 +9,7 @@ from core.config.models import (
     SUMMARIZER_MODELS
 )
 from core.utils.logger import get_logger
+import re
 
 logger = get_logger("prompt_system")
 
