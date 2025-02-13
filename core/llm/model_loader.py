@@ -52,10 +52,12 @@ class ModelLoader:
         self.tokenizer_manager = tokenizer_manager
         self.loaded_models = {}
         self.max_loaded_models = {
-            ModelType.CHAT: 1,  # Un seul modèle principal
-            ModelType.EMBEDDING: 2,  # Max 2 modèles d'embedding
-            ModelType.SUMMARIZER: 1  # Un seul summarizer
+            ModelType.CHAT: 1,        # Un seul modèle principal
+            ModelType.EMBEDDING: 2,    # Max 2 modèles d'embedding
+            ModelType.SUMMARIZER: 1    # Un seul summarizer
         }
+        self._initialization_lock = asyncio.Lock()
+        self._model_locks = {}
         
     async def load_model(
         self,
@@ -65,35 +67,46 @@ class ModelLoader:
     ) -> LoadedModel:
         """Charge ou récupère un modèle selon son type."""
         try:
-            # Vérifier si le modèle est déjà chargé
-            model_key = f"{model_type.value}_{model_name}"
-            if model_key in self.loaded_models and not force_reload:
-                logger.info(f"Utilisation du modèle déjà chargé: {model_name}")
-                return self.loaded_models[model_key]
-
-            # Récupérer la configuration selon le type
-            config = self._get_model_config(model_name, model_type)
-            if not config:
+            # Vérification de la configuration
+            model_config = self._get_model_config(model_name, model_type)
+            if not model_config:
                 raise ValueError(f"Configuration non trouvée pour {model_name}")
 
-            # Libérer de la mémoire si nécessaire
-            await self._cleanup_for_model_type(model_type)
+            # Clé unique pour le modèle
+            model_key = f"{model_type.value}_{model_name}"
+            
+            # Verrou spécifique au modèle
+            if model_key not in self._model_locks:
+                self._model_locks[model_key] = asyncio.Lock()
+            
+            async with self._model_locks[model_key]:
+                # Vérifier si le modèle est déjà chargé
+                if model_key in self.loaded_models and not force_reload:
+                    logger.info(f"Utilisation du modèle déjà chargé: {model_name}")
+                    return self.loaded_models[model_key]
 
-            # Charger le modèle selon son type
-            if model_type == ModelType.CHAT:
-                loaded_model = await self._load_chat_model(model_name, config)
-            elif model_type == ModelType.EMBEDDING:
-                loaded_model = await self._load_embedding_model(model_name, config)
-            elif model_type == ModelType.SUMMARIZER:
-                loaded_model = await self._load_summarizer_model(model_name, config)
-            else:
-                raise ValueError(f"Type de modèle non supporté: {model_type}")
+                # Vérifier la mémoire disponible
+                if not self.cuda_manager._check_memory_availability(model_priority):
+                    raise RuntimeError(f"Mémoire insuffisante pour charger {model_name}")
 
-            # Stocker le modèle chargé
-            self.loaded_models[model_key] = loaded_model
-            logger.info(f"Modèle {model_name} ({model_type.value}) chargé avec succès")
+                # Libérer de la mémoire si nécessaire
+                await self._cleanup_for_model_type(model_type)
 
-            return loaded_model
+                # Charger le modèle selon son type
+                if model_type == ModelType.CHAT:
+                    loaded_model = await self._load_chat_model(model_name, model_config)
+                elif model_type == ModelType.EMBEDDING:
+                    loaded_model = await self._load_embedding_model(model_name, model_config)
+                elif model_type == ModelType.SUMMARIZER:
+                    loaded_model = await self._load_summarizer_model(model_name, model_config)
+                else:
+                    raise ValueError(f"Type de modèle non supporté: {model_type}")
+
+                # Stocker le modèle chargé
+                self.loaded_models[model_key] = loaded_model
+                logger.info(f"Modèle {model_name} ({model_type.value}) chargé avec succès")
+
+                return loaded_model
 
         except Exception as e:
             logger.error(f"Erreur chargement modèle {model_name}: {e}")
@@ -104,19 +117,24 @@ class ModelLoader:
         try:
             logger.info(f"Chargement du modèle {model_name}")
             
+            # 1. Récupération de toutes les configurations pertinentes
+            model_config = AVAILABLE_MODELS[model_name]
+            performance_config = MODEL_PERFORMANCE_CONFIGS[model_name]
+            
+            # 2. Configuration du tokenizer
             tokenizer = self.tokenizer_manager.get_tokenizer(model_name, ModelType.CHAT)
             if not tokenizer:
                 raise ValueError(f"Tokenizer non trouvé pour {model_name}")
             
-            # Définir explicitement pad_token_id comme eos_token_id
+            # Configuration explicite pad_token comme eos_token
             if not hasattr(tokenizer, 'pad_token') or tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
                 logger.info("pad_token_id configuré sur eos_token_id")
             
-            # Récupération des paramètres de base du modèle
-            load_params = config["load_params"].copy()
+            # 3. Construction des paramètres de chargement
+            load_params = model_config["load_params"].copy()
             
-            # Configuration de la quantization avec BitsAndBytesConfig
+            # 4. Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
                 load_params["quantization_config"] = BitsAndBytesConfig(
@@ -127,39 +145,67 @@ class ModelLoader:
                     llm_int8_enable_fp32_cpu_offload=quant_config.get("llm_int8_enable_fp32_cpu_offload", True)
                 )
             
-            # Récupération des paramètres CUDA optimisés
-            cuda_params = self.cuda_manager.get_model_load_parameters(model_name, ModelPriority.HIGH)
+            # 5. Récupération et fusion des paramètres CUDA optimisés
+            cuda_params = self.cuda_manager.get_model_load_parameters(
+                model_name=model_name,
+                model_priority=ModelPriority.HIGH
+            )
             
-            # Fusionner les paramètres en gardant la priorité pour load_params
-            cuda_params.update(load_params)
-            load_params = cuda_params
+            # 6. Ajout des paramètres de performance
+            performance_params = {
+                "torch_dtype": performance_config.get("execution", {}).get("torch_dtype", torch.float16),
+                "low_cpu_mem_usage": True,
+                "device_map": cuda_params.get("device_map", "auto")
+            }
             
-            logger.debug(f"Paramètres de chargement: {load_params}")
+            # 7. Fusion de tous les paramètres dans le bon ordre
+            final_params = {
+                **load_params,          # Paramètres de base du modèle
+                **cuda_params,          # Paramètres CUDA
+                **performance_params    # Paramètres de performance
+            }
             
-            # Chargement avec gestion de la précision moderne
-            with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
+            logger.debug(f"Paramètres de chargement finaux: {final_params}")
+            
+            # 8. Chargement avec gestion de la précision
+            with torch.amp.autocast(device_type='cuda', dtype=final_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForCausalLM.from_pretrained(
-                    config["path"],
-                    **load_params
+                    model_config["path"],
+                    **final_params
                 )
 
-                # Configurer le pad_token_id dans la configuration du modèle
+                # Configuration du pad_token_id dans le modèle
                 if model.config.pad_token_id is None:
                     model.config.pad_token_id = model.config.eos_token_id
 
-            # Configuration post-chargement
+            # 9. Configuration post-chargement
             model.eval()
             model.requires_grad_(False)
+            
+            # 10. Optimisations spécifiques selon la configuration de performance
+            if performance_config.get("optimization", {}).get("enable_jit", False):
+                model = torch.jit.optimize_for_inference(model)
+                
+            if performance_config.get("optimization", {}).get("memory_efficient_attention", True):
+                model.config.use_cache = False
 
-            return LoadedModel(
+            # 11. Création du LoadedModel avec toutes les métadonnées
+            loaded_model = LoadedModel(
                 model=model,
                 tokenizer=tokenizer,
                 model_type=ModelType.CHAT,
                 model_name=model_name,
-                config=config,
-                loaded_at=torch.cuda.current_stream().record_event(),
+                config={
+                    **model_config,
+                    "performance_config": performance_config,
+                    "cuda_config": cuda_params
+                },
+                loaded_at=datetime.utcnow(),
                 device=next(model.parameters()).device
             )
+
+            logger.info(f"Modèle {model_name} chargé avec succès sur {loaded_model.device}")
+            return loaded_model
 
         except Exception as e:
             logger.error(f"Erreur chargement modèle {model_name}: {e}")
@@ -170,10 +216,22 @@ class ModelLoader:
         try:
             logger.info(f"Chargement du summarizer {model_name}")
             
-            # Récupération des paramètres de base du modèle
-            load_params = config["load_params"].copy()
+            # 1. Récupération des configurations
+            model_config = SUMMARIZER_MODELS[model_name]
+            performance_config = SUMMARIZER_PERFORMANCE_CONFIGS[model_name]
             
-            # Configuration de la quantization
+            # 2. Configuration du tokenizer
+            tokenizer = self.tokenizer_manager.get_tokenizer(
+                model_name=model_name,
+                tokenizer_type=TokenizerType.SUMMARIZER
+            )
+            if not tokenizer:
+                raise ValueError(f"Tokenizer non trouvé pour {model_name}")
+
+            # 3. Construction des paramètres de base
+            load_params = model_config["load_params"].copy()
+            
+            # 4. Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
                 load_params["quantization_config"] = BitsAndBytesConfig(
@@ -183,46 +241,66 @@ class ModelLoader:
                     bnb_4bit_use_double_quant=quant_config["bnb_4bit_use_double_quant"]
                 )
 
-            # Récupération des paramètres CUDA optimisés
+            # 5. Paramètres CUDA
             cuda_params = self.cuda_manager.get_model_load_parameters(
-                model_name,
-                ModelPriority.MEDIUM
+                model_name=model_name,
+                model_priority=ModelPriority.MEDIUM
             )
             
-            # Fusionner les paramètres
-            cuda_params.update(load_params)
-            load_params = cuda_params
+            # 6. Paramètres de performance
+            performance_params = {
+                "torch_dtype": performance_config.get("execution", {}).get("torch_dtype", torch.float16),
+                "low_cpu_mem_usage": True,
+                "device_map": cuda_params.get("device_map", "auto")
+            }
 
-            # Ajout de paramètres spécifiques pour les modèles T5/MT5
+            # 7. Fusion des paramètres
+            final_params = {
+                **load_params,
+                **cuda_params,
+                **performance_params
+            }
+
+            # 8. Paramètres spécifiques pour T5/MT5
             if any(prefix in model_name.lower() for prefix in ['t5', 'mt5']):
-                load_params.update({
+                final_params.update({
                     "return_dict": True,
                     "output_hidden_states": False,
                     "output_attentions": False,
                 })
 
-            with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
+            # 9. Chargement du modèle
+            with torch.amp.autocast(device_type='cuda', dtype=final_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForSeq2SeqLM.from_pretrained(
-                    config["path"],
-                    **load_params
+                    model_config["path"],
+                    **final_params
                 )
-                tokenizer = self.tokenizer_manager.get_tokenizer(model_name, TokenizerType.SUMMARIZER)
 
-                if not tokenizer:
-                    raise ValueError(f"Tokenizer non trouvé pour {model_name}")
-
+            # 10. Configuration post-chargement
             model.eval()
             model.requires_grad_(False)
 
-            return LoadedModel(
+            # 11. Optimisations spécifiques
+            if performance_config.get("optimization", {}).get("memory_efficient_attention", True):
+                model.config.use_cache = False
+
+            # 12. Création du LoadedModel
+            loaded_model = LoadedModel(
                 model=model,
                 tokenizer=tokenizer,
                 model_type=ModelType.SUMMARIZER,
                 model_name=model_name,
-                config=config,
-                loaded_at=torch.cuda.current_stream().record_event(),
+                config={
+                    **model_config,
+                    "performance_config": performance_config,
+                    "cuda_config": cuda_params
+                },
+                loaded_at=datetime.utcnow(),
                 device=next(model.parameters()).device
             )
+
+            logger.info(f"Summarizer {model_name} chargé avec succès sur {loaded_model.device}")
+            return loaded_model
 
         except Exception as e:
             logger.error(f"Erreur chargement summarizer {model_name}: {e}")
@@ -233,78 +311,127 @@ class ModelLoader:
         try:
             logger.info(f"Chargement du modèle d'embedding {model_name}")
             
-            # Récupération des paramètres de base du modèle
-            load_params = config["load_params"].copy()
+            # 1. Récupération des configurations
+            model_config = EMBEDDING_MODELS[model_name]
+            performance_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
             
-            # Récupération des paramètres CUDA optimisés
+            # 2. Configuration CUDA et device
             cuda_params = self.cuda_manager.get_model_load_parameters(
-                model_name,
-                ModelPriority.LOW
+                model_name=model_name,
+                model_priority=ModelPriority.LOW
             )
-            
-            # Fusionner les paramètres
-            cuda_params.update(load_params)
             device = self.cuda_manager.device
 
-            # Les modèles d'embedding utilisent SentenceTransformer
-            model = SentenceTransformer(
-                config["path"],
-                device=str(device)
-            )
+            # 3. Construction des paramètres de chargement
+            load_params = {
+                **model_config["load_params"],
+                "device_map": cuda_params.get("device_map", "auto"),
+                "torch_dtype": performance_config.get("execution", {}).get("torch_dtype", torch.float16)
+            }
 
-            # Optimisations pour l'inférence
+            # 4. Configuration des paramètres d'embedding
+            embedding_params = model_config.get("generation_config", {}).get("embedding_params", {})
+            
+            # 5. Chargement du modèle avec SentenceTransformer
+            with torch.amp.autocast(device_type='cuda', dtype=load_params.get('torch_dtype', torch.float16)):
+                model = SentenceTransformer(
+                    model_config["path"],
+                    device=str(device)
+                )
+
+                # Application des paramètres d'embedding
+                if hasattr(model, 'normalize_embeddings'):
+                    model.normalize_embeddings = embedding_params.get("normalize_embeddings", True)
+                
+                if hasattr(model, 'pooling_strategy'):
+                    model.pooling_strategy = embedding_params.get("pooling_strategy", "mean")
+
+            # 6. Optimisations post-chargement
             model.eval()
+            
+            if performance_config.get("optimization", {}).get("enable_jit", False):
+                model = torch.jit.optimize_for_inference(model)
 
-            # Note: Pas de quantization pour les modèles d'embedding car 
-            # ils sont déjà optimisés par SentenceTransformer
-
-            return LoadedModel(
+            # 7. Création du LoadedModel
+            loaded_model = LoadedModel(
                 model=model,
                 tokenizer=None,  # SentenceTransformer gère son propre tokenizer
                 model_type=ModelType.EMBEDDING,
                 model_name=model_name,
-                config=config,
-                loaded_at=torch.cuda.current_stream().record_event(),
+                config={
+                    **model_config,
+                    "performance_config": performance_config,
+                    "cuda_config": cuda_params
+                },
+                loaded_at=datetime.utcnow(),
                 device=device
             )
+
+            logger.info(f"Modèle d'embedding {model_name} chargé avec succès sur {device}")
+            return loaded_model
 
         except Exception as e:
             logger.error(f"Erreur chargement embedding {model_name}: {e}")
             raise
 
     def _get_model_config(self, model_name: str, model_type: ModelType) -> Optional[Dict]:
-        """Récupère la configuration d'un modèle selon son type."""
-        if model_type == ModelType.CHAT:
-            return AVAILABLE_MODELS.get(model_name)
-        elif model_type == ModelType.EMBEDDING:
-            return EMBEDDING_MODELS.get(model_name)
-        elif model_type == ModelType.SUMMARIZER:
-            return SUMMARIZER_MODELS.get(model_name)
-        return None
+        """Récupère la configuration complète d'un modèle."""
+        try:
+            if model_type == ModelType.CHAT:
+                return AVAILABLE_MODELS.get(model_name)
+            elif model_type == ModelType.EMBEDDING:
+                return EMBEDDING_MODELS.get(model_name)
+            elif model_type == ModelType.SUMMARIZER:
+                return SUMMARIZER_MODELS.get(model_name)
+            return None
+        except Exception as e:
+            logger.error(f"Erreur récupération config modèle {model_name}: {e}")
+            return None
 
     def _get_performance_config(self, model_name: str, model_type: ModelType) -> Dict:
         """Récupère la configuration de performance d'un modèle."""
-        if model_type == ModelType.CHAT:
-            return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
-        elif model_type == ModelType.EMBEDDING:
-            return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
-        elif model_type == ModelType.SUMMARIZER:
-            return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
-        return {}
+        try:
+            if model_type == ModelType.CHAT:
+                return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
+            elif model_type == ModelType.EMBEDDING:
+                return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
+            elif model_type == ModelType.SUMMARIZER:
+                return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
+            return {}
+        except Exception as e:
+            logger.error(f"Erreur récupération config performance {model_name}: {e}")
+            return {}
 
-    async def _cleanup_for_model_type(self, model_type: ModelType):
+    async def _cleanup_for_model_type(self, model_type: ModelType) -> None:
         """Nettoie la mémoire pour un type de modèle si nécessaire."""
-        type_models = [k for k, v in self.loaded_models.items() 
-                      if k.startswith(model_type.value)]
-        
-        if len(type_models) >= self.max_loaded_models[model_type]:
-            oldest_model = min(
-                type_models,
-                key=lambda k: self.loaded_models[k].loaded_at
-            )
-            await self._unload_model(oldest_model)
+        try:
+            # Récupération des modèles du type spécifié
+            type_models = [k for k in self.loaded_models.keys() 
+                         if k.startswith(f"{model_type.value}_")]
+            
+            max_models = self.max_loaded_models[model_type]
+            
+            # Si on dépasse la limite, on décharge les plus anciens
+            if len(type_models) >= max_models:
+                # Trier par date de chargement
+                sorted_models = sorted(
+                    type_models,
+                    key=lambda k: self.loaded_models[k].loaded_at
+                )
+                
+                # Décharger les modèles en trop
+                for model_key in sorted_models[:(len(type_models) - max_models + 1)]:
+                    await self._unload_model(model_key)
+                    
+                # Forcer le garbage collector
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
+        except Exception as e:
+            logger.error(f"Erreur nettoyage type {model_type}: {e}")
 
-    async def _unload_model(self, model_key: str):
+    async def _unload_model(self, model_key: str) -> None:
         """Décharge un modèle de la mémoire."""
         try:
             if model_key not in self.loaded_models:
@@ -319,7 +446,6 @@ class ModelLoader:
                         model.model = model.model.cpu()
                     # Forcer le garbage collection
                     model.model = None
-                    import gc
                     gc.collect()
                     torch.cuda.empty_cache()
                     
@@ -332,6 +458,10 @@ class ModelLoader:
                     torch.cuda.empty_cache()
                 except Exception as e:
                     logger.warning(f"Erreur nettoyage cache CUDA: {e}")
+
+            # Libérer le verrou associé
+            if model_key in self._model_locks:
+                self._model_locks.pop(model_key)
 
             logger.info(f"Modèle {model_key} déchargé avec succès")
             
@@ -351,9 +481,23 @@ class ModelLoader:
     async def cleanup(self):
         """Nettoie toutes les ressources."""
         try:
+            logger.info("Début du nettoyage des modèles...")
+            
+            # Décharger tous les modèles
             for model_key in list(self.loaded_models.keys()):
                 await self._unload_model(model_key)
-            torch.cuda.empty_cache()
-            logger.info("Tous les modèles ont été nettoyés")
+                
+            # Nettoyage final
+            self.loaded_models.clear()
+            self._model_locks.clear()
+            
+            # Forcer le garbage collector
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            logger.info("Nettoyage des modèles terminé")
+            
         except Exception as e:
-            logger.error(f"Erreur nettoyage modèles: {e}")
+            logger.error(f"Erreur nettoyage ModelLoader: {e}")
+            raise

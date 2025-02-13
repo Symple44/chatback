@@ -15,18 +15,19 @@ class EmbeddingManager:
     """Gestionnaire des modèles d'embedding."""
     
     def __init__(self):
-        self.model_name = settings.EMBEDDING_MODEL # Utilisation du modèle par défaut depuis settings
+        self.model_name = settings.EMBEDDING_MODEL
         self.model: Optional[LoadedModel] = None
         self._initialized = False
         self.embedding_cache = {}
         self.max_cache_size = 10000
         
-        # Configuration du modèle initial
+        # Vérification des configurations
         if self.model_name not in EMBEDDING_MODELS:
             available_models = ", ".join(EMBEDDING_MODELS.keys())
             raise ValueError(f"Modèle {self.model_name} non disponible. Modèles disponibles : {available_models}")
             
-        self.current_config = EMBEDDING_MODELS[self.model_name]
+        # Récupération des configurations
+        self.model_config = EMBEDDING_MODELS[self.model_name]
         self.perf_config = EMBEDDING_PERFORMANCE_CONFIGS[self.model_name]
 
     async def initialize(self, model_manager):
@@ -37,17 +38,16 @@ class EmbeddingManager:
         try:
             logger.info(f"Initialisation du modèle d'embedding: {self.model_name}")
             
-            # Vérifier si le modèle est déjà chargé dans le model_manager
+            # Vérifier si le modèle est déjà chargé
             existing_model = model_manager.current_models.get(ModelType.EMBEDDING)
             if existing_model and existing_model.model_name == self.model_name:
                 logger.info(f"Utilisation du modèle d'embedding déjà chargé: {self.model_name}")
                 self.model = existing_model
             else:
-                # Chargement du nouveau modèle si nécessaire
+                # Chargement avec les nouvelles configurations
                 self.model = await model_manager.change_model(
                     model_name=self.model_name,
-                    model_type=ModelType.EMBEDDING,
-                    keep_old=False  # On ne garde pas l'ancien modèle
+                    model_type=ModelType.EMBEDDING
                 )
 
             self._initialized = True
@@ -60,14 +60,12 @@ class EmbeddingManager:
     async def change_model(self, model_name: str, model_loader) -> bool:
         """Change le modèle d'embedding."""
         try:
-            # Vérification de la disponibilité du modèle
+            # Vérification avec les nouvelles configurations
             if model_name not in EMBEDDING_MODELS:
                 available_models = ", ".join(EMBEDDING_MODELS.keys())
                 raise ValueError(f"Modèle {model_name} non disponible. Modèles disponibles : {available_models}")
 
-            logger.info(f"Changement du modèle d'embedding pour: {model_name}")
-
-            # Chargement du nouveau modèle
+            # Chargement avec les nouvelles configurations
             new_model = await model_loader.load_model(
                 model_name=model_name,
                 model_type=ModelType.EMBEDDING
@@ -76,7 +74,7 @@ class EmbeddingManager:
             # Mise à jour des configurations
             self.model_name = model_name
             self.model = new_model
-            self.current_config = EMBEDDING_MODELS[model_name]
+            self.model_config = EMBEDDING_MODELS[model_name]
             self.perf_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
             
             # Vider le cache car les dimensions peuvent changer
@@ -104,10 +102,15 @@ class EmbeddingManager:
             if isinstance(texts, str):
                 texts = [texts]
 
+            # Utilisation de la configuration de performance
             batch_size = batch_size or self.perf_config["batch_size"]
             embeddings = []
 
-            # Traitement par lots
+            # Configuration d'embedding
+            embedding_params = self.model_config["generation_config"]["embedding_params"]
+            normalize = embedding_params.get("normalize_embeddings", True)
+
+            # Traitement par lots avec les paramètres configurés
             for i in range(0, len(texts), batch_size):
                 batch = texts[i:i + batch_size]
                 batch_embeddings = []
@@ -116,21 +119,21 @@ class EmbeddingManager:
                     # Vérification du cache
                     if use_cache and text in self.embedding_cache:
                         cache_entry = self.embedding_cache[text]
-                        # Vérifier si l'embedding est du bon modèle
                         if cache_entry["model"] == self.model_name:
                             batch_embeddings.append(cache_entry["embedding"])
                             continue
 
-                    # Génération des nouveaux embeddings
+                    # Génération des nouveaux embeddings avec la configuration
                     with torch.no_grad():
                         embedding = self.model.model.encode(
                             text,
                             convert_to_tensor=True,
-                            normalize_embeddings=self.perf_config["normalize_embeddings"]
+                            normalize_embeddings=normalize,
+                            batch_size=batch_size
                         )
                         embedding = embedding.cpu().tolist()
 
-                        # Mise en cache
+                        # Mise en cache avec la nouvelle structure
                         if use_cache:
                             self._update_cache(text, embedding)
                         
@@ -207,12 +210,13 @@ class EmbeddingManager:
         """Retourne les informations sur le modèle actuel."""
         return {
             "model_name": self.model_name,
-            "embedding_dimension": self.current_config["embedding_dimension"],
-            "supported_languages": self.current_config["languages"],
+            "embedding_dimension": self.model_config["embedding_dimension"],
+            "supported_languages": self.model_config["languages"],
             "performance_config": self.perf_config,
+            "generation_config": self.model_config.get("generation_config", {}),
             "cache_size": len(self.embedding_cache),
             "device": str(self.model.device) if self.model else "non initialisé",
-            "max_sequence_length": self.current_config["max_sequence_length"]
+            "max_sequence_length": self.model_config["max_sequence_length"]
         }
 
     async def cleanup(self):

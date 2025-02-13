@@ -15,12 +15,13 @@ class DocumentSummarizer:
         self.model_name = "mt5-multilingual-base"  # Modèle par défaut
         self.model: Optional[LoadedModel] = None
         self._initialized = False
-         # Vérification de la présence des configurations
+        
+        # Vérification des configurations
         if self.model_name not in SUMMARIZER_MODELS:
             raise ValueError(f"Configuration du modèle {self.model_name} non trouvée dans SUMMARIZER_MODELS")
-        if self.model_name not in SUMMARIZER_PERFORMANCE_CONFIGS:
-            raise ValueError(f"Configuration de performance pour {self.model_name} non trouvée dans SUMMARIZER_PERFORMANCE_CONFIGS")
-        self.current_config = SUMMARIZER_MODELS[self.model_name]
+            
+        # Récupération des configurations
+        self.model_config = SUMMARIZER_MODELS[self.model_name]
         self.perf_config = SUMMARIZER_PERFORMANCE_CONFIGS[self.model_name]
         
     async def initialize(self, model_manager):
@@ -31,7 +32,7 @@ class DocumentSummarizer:
         try:
             logger.info(f"Initialisation du résumeur: {self.model_name}")
             
-            # Utilisation de change_model au lieu de load_model
+            # Utilisation de change_model avec les nouvelles configurations
             self.model = await model_manager.change_model(
                 model_name=self.model_name,
                 model_type=ModelType.SUMMARIZER
@@ -47,10 +48,11 @@ class DocumentSummarizer:
     async def change_model(self, model_name: str, model_loader) -> bool:
         """Change le modèle de résumé."""
         try:
+            # Vérification avec les nouvelles configurations
             if model_name not in SUMMARIZER_MODELS:
                 raise ValueError(f"Modèle {model_name} non disponible")
 
-            # Chargement du nouveau modèle
+            # Chargement avec les nouvelles configurations
             new_model = await model_loader.load_model(
                 model_name=model_name,
                 model_type=ModelType.SUMMARIZER
@@ -59,7 +61,7 @@ class DocumentSummarizer:
             # Mise à jour des configurations
             self.model_name = model_name
             self.model = new_model
-            self.current_config = SUMMARIZER_MODELS[model_name]
+            self.model_config = SUMMARIZER_MODELS[model_name]
             self.perf_config = SUMMARIZER_PERFORMANCE_CONFIGS[model_name]
 
             return True
@@ -78,21 +80,15 @@ class DocumentSummarizer:
                 # Préparation du contenu
                 content = self._prepare_content(documents)
                 
-                # Configuration de génération selon le modèle actuel
-                gen_config = {
-                    "max_length": self.perf_config["max_length"],
-                    "min_length": self.perf_config["min_length"],
-                    "num_beams": self.perf_config["num_beams"],
-                    "length_penalty": self.perf_config["length_penalty"],
-                    "early_stopping": self.perf_config["early_stopping"],
-                    "no_repeat_ngram_size": self.perf_config["no_repeat_ngram_size"]
-                }
+                # Configuration de génération depuis le modèle
+                gen_config = self.model_config["generation_config"]["generation_params"].copy()
+                preprocessing = self.model_config["generation_config"]["preprocessing"]
 
                 # Tokenisation avec paramètres optimisés
                 inputs = self.model.tokenizer(
                     content,
-                    max_length=self.perf_config["preprocessing"]["max_length"],
-                    padding=self.perf_config["preprocessing"]["padding"],
+                    max_length=preprocessing["max_input_length"],
+                    padding=preprocessing.get("padding", "longest"),
                     truncation=True,
                     return_tensors="pt"
                 )
@@ -120,7 +116,11 @@ class DocumentSummarizer:
                     "metadata": {
                         "model_used": self.model_name,
                         "timestamp": datetime.utcnow().isoformat(),
-                        "config_used": gen_config
+                        "config_used": gen_config,
+                        "performance_metrics": {
+                            "input_tokens": len(inputs["input_ids"][0]),
+                            "output_tokens": len(output_ids[0])
+                        }
                     }
                 }
 
@@ -146,7 +146,9 @@ class DocumentSummarizer:
             app_name = metadata.get("application", "unknown")
             processed_docs.append(f"[Source: {app_name}]\n{content}")
 
-        return "\n---\n".join(processed_docs)
+        # Utilisation des paramètres de prétraitement
+        max_length = self.model_config["generation_config"]["preprocessing"]["max_input_length"]
+        return "\n---\n".join(processed_docs)[:max_length]
 
     def _get_default_summary(self) -> Dict[str, str]:
         """Retourne un résumé par défaut en cas d'erreur."""
