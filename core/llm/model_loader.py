@@ -152,7 +152,7 @@ class ModelLoader:
                 )
             
             # 5. Récupération et fusion des paramètres CUDA optimisés
-            cuda_params = self.cuda_manager.get_model_load_parameters(
+            cuda_params = self.get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.HIGH
             )
@@ -248,7 +248,7 @@ class ModelLoader:
                 )
 
             # 5. Paramètres CUDA
-            cuda_params = self.cuda_manager.get_model_load_parameters(
+            cuda_params = self.get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.MEDIUM
             )
@@ -322,7 +322,7 @@ class ModelLoader:
             performance_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
             
             # 2. Configuration CUDA et device
-            cuda_params = self.cuda_manager.get_model_load_parameters(
+            cuda_params = self.get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.LOW
             )
@@ -379,6 +379,28 @@ class ModelLoader:
         except Exception as e:
             logger.error(f"Erreur chargement embedding {model_name}: {e}")
             raise
+    
+    def _get_model_load_parameters(
+        self,
+        model_name: str,
+        model_type: ModelType
+    ) -> Dict[str, Any]:
+        """Retourne les paramètres optimaux pour le chargement du modèle."""
+        model_config = self._get_model_config(model_name, model_type)
+        load_params = model_config.get("load_params", {}).copy()
+
+        # Vérification de la mémoire via CUDAManager
+        priority = {
+            ModelType.CHAT: ModelPriority.HIGH,
+            ModelType.SUMMARIZER: ModelPriority.MEDIUM,
+            ModelType.EMBEDDING: ModelPriority.LOW
+        }[model_type]
+
+        if not self.cuda_manager._check_memory_availability(priority):
+            # Si pas assez de VRAM, forcer le chargement sur CPU
+            load_params["device_map"] = {"": "cpu"}
+            
+        return load_params
 
     def _get_model_config(self, model_name: str, model_type: ModelType) -> Optional[Dict]:
         """Récupère la configuration complète d'un modèle."""
