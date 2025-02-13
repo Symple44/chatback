@@ -148,7 +148,7 @@ class ModelLoader:
                     bnb_4bit_compute_dtype=quant_config.get("bnb_4bit_compute_dtype", torch.float16),
                     bnb_4bit_quant_type=quant_config.get("bnb_4bit_quant_type", "nf4"),
                     bnb_4bit_use_double_quant=quant_config.get("bnb_4bit_use_double_quant", True),
-                    llm_int8_enable_fp32_cpu_offload=quant_config.get("llm_int8_enable_fp32_cpu_offload", True)
+                    llm_int8_enable_fp32_cpu_offload=quant_config.get("llm_int8_enable_fp32_cpu_offload", True),
                     quant_method="bitsandbytes"  
                 )
             
