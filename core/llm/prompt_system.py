@@ -258,38 +258,57 @@ class PromptSystem:
 
         return "\n\n".join(context_parts)
 
+    def _format_conversation_pair(self, user_msg: Dict, assistant_msg: Dict) -> str:
+        """Formate une paire de messages utilisateur/assistant."""
+        user_content = user_msg.get("content", "").strip()
+        assistant_content = assistant_msg.get("content", "").strip()
+        
+        # Nettoyage des balises parasites
+        user_content = re.sub(r'<s>|</s>', '', user_content)
+        assistant_content = re.sub(r'<s>|</s>', '', assistant_content)
+        
+        # Suppression des balises [RESPONSE_TYPE]
+        assistant_content = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]', '', assistant_content)
+        
+        return f"[INST] {user_content} [/INST]{assistant_content}"
+        
     async def _build_conversation_history(
         self,
         history: List[Dict],
         model_name: str,
         max_messages: int = 5
-    ) -> str:
-        """Construit l'historique de conversation selon le modèle."""
+    ) -> List[str]:
+        """Construit l'historique de conversation."""
         if not history:
-            return ""
+            return []
 
-        model_type = self._detect_model_type(model_name)
-        recent_history = history[-max_messages*2:]
-        history_parts = []
-
-        for msg in recent_history:
-            if not (msg.get("role") and msg.get("content")):
+        # Filtrer et nettoyer l'historique
+        clean_history = []
+        seen_messages = set()  # Pour détecter les doublons
+        
+        for msg in history[-max_messages*2:]:  # Limitation à max_messages paires
+            content = msg.get("content", "").strip()
+            msg_id = f"{msg.get('role')}:{content}"  # Identifiant unique du message
+            
+            if not content or msg_id in seen_messages:
                 continue
+                
+            seen_messages.add(msg_id)
+            clean_history.append({
+                "role": msg.get("role"),
+                "content": content
+            })
 
-            if model_type in [ModelType.T5, ModelType.MT5]:
-                # Format T5/MT5
-                role = "question" if msg["role"] == "user" else "response"
-                history_parts.append(f"{role}: {msg['content']}")
-            elif model_type == ModelType.FALCON:
-                # Format Falcon
-                role = "User" if msg["role"] == "user" else "Assistant"
-                history_parts.append(f"{role}: {msg['content']}")
-            else:
-                # Format standard
-                role = "Utilisateur" if msg["role"] == "user" else "Assistant"
-                history_parts.append(f"{role}: {msg['content']}")
+        # Construire les paires de messages
+        conversation_pairs = []
+        for i in range(0, len(clean_history)-1, 2):
+            user_msg = clean_history[i]
+            assistant_msg = clean_history[i+1]
+            
+            if user_msg.get("role") == "user" and assistant_msg.get("role") == "assistant":
+                conversation_pairs.append(self._format_conversation_pair(user_msg, assistant_msg))
 
-        return "\n".join(history_parts)
+        return conversation_pairs
 
     async def build_chat_prompt(
         self,
@@ -336,18 +355,19 @@ class PromptSystem:
                 # Ajout de l'historique de conversation
                 if conversation_history:
                     history_parts = []
-                    history_pairs = []
-                    
                     for i in range(0, len(conversation_history), 2):
                         if i + 1 < len(conversation_history):
                             user_msg = conversation_history[i]
                             assistant_msg = conversation_history[i + 1]
                             if user_msg["role"] == "user" and assistant_msg["role"] == "assistant":
-                                pair = f"<s>[INST] {user_msg['content'].strip()} [/INST]{assistant_msg['content'].strip()}</s>"
-                                history_pairs.append(pair)
+                                user_content = user_msg["content"].strip()
+                                assistant_content = assistant_msg["content"].strip()
+                                pair = f"<s>[INST] {user_content} [/INST]{assistant_content}</s>"
+                                history_parts.append(pair)
                     
-                    if history_pairs:
-                        history_content = " ".join(history_pairs)
+                    if history_parts:
+                        # L'historique complet dans une seule balise <s>
+                        history_content = " ".join(history_parts)
                         prompt_parts.append(f"<s>[CONVERSATION_HISTORY]{history_content}[/CONVERSATION_HISTORY]</s>")
                 
                 # Ajout de la question utilisateur finale
