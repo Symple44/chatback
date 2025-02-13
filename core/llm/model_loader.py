@@ -152,7 +152,7 @@ class ModelLoader:
                 )
             
             # 5. Récupération et fusion des paramètres CUDA optimisés
-            cuda_params = self.get_model_load_parameters(
+            cuda_params = self._get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.HIGH
             )
@@ -248,7 +248,7 @@ class ModelLoader:
                 )
 
             # 5. Paramètres CUDA
-            cuda_params = self.get_model_load_parameters(
+            cuda_params = self._get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.MEDIUM
             )
@@ -322,7 +322,7 @@ class ModelLoader:
             performance_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
             
             # 2. Configuration CUDA et device
-            cuda_params = self.get_model_load_parameters(
+            cuda_params = self._get_model_load_parameters(
                 model_name=model_name,
                 model_priority=ModelPriority.LOW
             )
