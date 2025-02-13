@@ -149,8 +149,9 @@ class ModelLoader:
                     bnb_4bit_compute_dtype=quant_config.get("bnb_4bit_compute_dtype", torch.float16),
                     bnb_4bit_quant_type=quant_config.get("bnb_4bit_quant_type", "nf4"),
                     bnb_4bit_use_double_quant=quant_config.get("bnb_4bit_use_double_quant", True),
-                    llm_int8_enable_fp32_cpu_offload=quant_config.get("llm_int8_enable_fp32_cpu_offload", True),
-                    quant_method="llm_int8"  # Modifié ici
+                    bnb_4bit_quant_storage=torch.float16,  # Ajouté
+                    bnb_4bit_use_nested_quant=True,        # Ajouté
+                    use_cache=quant_config.get("use_cache", True)
                 )
             
             # 5. Récupération et fusion des paramètres CUDA optimisés
