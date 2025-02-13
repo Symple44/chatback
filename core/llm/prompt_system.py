@@ -33,14 +33,19 @@ class PromptTemplates:
     """Templates de prompts par type de modèle."""
     
     @staticmethod
-    def format_mistral(role: str, content: str) -> str:
+    def format_mistral(role: str, content: str, is_first: bool = False) -> str:
         """Format pour modèles Mistral."""
-        if role == MessageRole.SYSTEM:
-            return f"<s>[SYSTEM_PROMPT]{content}[/SYSTEM_PROMPT]</s>"
+        if is_first:
+            # Premier message (toujours système)
+            return f"<s>{content}</s>"
+        elif role == MessageRole.SYSTEM:
+            return f"{content}"
         elif role == MessageRole.USER:
-            return f"<s>[INST]{content}[/INST]</s>"
+            return f"[INST] {content} [/INST]"
+        elif role == MessageRole.ASSISTANT:
+            return content
         elif role == MessageRole.CONTEXT:
-            return f"<s>[CONTEXT]{content}[/CONTEXT]</s>"
+            return f"[CONTEXT]{content}[/CONTEXT]"
         return content
         
     @staticmethod
@@ -296,63 +301,96 @@ class PromptSystem:
         model_name: Optional[str] = None,
         prompt_prefix: Optional[str] = None,
         include_metadata: bool = True
-    ) -> List[Dict]:
+    ) -> Union[List[Dict], str]:
         """
         Construit le prompt complet pour le chat.
         """
         try:
             model_name = model_name or settings.MODEL_NAME
+            model_type = self._detect_model_type(model_name)
             template = self._get_template(model_name)
-            messages = []
-
-            # 1. Message système
-            system_content = self._build_system_message(
-                response_type=response_type,
-                language=language,
-                model_name=model_name,
-                prompt_prefix=prompt_prefix
-            )
-            messages.append({
-                "role": MessageRole.SYSTEM,
-                "content": template(MessageRole.SYSTEM, system_content)
-            })
-
-            # 2. Contexte documentaire
-            if context_docs:
-                context_content = await self._build_context_section(
-                    context_docs=context_docs,
+            
+            if model_type == ModelType.MISTRAL:
+                # Traitement spécial pour Mistral avec un format spécifique
+                prompt_parts = []
+                
+                # Construction du message système
+                system_content = self._build_system_message(
+                    response_type=response_type,
+                    language=language,
                     model_name=model_name,
-                    include_metadata=include_metadata
+                    prompt_prefix=prompt_prefix
                 )
-                if context_content:
-                    messages.append({
-                        "role": MessageRole.CONTEXT,
-                        "content": template(MessageRole.CONTEXT, context_content)
-                    })
-
-            # 3. Historique de conversation
-            if conversation_history:
-                history_content = await self._build_conversation_history(
-                    history=conversation_history,
+                prompt_parts.append(template(MessageRole.SYSTEM, f"[SYSTEM_PROMPT]{system_content}[/SYSTEM_PROMPT]", True))
+                
+                # Ajout du contexte si présent
+                if context_docs:
+                    context_content = await self._build_context_section(
+                        context_docs=context_docs,
+                        model_name=model_name,
+                        include_metadata=include_metadata
+                    )
+                    if context_content:
+                        prompt_parts.append(template(MessageRole.CONTEXT, context_content))
+                
+                # Ajout de l'historique de conversation
+                if conversation_history:
+                    history_parts = []
+                    for msg in conversation_history[-settings.MAX_HISTORY_MESSAGES*2:]:
+                        if msg["role"] == "user":
+                            history_parts.append(template(MessageRole.USER, msg["content"]))
+                        elif msg["role"] == "assistant":
+                            history_parts.append(template(MessageRole.ASSISTANT, msg["content"]))
+                
+                # Ajout de la question utilisateur
+                prompt_parts.append(template(MessageRole.USER, query))
+                
+                return " ".join(prompt_parts)
+                
+            else:
+                # Traitement standard pour les autres modèles
+                messages = []
+                
+                # Message système
+                system_content = self._build_system_message(
+                    response_type=response_type,
+                    language=language,
                     model_name=model_name,
-                    max_messages=settings.MAX_HISTORY_MESSAGES
+                    prompt_prefix=prompt_prefix
                 )
-                if history_content:
-                    messages.append({
-                        "role": MessageRole.SYSTEM,
-                        "content": template(
-                            MessageRole.SYSTEM,
-                            f"[CONVERSATION_HISTORY]{history_content}[/CONVERSATION_HISTORY]"
-                        )
-                    })
+                messages.append({
+                    "role": MessageRole.SYSTEM,
+                    "content": template(MessageRole.SYSTEM, system_content)
+                })
 
-            # 4. Question de l'utilisateur
-            messages.append({
-                "role": MessageRole.USER,
-                "content": template(MessageRole.USER, query)
-            })
+                # Contexte documentaire
+                if context_docs:
+                    context_content = await self._build_context_section(
+                        context_docs=context_docs,
+                        model_name=model_name,
+                        include_metadata=include_metadata
+                    )
+                    if context_content:
+                        messages.append({
+                            "role": MessageRole.CONTEXT,
+                            "content": template(MessageRole.CONTEXT, context_content)
+                        })
 
-            return messages
+                # Historique de conversation
+                if conversation_history:
+                    for msg in conversation_history[-settings.MAX_HISTORY_MESSAGES*2:]:
+                        messages.append({
+                            "role": msg["role"],
+                            "content": template(msg["role"], msg["content"])
+                        })
+
+                # Question utilisateur
+                messages.append({
+                    "role": MessageRole.USER,
+                    "content": template(MessageRole.USER, query)
+                })
+
+                return messages
 
         except Exception as e:
             logger.error(f"Erreur construction prompt: {e}")
