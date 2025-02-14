@@ -153,26 +153,30 @@ class ModelInference:
                 "error": str(e)
             }
 
-    def _get_generation_config(self, model_name: str, response_type: str = "comprehensive") -> Dict[str, Any]:
+    def _get_generation_config(self, response_type: str = "comprehensive") -> Dict[str, Any]:
         """
-        Retourne la configuration de génération du modèle avec ajustements selon response_type.
-        Args:
-            response_type: Type de réponse demandée
-        Returns:
-            Configuration de génération ajustée
+        Retourne la configuration de génération avec ajustements selon response_type.
         """
         try:
+            chat_model = self.model_manager.current_models[ModelType.CHAT]
+            if not chat_model:
+                raise RuntimeError("Modèle de chat non initialisé")
+
             # Récupération de la config complète du modèle
-            model_config = AVAILABLE_MODELS.get(model_name, {})
+            model_config = AVAILABLE_MODELS.get(chat_model.model_name, {})
             generation_config = model_config.get("generation_config", {})
             
-            # Configuration de base
+            # Configuration de base depuis generation_params
             config = generation_config.get("generation_params", {}).copy()
             
             # Surcharge avec les paramètres spécifiques au type de réponse
-            response_config = generation_config.get("response_types", {}).get(response_type, {})
-            config.update(response_config)
-            
+            if response_type:
+                response_config = generation_config.get("response_types", {}).get(response_type, {})
+                # Debug pour voir ce qui est appliqué
+                logger.debug(f"Response config for {response_type}: {response_config}")
+                config.update(response_config)
+                
+            logger.debug(f"Final generation config: {config}")
             return config
 
         except Exception as e:
