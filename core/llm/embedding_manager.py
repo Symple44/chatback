@@ -103,7 +103,7 @@ class EmbeddingManager:
                 texts = [texts]
 
             # Utilisation de la configuration de performance
-            batch_size = batch_size or self.perf_config["batch_size"]
+            batch_size = batch_size or self.perf_config.get("embedding_params", {}).get("batch_size", 32)
             embeddings = []
 
             # Configuration d'embedding

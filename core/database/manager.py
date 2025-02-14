@@ -105,6 +105,11 @@ class DatabaseManager:
         """
         async with self.session_factory() as session:
             try:
+                # S'assurer que les vecteurs ne sont pas vides
+                if not query_vector or len(query_vector) == 0:
+                    query_vector = [0.0] * 768  # Dimension par défaut
+                if not response_vector or len(response_vector) == 0:
+                    response_vector = [0.0] * 768  # Dimension par défaut
                 # Création de l'historique avec les nouveaux champs
                 chat_history = ChatHistory(
                     id=uuid.uuid4(),
