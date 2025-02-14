@@ -172,8 +172,8 @@ class ModelInference:
             # Surcharge avec les paramètres spécifiques au type de réponse
             if response_type:
                 response_config = generation_config.get("response_types", {}).get(response_type, {})
-                # Debug pour voir ce qui est appliqué
-                logger.debug(f"Response config for {response_type}: {response_config}")
+                # On retire le paramètre 'style' qui n'est pas un paramètre de génération
+                response_config = {k: v for k, v in response_config.items() if k != 'style'}
                 config.update(response_config)
                 
             logger.debug(f"Final generation config: {config}")

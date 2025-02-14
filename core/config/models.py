@@ -44,7 +44,7 @@ AVAILABLE_MODELS = {
                 "top_p": 0.95,
                 "top_k": 40,
                 "do_sample": True,
-                "num_beams": 1,
+                "num_beams": 4,
                 "min_new_tokens": 32,
                 "max_new_tokens": 1024,
                 "length_penalty": 1.0,
@@ -121,7 +121,7 @@ AVAILABLE_MODELS = {
                 "top_p": 0.95,
                 "top_k": 50,
                 "do_sample": True,
-                "num_beams": 1,
+                "num_beams": 4,
                 "min_new_tokens": 32,
                 "max_new_tokens": 4096,
                 "length_penalty": 1.0,
@@ -184,7 +184,6 @@ AVAILABLE_MODELS = {
             "offload_folder": "offload_folder",
             "attn_implementation": "flash_attention_2"
         },
-        # Configuration spécifique pour le modèle 24B
         "generation_config": {
             "preprocessing": {
                 "max_input_length": 24576,
@@ -198,7 +197,7 @@ AVAILABLE_MODELS = {
                 "top_p": 0.95,
                 "top_k": 50,
                 "do_sample": True,
-                "num_beams": 1,
+                "num_beams": 4,
                 "min_new_tokens": 32,
                 "max_new_tokens": 4096,
                 "length_penalty": 1.0,
