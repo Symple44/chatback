@@ -331,29 +331,21 @@ class TokenizerManager:
                 clean_up_tokenization_spaces=False
             )
 
-            # 2. Nettoyage des balises multiples et espaces
-            response = re.sub(r'\[INST\]\s*\[INST\]', '[INST]', response)
-            response = re.sub(r'\[/INST\]\s*\[/INST\]', '[/INST]', response)
+            # 2. Extraction de la réponse après la dernière balise [/INST]
+            parts = response.split("[/INST]")
+            if len(parts) > 1:
+                # Prendre uniquement la dernière partie après [/INST]
+                response = parts[-1]
             
-            # 3. Suppression des balises système et contexte
-            patterns_to_remove = [
-                r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]',
-                r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]',
-                r'\[CONTEXT\].*?\[/CONTEXT\]',
-                r'<s>|</s>',          # Balises de début/fin de séquence
-                r'\[INST\]|\[/INST\]' # Balises d'instruction
-            ]
+            # 3. Nettoyage des balises restantes
+            response = re.sub(r'<s>|</s>', '', response)
+            response = re.sub(r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]', '', response, flags=re.DOTALL)
+            response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]', '', response, flags=re.DOTALL)
+            response = re.sub(r'\[CONTEXT\].*?\[/CONTEXT\]', '', response, flags=re.DOTALL)
             
-            for pattern in patterns_to_remove:
-                response = re.sub(pattern, '', response, flags=re.DOTALL)
-            
-            # 4. Nettoyage avancé
-            # Supprimer les espaces multiples
-            response = re.sub(r'\s+', ' ', response)
-            # Supprimer les espaces en début et fin
-            response = response.strip()
-            # Supprimer les lignes vides multiples
-            response = re.sub(r'\n\s*\n', '\n', response)
+            # 4. Nettoyage des espaces et formatage
+            response = re.sub(r'\s+', ' ', response)  # Remplace les espaces multiples par un seul
+            response = response.strip()  # Supprime les espaces au début et à la fin
             
             # 5. Vérification finale
             if not response:
