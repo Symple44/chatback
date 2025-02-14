@@ -165,7 +165,7 @@ AVAILABLE_MODELS = {
         "context_length": 32768,
         "gpu_requirements": {
             "vram_required": "22GB",
-            "recommended_batch_size": 8
+            "recommended_batch_size": 4
         },
         "quantization": "bitsandbytes-4bit",
         "capabilities": ["chat", "instruction", "function_calling"],
@@ -197,7 +197,7 @@ AVAILABLE_MODELS = {
                 "top_p": 0.95,
                 "top_k": 50,
                 "do_sample": True,
-                "num_beams": 4,
+                "num_beams": 2,
                 "min_new_tokens": 32,
                 "max_new_tokens": 4096,
                 "length_penalty": 1.0,
@@ -277,7 +277,7 @@ MODEL_PERFORMANCE_CONFIGS = {
         }
     },
     "Mistral-Small-24B-Instruct-2501": {
-        "batch_size": 8,
+        "batch_size": 4,
         "prefetch_factor": 2,
         "num_workers": 4,
         "pin_memory": True,
@@ -286,14 +286,18 @@ MODEL_PERFORMANCE_CONFIGS = {
             "shuffle_buffer_size": 10000
         },
         "execution": {
-            "forward_batch_size": 8,
+            "forward_batch_size": 4,
             "mixed_precision": True,
             "gradient_checkpointing": True
         },
         "optimization": {
             "weight_tying": True,
             "memory_efficient_attention": True,
-            "use_kernel_injection": True
+            "use_kernel_injection": True,
+            "enable_cuda_graph": True,
+            "enable_flash_attention": True,
+            "enable_mem_efficient_cross_attention": True,
+            "enable_jit_fuser": True
         }
     }
 }
