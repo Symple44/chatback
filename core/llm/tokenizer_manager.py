@@ -306,32 +306,60 @@ class TokenizerManager:
         tokenizer_type: Optional[TokenizerType] = TokenizerType.CHAT,
         clean_up_tokenization_spaces: bool = True
     ) -> str:
+        """
+        Décode et nettoie la réponse du modèle.
+        
+        Args:
+            token_ids: Tensor de tokens à décoder
+            skip_special_tokens: Si True, ignore les tokens spéciaux
+            model_name: Nom du modèle (optionnel)
+            tokenizer_type: Type de tokenizer
+            clean_up_tokenization_spaces: Si True, nettoie les espaces
+            
+        Returns:
+            Texte nettoyé
+        """
         try:
             tokenizer = self.get_tokenizer(model_name, tokenizer_type)
             if not tokenizer:
                 raise ValueError(f"Tokenizer non trouvé pour {model_name}")
 
-            # Décodage initial
+            # 1. Décodage initial sans nettoyage
             response = tokenizer.decode(
                 token_ids,
                 skip_special_tokens=False,
                 clean_up_tokenization_spaces=False
             )
 
-            # Nettoyage des balises multiples
+            # 2. Nettoyage des balises multiples et espaces
             response = re.sub(r'\[INST\]\s*\[INST\]', '[INST]', response)
             response = re.sub(r'\[/INST\]\s*\[/INST\]', '[/INST]', response)
-
-            # Extraction de la réponse selon le format Mistral
-            if "[/INST]" in response:
-                response = response.split("[/INST]")[-1].strip()
-
-            # Suppression des marqueurs système et autres
-            response = re.sub(r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]', '', response, flags=re.DOTALL)
-            response = re.sub(r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]', '', response, flags=re.DOTALL)
-            response = re.sub(r'\[CONTEXT\].*?\[/CONTEXT\]', '', response, flags=re.DOTALL)
-
-            return response.strip()
+            
+            # 3. Suppression des balises système et contexte
+            patterns_to_remove = [
+                r'\[SYSTEM_PROMPT\].*?\[/SYSTEM_PROMPT\]',
+                r'\[RESPONSE_TYPE\].*?\[/RESPONSE_TYPE\]',
+                r'\[CONTEXT\].*?\[/CONTEXT\]',
+                r'<s>|</s>',          # Balises de début/fin de séquence
+                r'\[INST\]|\[/INST\]' # Balises d'instruction
+            ]
+            
+            for pattern in patterns_to_remove:
+                response = re.sub(pattern, '', response, flags=re.DOTALL)
+            
+            # 4. Nettoyage avancé
+            # Supprimer les espaces multiples
+            response = re.sub(r'\s+', ' ', response)
+            # Supprimer les espaces en début et fin
+            response = response.strip()
+            # Supprimer les lignes vides multiples
+            response = re.sub(r'\n\s*\n', '\n', response)
+            
+            # 5. Vérification finale
+            if not response:
+                return "Désolé, je n'ai pas pu générer une réponse valide."
+                
+            return response
 
         except Exception as e:
             logger.error(f"Erreur décodage pour {model_name}: {e}")
