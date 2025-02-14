@@ -115,7 +115,7 @@ class GenericProcessor(BaseProcessor):
 
             # Enrichissement des métadonnées
             enriched_metadata = {
-                "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None,
+                "model_name": await self._get_current_model_name(),
                 "history_used": history_used,
                 "history_length": len(conversation_history) if conversation_history else 0,
                 "response_type": response_type,
