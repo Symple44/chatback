@@ -17,7 +17,7 @@ from core.config.models import (
     AVAILABLE_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
-    MODEL_PERFORMANCE_CONFIGS
+    MODEL_PERFORMANCE_CONFIGS,
 )
 
 logger = get_logger("model_manager")
@@ -227,9 +227,9 @@ class ModelManager:
         if model_type == ModelType.CHAT:
             return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
         elif model_type == ModelType.EMBEDDING:
-            return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
+            return EMBEDDING_MODELS.get(model_name, {}).get("generation_config", {})
         elif model_type == ModelType.SUMMARIZER:
-            return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
+            return SUMMARIZER_MODELS.get(model_name, {}).get("generation_config", {})
         return {}
 
     async def _check_system_resources(self) -> bool:

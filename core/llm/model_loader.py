@@ -20,9 +20,7 @@ from core.config.models import (
     AVAILABLE_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
-    MODEL_PERFORMANCE_CONFIGS,
-    EMBEDDING_PERFORMANCE_CONFIGS,    
-    SUMMARIZER_PERFORMANCE_CONFIGS
+    MODEL_PERFORMANCE_CONFIGS
 )
 from core.utils.logger import get_logger
 from core.llm.cuda_manager import ModelPriority
@@ -221,7 +219,7 @@ class ModelLoader:
             
             # 1. Récupération des configurations
             model_config = SUMMARIZER_MODELS[model_name]
-            performance_config = SUMMARIZER_PERFORMANCE_CONFIGS[model_name]
+            performance_config = model_config.get("generation_config", {})
             
             # 2. Configuration du tokenizer
             tokenizer = self.tokenizer_manager.get_tokenizer(
@@ -316,7 +314,7 @@ class ModelLoader:
             
             # 1. Récupération des configurations
             model_config = EMBEDDING_MODELS[model_name]
-            performance_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
+            performance_config = model_config.get("generation_config", {})
             
             # 2. Configuration CUDA et device
             cuda_params = self._get_model_load_parameters(
@@ -419,9 +417,9 @@ class ModelLoader:
             if model_type == ModelType.CHAT:
                 return MODEL_PERFORMANCE_CONFIGS.get(model_name, {})
             elif model_type == ModelType.EMBEDDING:
-                return EMBEDDING_PERFORMANCE_CONFIGS.get(model_name, {})
+                return EMBEDDING_MODELS.get(model_name, {}).get("generation_config", {})
             elif model_type == ModelType.SUMMARIZER:
-                return SUMMARIZER_PERFORMANCE_CONFIGS.get(model_name, {})
+                return SUMMARIZER_MODELS.get(model_name, {}).get("generation_config", {})
             return {}
         except Exception as e:
             logger.error(f"Erreur récupération config performance {model_name}: {e}")

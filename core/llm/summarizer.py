@@ -62,7 +62,7 @@ class DocumentSummarizer:
             self.model_name = model_name
             self.model = new_model
             self.model_config = SUMMARIZER_MODELS[model_name]
-            performance_config = model_config.get("generation_config", {})
+            self.perf_config = self.model_config.get("generation_config", {})
 
             return True
 

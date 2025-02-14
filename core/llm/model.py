@@ -153,7 +153,7 @@ class ModelInference:
                 "error": str(e)
             }
 
-    def _get_generation_config(self, response_type: str = "comprehensive") -> Dict[str, Any]:
+    def _get_generation_config(self, model_name: str, response_type: str = "comprehensive") -> Dict[str, Any]:
         """
         Retourne la configuration de génération du modèle avec ajustements selon response_type.
         Args:

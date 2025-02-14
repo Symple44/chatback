@@ -75,7 +75,7 @@ class EmbeddingManager:
             self.model_name = model_name
             self.model = new_model
             self.model_config = EMBEDDING_MODELS[model_name]
-            self.perf_config = EMBEDDING_PERFORMANCE_CONFIGS[model_name]
+            self.perf_config = self.model_config.get("generation_config", {})
             
             # Vider le cache car les dimensions peuvent changer
             self.embedding_cache.clear()

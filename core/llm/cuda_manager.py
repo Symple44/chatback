@@ -201,46 +201,6 @@ class CUDAManager:
             logger.error(f"Erreur application configuration système: {e}")
             raise
 
-    def get_model_load_parameters(
-        self,
-        model_name: str,
-        priority: ModelPriority = ModelPriority.HIGH
-    ) -> Dict[str, Any]:
-        """Retourne les paramètres optimaux pour le chargement du modèle."""
-        load_params = {
-            "torch_dtype": self.config.compute_dtype,
-            "trust_remote_code": True
-        }
-
-        if self.config.device_type == DeviceType.CUDA:
-            # Gestion de la mémoire selon la priorité
-            mem_configs = {
-                ModelPriority.HIGH: {0: "16GiB", "cpu": "12GB"},     # Pour modèles de chat
-                ModelPriority.MEDIUM: {0: "4GiB", "cpu": "8GB"},    # Pour summarizers
-                ModelPriority.LOW: {0: "2GiB", "cpu": "4GB"}        # Pour embeddings
-            }
-            
-            mem_config = mem_configs[priority]
-            
-            # Validation de la mémoire disponible
-            if not self._check_memory_availability(priority):
-                # Fallback vers CPU si pas assez de VRAM
-                mem_config = {"cpu": mem_config["cpu"]}
-
-            load_params.update({
-                "device_map": "auto",
-                "max_memory": mem_config,
-                "low_cpu_mem_usage": True,
-                "offload_folder": "offload_folder"
-            })
-
-            # Optimisations spécifiques selon la priorité
-            if priority == ModelPriority.HIGH:
-                if self.config.use_flash_attention:
-                    load_params["attn_implementation"] = "flash_attention_2"
-
-        return load_params
-
     def _check_memory_availability(self, priority: ModelPriority) -> bool:
         """Vérifie si assez de VRAM est disponible pour la priorité donnée."""
         if not torch.cuda.is_available():
