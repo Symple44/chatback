@@ -11,6 +11,7 @@ from core.utils.metrics import metrics
 from core.database.models import ChatHistory, ReferencedDocument
 from core.database.base import DatabaseSession
 from core.llm.prompt_system import PromptSystem
+from core.llm.model_loader import ModelType
 
 from api.models.responses import (
     ChatResponse,
@@ -115,7 +116,7 @@ class GenericProcessor(BaseProcessor):
 
             # Enrichissement des métadonnées
             enriched_metadata = {
-                "model_name": await self._get_current_model_name(),
+                "model_name": await self.model_manager.current_models[ModelType.CHAT],
                 "history_used": history_used,
                 "history_length": len(conversation_history) if conversation_history else 0,
                 "response_type": response_type,
@@ -194,6 +195,14 @@ class GenericProcessor(BaseProcessor):
     ):
         """Sauvegarde l'interaction en base de données."""
         try:
+            # Préparation des documents référencés
+            referenced_docs = [{
+                "title": doc.get("title", "Unknown Document"),
+                "metadata": doc.get("metadata", {}),
+                "score": doc.get("score", 0.0),
+                "content": doc.get("content", "")
+            } for doc in relevant_docs] if relevant_docs else []
+
             async with DatabaseSession() as session:
                 # Création de l'historique
                 chat_history = ChatHistory(
@@ -222,11 +231,11 @@ class GenericProcessor(BaseProcessor):
                         ref_doc = ReferencedDocument(
                             id=uuid.uuid4(),
                             chat_history_id=chat_history.id,
-                            document_name=doc.get("title", "Unknown Document"), 
-                            page_number=doc.get("metadata", {}).get("page", 1), 
-                            relevance_score=float(doc.get("score", 0.0)),
-                            content_snippet=doc.get("content", ""),
-                            metadata=doc.get("metadata", {})
+                            document_name=doc["title"], 
+                            page_number=doc["metadata"].get("page", 1), 
+                            relevance_score=float(doc["score"]),
+                            content_snippet=doc["content"],
+                            metadata=doc["metadata"]
                         )
                         session.add(ref_doc)
 
