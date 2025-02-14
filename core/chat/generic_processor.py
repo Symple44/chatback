@@ -47,19 +47,19 @@ class GenericProcessor(BaseProcessor):
             if not session_id:
                 return self._create_error_response("Session ID is required")
                 
-            # Récupération de l'historique de conversation si un context existe
+            # Récupération de l'historique de conversation
             conversation_history = []
+            history_used = False
             if context and "history" in context:
                 conversation_history = context["history"]
+                history_used = True
             elif session_id:
                 history = await self.components.session_manager.get_session_history(
                     session_id=session_id,
                     limit=settings.MAX_HISTORY_MESSAGES
                 )
                 # Formatage de l'historique pour le prompt
-                conversation_history = []
                 for msg in history:
-                    # msg est un Record SQL, nous extrayons les champs nécessaires
                     conversation_history.extend([
                         {
                             "role": "user",
@@ -71,7 +71,8 @@ class GenericProcessor(BaseProcessor):
                             "content": msg.response,
                             "timestamp": msg.created_at.isoformat() if hasattr(msg, 'created_at') else datetime.utcnow().isoformat()
                         }
-                    ])  # Ajout des messages utilisateur et assistant
+                    ])
+                history_used = len(conversation_history) > 0
 
             # Génération de l'embedding pour la recherche
             query_vector = await self.model.create_embedding(query)
@@ -95,21 +96,46 @@ class GenericProcessor(BaseProcessor):
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
                 context_docs=filtered_docs,
-                conversation_history=conversation_history,  # Ajout de l'historique
+                conversation_history=conversation_history,
                 language=request.get("language", "fr")
             )
+
+            # Détermination du type de réponse
+            response_type = request.get("response_type", "comprehensive")
 
             # Génération de la réponse
             model_response = await self.model.generate_response(
                 messages=messages,
                 language=request.get("language", "fr"),
-                response_type=request.get("response_type", "comprehensive")
+                response_type=response_type
             )
             
             response_text = model_response.get("response", "")
             processing_time = (datetime.utcnow() - start_time).total_seconds()
 
-            # Sauvegarde de l'interaction
+            # Enrichissement des métadonnées
+            enriched_metadata = {
+                "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None,
+                "history_used": history_used,
+                "history_length": len(conversation_history) if conversation_history else 0,
+                "response_type": response_type,
+                "processor_type": "generic",
+                "documents_found": len(filtered_docs),
+                "context_quality": float(sum(doc.get("score", 0) for doc in filtered_docs) / len(filtered_docs)) if filtered_docs else 0.0,
+                "chat_context": {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "language": request.get("language", "fr"),
+                    "session_active": True
+                },
+                "processing_info": {
+                    "total_time": processing_time,
+                    "embedding_generated": query_vector is not None,
+                    "prompt_tokens": model_response.get("tokens_used", {}).get("input", 0),
+                    "completion_tokens": model_response.get("tokens_used", {}).get("output", 0)
+                }
+            }
+
+            # Sauvegarde de l'interaction avec les métadonnées enrichies
             chat_history_id = await self.components.db_manager.save_chat_interaction(
                 session_id=session_id,
                 user_id=request.get("user_id"),
@@ -127,15 +153,7 @@ class GenericProcessor(BaseProcessor):
                     "snippet": doc.get("content", ""),
                     "metadata": doc.get("metadata", {})
                 } for doc in filtered_docs] if filtered_docs else None,
-                metadata={
-                    "processor_type": "generic",
-                    "documents_found": len(filtered_docs),
-                    "language": request.get("language", "fr"),
-                    "response_type": request.get("response_type", "comprehensive"),
-                    "model_name": self.model.model_name if hasattr(self.model, 'model_name') else None,
-                    "history_used": bool(conversation_history),  # Ajout d'un indicateur d'utilisation de l'historique
-                    "history_length": len(conversation_history) if conversation_history else 0
-                },
+                metadata=enriched_metadata,
                 raw_response=model_response.get("metadata", {}).get("raw_response"),
                 raw_prompt=model_response.get("metadata", {}).get("raw_prompt")
             )
@@ -157,16 +175,7 @@ class GenericProcessor(BaseProcessor):
                 processing_time=float(processing_time),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 tokens_details=model_response.get("tokens_used", {}),
-                metadata={
-                    "processor_type": "generic",
-                    "documents_found": len(filtered_docs),
-                    "context_quality": float(sum(doc.get("score", 0) for doc in filtered_docs) / len(filtered_docs)) if filtered_docs else 0.0,
-                    "processing_info": {
-                        "embedding_generated": query_vector is not None,
-                        "history_used": bool(conversation_history),
-                        "history_messages": len(conversation_history) if conversation_history else 0,
-                    }
-                }
+                metadata=enriched_metadata
             )
 
         except Exception as e:
