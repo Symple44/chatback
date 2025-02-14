@@ -144,15 +144,7 @@ class ModelLoader:
             # 4. Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
-                load_params["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=quant_config.get("load_in_4bit", True),
-                    bnb_4bit_compute_dtype=quant_config.get("bnb_4bit_compute_dtype", torch.float16),
-                    bnb_4bit_quant_type=quant_config.get("bnb_4bit_quant_type", "nf4"),
-                    bnb_4bit_use_double_quant=quant_config.get("bnb_4bit_use_double_quant", True),
-                    bnb_4bit_quant_storage=torch.float16,  # Ajouté
-                    bnb_4bit_use_nested_quant=True,        # Ajouté
-                    use_cache=quant_config.get("use_cache", True)
-                )
+                load_params["quantization_config"] = BitsAndBytesConfig(**quant_config)
             
             # 5. Récupération et fusion des paramètres CUDA optimisés
             cuda_params = self._get_model_load_parameters(
