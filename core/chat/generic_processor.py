@@ -116,7 +116,7 @@ class GenericProcessor(BaseProcessor):
 
             # Enrichissement des métadonnées
             enriched_metadata = {
-                "model_name": await self.model_manager.current_models[ModelType.CHAT],
+                "model_name": self.components.model_manager.current_models[ModelType.CHAT].model_name if self.components.model_manager.current_models[ModelType.CHAT] else settings.MODEL_NAME,
                 "history_used": history_used,
                 "history_length": len(conversation_history) if conversation_history else 0,
                 "response_type": response_type,
