@@ -175,9 +175,10 @@ class ModelLoader:
                     **final_params
                 )
 
-                # Configuration du pad_token_id dans le modèle
-                if model.config.pad_token_id is None:
+                # Configuration du pad_token_id dans le modèle avant utilisation
+                if not hasattr(model.config, 'pad_token_id') or model.config.pad_token_id is None:
                     model.config.pad_token_id = model.config.eos_token_id
+                    model.generation_config.pad_token_id = model.config.eos_token_id  # Important pour la génération
 
             # 9. Configuration post-chargement
             model.eval()
