@@ -18,6 +18,7 @@ class Metrics:
         self.search_metrics = defaultdict(lambda: defaultdict(float))
         self.cache_stats = defaultdict(int)
         self.request_tracking = {}
+        self.cache_stats = defaultdict(int) 
         
         # Protection thread
         self._lock = threading.Lock()
@@ -99,6 +100,13 @@ class Metrics:
                 "cache_hit_rate": cache_hit_rate,
                 "methods": methods_metrics
             }
+    
+    def get_cache_hit_rate(self) -> float:
+        """Calcule le taux de succès du cache."""
+        with self._lock:
+            total = self.cache_stats.get("total", 0)
+            hits = self.cache_stats.get("hits", 0)
+            return hits / total if total > 0 else 0.0
 
     def get_latest_timings(self) -> Dict[str, float]:
         """Retourne les derniers timings enregistrés."""

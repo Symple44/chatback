@@ -114,13 +114,16 @@ class SearchManager:
         """Récupère un résultat du cache."""
         cached = self.cache.get(key)
         if not cached:
+            metrics.track_cache_operation(hit=False)
             return None
             
         timestamp, results = cached
         if (datetime.utcnow() - timestamp).seconds > self.cache_ttl:
             del self.cache[key]
+            metrics.track_cache_operation(hit=False)
             return None
-            
+        
+        metrics.track_cache_operation(hit=True)
         return results
 
     def _cache_results(self, key: str, results: List[Dict]):

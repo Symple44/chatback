@@ -280,17 +280,17 @@ async def get_search_methods():
 
 @router.get("/search/status")
 async def get_search_status(components=Depends(get_components)) -> Dict[str, Any]:
-    """
-    Retourne le statut actuel du système de recherche.
-    """
+    """Retourne le statut actuel du système de recherche."""
     try:
+        cache_hit_rate = metrics.get_cache_hit_rate() if hasattr(metrics, 'get_cache_hit_rate') else 0.0
+        
         status = {
             "active_method": components.search_manager.current_method.value,
             "enabled": components.search_manager.enabled,
             "current_params": components.search_manager.current_params,
             "cache": {
                 "size": len(components.search_manager.cache),
-                "hit_rate": metrics.get_cache_hit_rate()
+                "hit_rate": cache_hit_rate
             },
             "performance": {
                 "average_response_time": metrics.get_timer_value("search_time"),
