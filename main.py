@@ -168,15 +168,7 @@ class ComponentManager:
                     )
                     if await drive_manager.initialize():
                         self._components["drive_manager"] = drive_manager
-                        # Exécuter une synchronisation initiale
-                        downloaded_files = await drive_manager.sync_drive_folder(
-                            settings.GOOGLE_DRIVE_FOLDER_ID,
-                            save_path="documents"
-                        )
-                        if downloaded_files:
-                            logger.info(f"Synchronisation initiale terminée: {len(downloaded_files)} fichiers téléchargés")
-                        else:
-                            logger.info("Aucun nouveau fichier à synchroniser")
+                        await self.sync_drive_documents()
                         logger.info("Google Drive manager initialisé")
                 
                 self.initialized = True
@@ -186,7 +178,48 @@ class ComponentManager:
                 logger.critical(f"Erreur critique lors de l'initialisation: {e}")
                 await self.cleanup()
                 raise
+            
+    async def sync_drive_documents(self):
+        """Synchronise les documents."""
+        try:
+            downloaded_files = set()
+            if "drive_manager" in self._components:
+                downloaded_files = await self._components["drive_manager"].sync_drive_folder(
+                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    save_path="documents"
+                )
 
+            indexed_count = 0
+            for app_dir in Path("documents").iterdir():
+                if not app_dir.is_dir():
+                    continue
+
+                app_name = app_dir.name
+                logger.info(f"Traitement de l'application: {app_name}")
+
+                for pdf_path in app_dir.glob("*.pdf"):
+                    try:
+                        if str(pdf_path) not in downloaded_files:
+                            success = await self._components["pdf_processor"].index_pdf(
+                                str(pdf_path),
+                                metadata={
+                                    "application": app_name,
+                                    "sync_date": datetime.utcnow().isoformat(),
+                                    "source": "local_filesystem"
+                                }
+                            )
+                            if success:
+                                indexed_count += 1
+                    except Exception as e:
+                        logger.error(f"Erreur indexation {pdf_path}: {e}")
+
+            logger.info(f"Indexation terminée: {indexed_count} documents indexés")
+            return indexed_count
+
+        except Exception as e:
+            logger.error(f"Erreur synchronisation: {e}")
+            return 0
+        
     async def cleanup(self):
         """Nettoie proprement toutes les ressources."""
         try:
