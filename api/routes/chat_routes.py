@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..models.requests import ChatRequest
-from ..models.responses import ChatResponse, ErrorResponse, VectorStats, DocumentReference, SimilarQuestion
+from ..models.responses import ChatResponse, ErrorResponse, VectorStats, DocumentReference, SimilarQuestion, SearchMetrics, SearchMetadata
 from ..dependencies import get_components
 from core.utils.logger import get_logger
 from core.database.base import get_session_manager
