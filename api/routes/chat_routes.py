@@ -23,6 +23,7 @@ from core.config.config import settings
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 
+
 #A supprimer
 from core.chat.processor import ChatProcessor
 
@@ -32,91 +33,120 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/", response_model=ChatResponse)
 async def process_chat_message(
     request: ChatRequest,
-    background_tasks: BackgroundTasks,
     components=Depends(get_components)
 ) -> ChatResponse:
     """
-    Traite une requête de chat et retourne une réponse complète.
-    
-    Args:
-        request: Requête de chat
-        vector_search: Active/désactive la recherche vectorielle
-        background_tasks: Tâches d'arrière-plan
-        components: Composants de l'application
-        
-    Returns:
-        Réponse du chat
+    Traite une requête de chat avec configuration de recherche personnalisée.
     """
     try:
-        # 1. Vérification de l'utilisateur
-        async with DatabaseSession() as session:
-            user = await session.execute(
-                select(User).where(User.id == request.user_id)
-            )
-            user = user.scalar_one_or_none()
-            if not user:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Utilisateur non trouvé"
-                )
+        # Initialisation des métriques de requête
+        request_id = str(uuid.uuid4())
+        metrics.start_request_tracking(request_id)
 
-        # 2. Récupération ou création de la session
+        # Vérification et obtention de la session
         chat_session = await components.session_manager.get_or_create_session(
-            str(request.session_id) if request.session_id else None,
-            str(request.user_id),
-            request.metadata
-        )
-        
-        # Préparation du contexte avec paramètres de recherche
-        session_context = {
-            "history": chat_session.session_context.get("history", []),
-            "metadata": request.metadata,
-            "session_id": chat_session.session_id,
-            "search_config": {
-                "method": request.search_method,
-                "params": request.search_params
+            session_id=request.session_id,
+            user_id=request.user_id,
+            metadata={
+                "search_config": request.search_config.dict() if request.search_config else None,
+                "application": request.application
             }
-        }
-        
+        )
+
         # Obtention du processeur approprié
-        processor = await ProcessorFactory.get_processor(
+        processor = await components.processor_factory.get_processor(
             business_type=request.business,
             components=components
         )
-        
-        # Configuration de la recherche
-        if hasattr(processor, 'search_manager'):
-            processor.search_manager.configure(
-                method=request.search_method,
-                search_params=request.search_params,
-                metadata_filter={"application": request.application} if request.application else None
-            )
 
         # Traitement du message
-        start_time = datetime.utcnow()
-        response = await processor.process_message(
-            request={
-                **request.dict(exclude_unset=True),
-                "session_id": chat_session.session_id,
-                "context": session_context
-            }
-        )
+        response = await processor.process_message(request=request)
 
         # Mise à jour des métriques
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        metrics.record_time("chat_processing", processing_time)
-
+        metrics.finish_request_tracking(request_id)
+        
         return response
 
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        logger.error(f"Erreur traitement message: {e}", exc_info=True)
         metrics.increment_counter("chat_errors")
-        await log_error(components, e, request)
+        logger.error(f"Erreur traitement message: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/search/config")
+async def get_search_configuration() -> Dict[str, Any]:
+    """
+    Retourne la configuration des méthodes de recherche disponibles.
+    """
+    from core.config.search_config import SEARCH_STRATEGIES_CONFIG
+    
+    return {
+        "methods": [method.value for method in SearchMethod],
+        "default_method": SearchMethod.RAG.value,
+        "configurations": SEARCH_STRATEGIES_CONFIG,
+        "performance_metrics": await get_search_metrics()
+    }
+
+@router.get("/search/metrics")
+async def get_search_metrics() -> SearchMetrics:
+    """
+    Retourne les métriques détaillées de recherche.
+    """
+    metrics_data = metrics.get_search_metrics()
+    
+    return SearchMetrics(
+        total_searches=metrics_data["total_searches"],
+        success_rate=metrics_data["success_rate"],
+        average_time=metrics_data["average_time"],
+        cache_hit_rate=metrics_data["cache_hit_rate"],
+        methods_usage={
+            method.value: metrics_data["methods"].get(method.value, {})
+            for method in SearchMethod
+        },
+        timestamp=datetime.utcnow()
+    )
+
+@router.post("/search/test")
+async def test_search_configuration(
+    config: SearchConfig,
+    query: str = Query(..., min_length=1),
+    components=Depends(get_components)
+) -> Dict[str, Any]:
+    """
+    Teste une configuration de recherche spécifique.
+    """
+    try:
+        # Création d'un SearchManager temporaire pour le test
+        search_manager = components.search_manager.__class__(components)
+        search_manager.configure(
+            method=config.method,
+            search_params=config.params,
+            metadata_filter=config.metadata_filter
+        )
+
+        # Exécution de la recherche
+        start_time = datetime.utcnow()
+        results = await search_manager.search_context(
+            query=query,
+            metadata_filter=config.metadata_filter
+        )
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+
+        return {
+            "success": True,
+            "results_count": len(results),
+            "processing_time": processing_time,
+            "results": results[:3],  # Premiers résultats pour aperçu
+            "metrics": {
+                "memory_usage": metrics.get_memory_usage(),
+                "cache_status": search_manager._get_cache_stats()
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Erreur test configuration: {e}")
         raise HTTPException(
             status_code=500,
-            detail="Une erreur interne est survenue."
+            detail=f"Erreur test configuration: {str(e)}"
         )
 
 @router.get("/stream")
