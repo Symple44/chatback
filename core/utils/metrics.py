@@ -52,6 +52,53 @@ class Metrics:
                 'system_metrics': self._get_system_metrics(),
                 'timestamp': datetime.utcnow().isoformat()
             }
+        
+    def get_search_metrics(self) -> Dict[str, Any]:
+        """Retourne les métriques de recherche agrégées."""
+        with self._lock:
+            total_searches = sum(
+                self.search_metrics["methods"][method]["total"]
+                for method in self.search_metrics["methods"]
+            ) if self.search_metrics.get("methods") else 0
+            
+            if total_searches == 0:
+                return {
+                    "total_searches": 0,
+                    "success_rate": 0,
+                    "average_time": 0,
+                    "cache_hit_rate": 0,
+                    "methods": {}
+                }
+
+            cache_hit_rate = (
+                self.cache_stats["hits"] / self.cache_stats["total"]
+                if self.cache_stats.get("total", 0) > 0 else 0
+            )
+
+            # Calcul des métriques par méthode
+            methods_metrics = {}
+            for method, stats in self.search_metrics.get("methods", {}).items():
+                if stats["total"] > 0:
+                    methods_metrics[method] = {
+                        "total": stats["total"],
+                        "success_rate": stats.get("successes", 0) / stats["total"],
+                        "average_time": stats.get("total_time", 0) / stats["total"],
+                        "results_per_search": stats.get("results_count", 0) / stats["total"]
+                    }
+
+            return {
+                "total_searches": total_searches,
+                "success_rate": sum(
+                    stats.get("successes", 0) 
+                    for stats in self.search_metrics.get("methods", {}).values()
+                ) / total_searches if total_searches > 0 else 0,
+                "average_time": sum(
+                    stats.get("total_time", 0)
+                    for stats in self.search_metrics.get("methods", {}).values()
+                ) / total_searches if total_searches > 0 else 0,
+                "cache_hit_rate": cache_hit_rate,
+                "methods": methods_metrics
+            }
 
     def get_latest_timings(self) -> Dict[str, float]:
         """Retourne les derniers timings enregistrés."""

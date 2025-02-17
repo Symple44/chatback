@@ -157,112 +157,65 @@ async def test_search_configuration(
             detail=f"Erreur test configuration: {str(e)}"
         )
 
+# api/routes/chat_routes.py
+
 @router.get("/stream")
 async def stream_chat_response(
     query: str = Query(..., min_length=1),
     user_id: str = Query(...),
-    search_method: SearchMethod = Query(
-        default=SearchMethod.RAG,
-        description="Méthode de recherche"
-    ),
-    max_docs: int = Query(
-        default=settings.MAX_RELEVANT_DOCS,
-        description="Nombre maximum de documents"
-    ),
-    min_score: float = Query(
-        default=settings.CONFIDENCE_THRESHOLD,
-        description="Score minimum de confiance"
-    ),
+    search_method: SearchMethod = Query(default=SearchMethod.RAG),
     session_id: Optional[str] = None,
-    language: str = Query(default="fr", min_length=2, max_length=5),
+    language: str = Query(default="fr"),
     application: Optional[str] = None,
     components=Depends(get_components)
 ):
-    """
-    Stream une réponse de chat avec stratégie de recherche configurable.
-    """
+    """Stream une réponse de chat avec optimisation des ressources."""
+    
+    stream_manager = StreamManager()
+    
     async def event_generator():
         try:
-            # Construction des paramètres de recherche
+            # Configuration de la recherche
             search_params = {
-                "max_docs": max_docs,
-                "min_score": min_score
+                "max_docs": settings.MAX_RELEVANT_DOCS,
+                "min_score": settings.CONFIDENCE_THRESHOLD
             }
-
-            # Création de la requête
-            chat_request = ChatRequest(
-                query=query,
-                user_id=user_id,
-                session_id=session_id,
-                search_config=SearchConfig(
-                    method=search_method,
-                    params=search_params
-                ),
-                application=application,
-                language=language
-            )
-
+            
             # Récupération de la session
             chat_session = await components.session_manager.get_or_create_session(
-                str(session_id) if session_id else None,
-                str(user_id),
+                session_id=session_id,
+                user_id=user_id,
                 metadata={
                     "search_method": search_method,
                     "application": application
                 }
             )
-
+            
             # Configuration du processeur
             processor = await ProcessorFactory.get_processor(
-                business_type="generic",  # Toujours générique pour le streaming
+                business_type="generic",
                 components=components
             )
-
-            # Configuration de la recherche
-            processor.search_manager.configure(
-                method=search_method,
-                search_params=search_params,
-                metadata_filter={"application": application} if application else None
-            )
-
+            
             # Recherche du contexte
             relevant_docs = []
             if search_method != SearchMethod.DISABLED:
                 relevant_docs = await processor.search_manager.search_context(
                     query=query,
                     metadata_filter={"application": application} if application else None,
-                    max_docs=max_docs,
-                    min_score=min_score
+                    **search_params
                 )
-
+            
             # Streaming de la réponse
-            async for token in components.model.generate_streaming_response(
+            async for event in stream_manager.stream_response(
                 query=query,
+                model=components.model,
                 context_docs=relevant_docs,
-                language=language
+                language=language,
+                session=chat_session
             ):
-                yield {
-                    "event": "token",
-                    "data": json.dumps({
-                        "content": token,
-                        "type": "token"
-                    })
-                }
-
-            # Métadonnées finales
-            yield {
-                "event": "complete",
-                "data": json.dumps({
-                    "status": "completed",
-                    "metadata": {
-                        "search_method": search_method.value,
-                        "docs_used": len(relevant_docs),
-                        "search_params": search_params,
-                        "processing_time": metrics.get_timer_value("chat_processing")
-                    }
-                })
-            }
-
+                yield event
+                
         except Exception as e:
             logger.error(f"Erreur streaming: {e}", exc_info=True)
             yield {
