@@ -128,6 +128,23 @@ class GoogleDriveManager:
                         if success:
                             downloaded_files.add(file_path)
                             logger.info(f"Fichier téléchargé: {file['name']}")
+                            
+                if downloaded_files:
+                    logger.info(f"{len(downloaded_files)} nouveaux fichiers téléchargés")
+                    
+                    # Ajout de l'indexation des nouveaux fichiers
+                    for file_path in downloaded_files:
+                        if file_path.lower().endswith('.pdf'):
+                            try:
+                                success = await self.components.pdf_processor.index_pdf(
+                                    file_path,
+                                    metadata={
+                                        "source": "google_drive",
+                                        "sync_date": datetime.utcnow().isoformat()
+                                    }
+                                )
+                            except Exception as e:
+                                logger.error(f"Erreur lors de l'indexation de {file_path}: {e}")
             
             logger.info(f"Total des fichiers PDF trouvés: {total_files}")
             logger.info(f"Nombre de fichiers téléchargés: {len(downloaded_files)}")
