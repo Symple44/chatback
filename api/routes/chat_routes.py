@@ -21,6 +21,7 @@ from core.database.base import DatabaseSession
 from core.database.manager import DatabaseManager
 from core.config.config import settings
 from core.chat.processor_factory import ProcessorFactory
+from core.search.strategies import SearchMethod
 
 #A supprimer
 from core.chat.processor import ChatProcessor
@@ -32,10 +33,6 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 async def process_chat_message(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    vector_search: bool = Query(
-        default=True,
-        description="Activer/désactiver la recherche vectorielle"
-    ),
     components=Depends(get_components)
 ) -> ChatResponse:
     """
@@ -70,12 +67,15 @@ async def process_chat_message(
             request.metadata
         )
         
-        # Préparation du contexte avec le paramètre vector_search
+        # Préparation du contexte avec paramètres de recherche
         session_context = {
             "history": chat_session.session_context.get("history", []),
             "metadata": request.metadata,
             "session_id": chat_session.session_id,
-            "vector_search": vector_search  # Ajout du paramètre
+            "search_config": {
+                "method": request.search_method,
+                "params": request.search_params
+            }
         }
         
         # Obtention du processeur approprié
@@ -84,15 +84,27 @@ async def process_chat_message(
             components=components
         )
         
-        # 3. Traitement du message avec le paramètre vector_search
+        # Configuration de la recherche
+        if hasattr(processor, 'search_manager'):
+            processor.search_manager.configure(
+                method=request.search_method,
+                search_params=request.search_params,
+                metadata_filter={"application": request.application} if request.application else None
+            )
+
+        # Traitement du message
+        start_time = datetime.utcnow()
         response = await processor.process_message(
             request={
                 **request.dict(exclude_unset=True),
                 "session_id": chat_session.session_id,
-                "context": session_context,
-                "vector_search": vector_search  # Ajout du paramètre
+                "context": session_context
             }
         )
+
+        # Mise à jour des métriques
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        metrics.record_time("chat_processing", processing_time)
 
         return response
 
@@ -111,54 +123,78 @@ async def process_chat_message(
 async def stream_chat_response(
     query: str = Query(..., min_length=1),
     user_id: str = Query(...),
-    vector_search: bool = Query(
-        default=True,
-        description="Activer/désactiver la recherche vectorielle"
+    search_method: SearchMethod = Query(
+        default=SearchMethod.RAG,
+        description="Méthode de recherche"
+    ),
+    search_params: Dict[str, Any] = Query(
+        default={
+            "max_docs": settings.MAX_RELEVANT_DOCS,
+            "min_score": settings.CONFIDENCE_THRESHOLD
+        },
+        description="Paramètres de recherche"
     ),
     session_id: Optional[str] = None,
     language: str = "fr",
+    application: Optional[str] = None,
     components=Depends(get_components)
 ):
     """
-    Stream une réponse de chat.
+    Stream une réponse de chat avec stratégie de recherche configurable.
     
     Args:
         query: Question de l'utilisateur
         user_id: ID de l'utilisateur
-        vector_search: Active/désactive la recherche vectorielle
+        search_method: Méthode de recherche
+        search_params: Paramètres de recherche
         session_id: ID de session optionnel
         language: Code de langue
+        application: Application source
         components: Composants de l'application
     """
     async def event_generator():
         try:
-            # Création de la requête de chat
+            # Création de la requête
             chat_request = ChatRequest(
-                query=query, 
-                user_id=user_id, 
-                session_id=session_id
+                query=query,
+                user_id=user_id,
+                session_id=session_id,
+                search_method=search_method,
+                search_params=search_params,
+                application=application,
+                language=language
             )
 
-            # Récupération ou création de la session
+            # Récupération de la session
             chat_session = await components.session_manager.get_or_create_session(
                 str(session_id) if session_id else None,
                 str(user_id),
-                metadata={"vector_search": vector_search}  # Ajout dans les métadonnées
+                metadata={
+                    "search_method": search_method,
+                    "application": application
+                }
             )
 
-            # Configuration de la recherche vectorielle
-            search_manager = SearchManager(components)
-            search_manager.set_enabled(vector_search)
+            # Configuration du processeur
+            processor = await ProcessorFactory.get_processor(
+                business_type="generic",  # Toujours générique pour le streaming
+                components=components
+            )
 
-            # Recherche du contexte si activée
+            # Configuration de la recherche
+            processor.search_manager.configure(
+                method=search_method,
+                search_params=search_params,
+                metadata_filter={"application": application} if application else None
+            )
+
+            # Recherche du contexte
             relevant_docs = []
-            if vector_search:
-                query_vector = await components.model.create_embedding(query)
-                relevant_docs = await search_manager.search_context(
+            if search_method != SearchMethod.DISABLED:
+                relevant_docs = await processor.search_manager.search_context(
                     query=query,
-                    metadata_filter=None,
-                    min_score=settings.CONFIDENCE_THRESHOLD,
-                    max_docs=settings.MAX_RELEVANT_DOCS
+                    metadata_filter={"application": application} if application else None,
+                    **search_params
                 )
 
             # Streaming de la réponse
@@ -181,8 +217,9 @@ async def stream_chat_response(
                 "data": json.dumps({
                     "status": "completed",
                     "metadata": {
+                        "search_method": search_method,
                         "docs_used": len(relevant_docs),
-                        "vector_search_enabled": vector_search,
+                        "search_params": search_params,
                         "processing_time": metrics.get_timer_value("chat_processing")
                     }
                 })
@@ -199,6 +236,18 @@ async def stream_chat_response(
             }
 
     return EventSourceResponse(event_generator())
+
+@router.get("/search-methods")
+async def get_search_methods():
+    """Retourne les méthodes de recherche disponibles."""
+    return {
+        "methods": [method.value for method in SearchMethod],
+        "default": SearchMethod.RAG.value,
+        "configurations": {
+            method.value: SEARCH_STRATEGIES_CONFIG.get(method.value, {}).get("search_params", {})
+            for method in SearchMethod
+        }
+    }
 
 @router.get("/similar", response_model=List[Dict[str, Any]])
 async def get_similar_questions(

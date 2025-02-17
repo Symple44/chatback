@@ -61,66 +61,35 @@ class Settings(BaseSettings):
     MODEL_NAME_SUMMARIZER: str = os.getenv("MODEL_NAME_SUMMARIZER", "csebuetnlp/mT5_multilingual_XLSum")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
     MODEL_REVISION: str = os.getenv("MODEL_REVISION", "main")
-    
-    # Configuration des capacités
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
-    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
-    EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
-
-    # Configuration de génération
-    MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", "1024"))
-    MIN_NEW_TOKENS: int = int(os.getenv("MIN_NEW_TOKENS", "50"))
-    TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.4"))
-    TOP_P: float = float(os.getenv("TOP_P", "0.85"))
-    TOP_K: int = int(os.getenv("TOP_K", "40"))
-    DO_SAMPLE: bool = os.getenv("DO_SAMPLE", "true").lower() == "true"
-    NUM_BEAMS: int = int(os.getenv("NUM_BEAMS", "2"))
-    REPETITION_PENALTY: float = float(os.getenv("REPETITION_PENALTY", "1.15"))
-    LENGTH_PENALTY: float = float(os.getenv("LENGTH_PENALTY", "1.1"))
 
     # === GPU & CUDA Configuration ===
-    USE_CPU_ONLY: bool = os.getenv("USE_CPU_ONLY", "false").lower() == "true"
     CUDA_VISIBLE_DEVICES: str = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    CUDA_DEVICE_ORDER: str = os.getenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     CUDA_MEMORY_FRACTION: float = float(os.getenv("CUDA_MEMORY_FRACTION", "0.95"))
     CUDNN_BENCHMARK: bool = os.getenv("CUDNN_BENCHMARK", "true").lower() == "true"
-    CUDNN_DETERMINISTIC: bool = os.getenv("CUDNN_DETERMINISTIC", "false").lower() == "true"
-    USE_FLASH_ATTENTION: bool = os.getenv("USE_FLASH_ATTENTION", "true").lower() == "true"
     
     # Configuration CUDA avancée
     CUDA_MODULE_LOADING: str = os.getenv("CUDA_MODULE_LOADING", "LAZY")
-    CUDA_LAUNCH_BLOCKING: str = os.getenv("CUDA_LAUNCH_BLOCKING", "0")
     PYTORCH_CUDA_ALLOC_CONF: str = os.getenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:4096,garbage_collection_threshold:0.9")
     PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD: bool = os.getenv("PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD", "true").lower() == "true"
 
-    # Configuration mémoire
-    MAX_MEMORY: Dict[str, str] = {
+    # Configuration mémoire # DEPRECIATED
+    MAX_MEMORY: Dict[str, str] = { 
         "0": "22GiB",  # GPU principal
         "cpu": "24GB"  # CPU
     }
-    MEMORY_LIMIT: int = int(os.getenv("MEMORY_LIMIT", "46080"))
-    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder")
+    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder") # DEPRECIATED
 
     # Configuration quantification
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
-    USE_8BIT: bool = os.getenv("USE_8BIT", "false").lower() == "true"
-    USE_4BIT: bool = os.getenv("USE_4BIT", "false").lower() == "true"
-    BNB_4BIT_QUANT_TYPE: str = os.getenv("BNB_4BIT_QUANT_TYPE", "nf4")
-    BNB_4BIT_USE_DOUBLE_QUANT: bool = True
-    BNB_4BIT_COMPUTE_DTYPE: str = os.getenv("BNB_4BIT_COMPUTE_DTYPE", "float16")
 
     # Google Drive Configuration
     GOOGLE_DRIVE_FOLDER_ID: str = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
     GOOGLE_DRIVE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH", "")
     GOOGLE_DRIVE_SYNC_INTERVAL: int = int(os.getenv("GOOGLE_DRIVE_SYNC_INTERVAL", "3600"))
     
-    # === Document Processing ===
+    # === Document Processing === DEPRECIATED
     MAX_INPUT_LENGTH: int = int(os.getenv("MAX_INPUT_LENGTH", "8192"))
-    MAX_OUTPUT_LENGTH: int = int(os.getenv("MAX_OUTPUT_LENGTH", "1024"))
-    MAX_PROMPT_LENGTH: int = int(os.getenv("MAX_PROMPT_LENGTH", "4096"))
     MAX_CONTEXT_LENGTH: int = int(os.getenv("MAX_CONTEXT_LENGTH", "8192"))
-    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1500"))
-    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "150"))
     MAX_RELEVANT_DOCS: int = int(os.getenv("MAX_RELEVANT_DOCS", "6"))
 
     # === Server Settings ===
@@ -170,6 +139,7 @@ class Settings(BaseSettings):
     # Paramètres de configuration utilisateur (chat)
     MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
     
+    # DEPRECIATED
     SYSTEM_ROLES: Dict[str, str] = {
         "system": "Je suis {app_name}, votre assistant IA spécialisé.",
         "user": "En tant qu'utilisateur, je demande :",
@@ -177,7 +147,7 @@ class Settings(BaseSettings):
         "context": "Voici le contexte pertinent :",
     }
     
-    # Types de réponses
+    # Types de réponses DEPRECIATED
     RESPONSE_TYPES: Dict[str, Dict[str, Any]] = {
         "comprehensive": {
             "description": "Réponse détaillée et approfondie",

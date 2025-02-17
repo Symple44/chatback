@@ -144,6 +144,27 @@ class SessionResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     stats: Dict[str, Any] = Field(default_factory=dict)
 
+class SearchResult(BaseModel):
+    """Résultat de recherche enrichi."""
+    content: str = Field(..., description="Contenu trouvé")
+    score: float = Field(..., ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    source_type: str = Field(default="document")
+    relevance_details: Optional[Dict[str, Any]] = None
+
+class SearchMetadata(BaseModel):
+    """Métadonnées de recherche."""
+    method: SearchMethod
+    params: Dict[str, Any]
+    stats: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "total_found": 0,
+            "processed": 0,
+            "processing_time": 0.0
+        }
+    )
+    timing: Dict[str, float] = Field(default_factory=dict)
+
 class ChatResponse(BaseModel):
     """Réponse complète du chat."""
     model_config = ConfigDict(
@@ -160,7 +181,13 @@ class ChatResponse(BaseModel):
     response: str = Field(..., min_length=1)
     session_id: UUID4
     conversation_id: UUID4
-    documents: List[DocumentReference] = Field(default_factory=list)
+    # Résultats de recherche enrichis
+    context_docs: List[SearchResult] = Field(
+        default_factory=list,
+        description="Documents de contexte trouvés"
+    )
+    # Métadonnées enrichies
+    search_metadata: Optional[SearchMetadata] = None
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     processing_time: float = Field(..., ge=0.0)
     tokens_used: int = Field(..., ge=0)

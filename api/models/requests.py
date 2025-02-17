@@ -4,6 +4,7 @@ from typing import Optional, Dict, List, Union, Any
 from datetime import datetime
 import re
 from enum import Enum
+from core.search.strategies import SearchMethod
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
@@ -27,6 +28,43 @@ class MessageData(BaseModel):
         if not v.strip():
             raise ValueError("Le contenu ne peut pas être vide ou contenir uniquement des espaces")
         return v.strip()
+    
+class SearchConfig(BaseModel):
+    """Configuration de la recherche."""
+    method: SearchMethod = Field(
+        default=SearchMethod.RAG,
+        description="Méthode de recherche à utiliser"
+    )
+    params: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "max_docs": 5,
+            "min_score": 0.3
+        },
+        description="Paramètres spécifiques à la méthode"
+    )
+    metadata_filter: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Filtres de métadonnées pour la recherche"
+    )
+
+    @validator("params")
+    def validate_params(cls, v, values):
+        """Valide les paramètres selon la méthode."""
+        method = values.get("method", SearchMethod.RAG)
+        
+        # Paramètres requis par méthode
+        required_params = {
+            SearchMethod.RAG: {"max_docs", "min_score"},
+            SearchMethod.HYBRID: {"max_docs", "min_score", "rerank_top_k"},
+            SearchMethod.SEMANTIC: {"max_docs", "min_score", "use_concepts"}
+        }
+        
+        if method != SearchMethod.DISABLED:
+            missing = required_params.get(method, set()) - set(v.keys())
+            if missing:
+                raise ValueError(f"Paramètres manquants pour {method}: {missing}")
+                
+        return v
 
 class ChatContext(BaseModel):
     """Modèle pour le contexte de chat."""
@@ -67,8 +105,14 @@ class ChatRequest(BaseModel):
                 "session_id": "987fcdeb-51d3-a456-426614174000",
                 "query": "Comment puis-je vous aider?",
                 "business": "steel",
-                "language": "fr",
-                "vector_search": True  # Ajout dans l'exemple
+                "search_config": {
+                    "method": "rag",
+                    "params": {
+                        "max_docs": 5,
+                        "min_score": 0.3
+                    }
+                },
+                "language": "fr"
             }
         }
     )
@@ -107,9 +151,9 @@ class ChatRequest(BaseModel):
         default_factory=dict,
         description="Métadonnées au format JSONB"
     )
-    vector_search: bool = Field(
-        default=True,
-        description="Active ou désactive la recherche vectorielle"
+    search_config: Optional[SearchConfig] = Field(
+        default=None,
+        description="Configuration de la recherche"
     )
 
     @validator('query')
@@ -120,6 +164,16 @@ class ChatRequest(BaseModel):
             raise ValueError("La requête ne peut pas être vide")
         if len(v.split()) < 2:
             raise ValueError("La requête doit contenir au moins deux mots")
+        return v
+    def setup_search_config(cls, v, values):
+        """Configure la recherche en tenant compte de vector_search."""
+        if v is None:
+            vector_search = values.get("vector_search")
+            if vector_search is not None:
+                return SearchConfig(
+                    method=SearchMethod.RAG if vector_search else SearchMethod.DISABLED
+                )
+            return SearchConfig()
         return v
 
     @validator('language')
