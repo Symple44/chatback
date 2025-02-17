@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     ELASTICSEARCH_VERIFY_CERTS: bool = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "true").lower() == "true"
     ELASTICSEARCH_INDEX_PREFIX: str = os.getenv("ELASTICSEARCH_INDEX_PREFIX", "owai")
     ELASTICSEARCH_EMBEDDING_DIM: int = int(os.getenv("ELASTICSEARCH_EMBEDDING_DIM", "768"))
+
+    # === Streaming Configuration ===
+    STREAM_BATCH_SIZE: int = int(os.getenv("STREAM_BATCH_SIZE", "10"))
+    STREAM_MAX_QUEUE_SIZE: int = int(os.getenv("STREAM_MAX_QUEUE_SIZE", "1000"))
+    STREAM_TIMEOUT: float = float(os.getenv("STREAM_TIMEOUT", "5.0"))
+    STREAM_CHUNK_SIZE: int = int(os.getenv("STREAM_CHUNK_SIZE", "8192"))
+    STREAM_KEEP_ALIVE: int = int(os.getenv("STREAM_KEEP_ALIVE", "15"))
+    STREAM_RETRY_TIMEOUT: int = int(os.getenv("STREAM_RETRY_TIMEOUT", "30"))
     
     # === Processeur de chat ===
     CONFIDENCE_THRESHOLD: float = 0.5
@@ -146,6 +154,16 @@ class Settings(BaseSettings):
         "assistant": "En tant qu'assistant technique, je vais vous aider :",
         "context": "Voici le contexte pertinent :",
     }
+
+    DEFAULT_SEARCH_METHOD: str = os.getenv("DEFAULT_SEARCH_METHOD", "rag")
+
+    @validator('DEFAULT_SEARCH_METHOD')
+    def validate_search_method(cls, v):
+        """Valide que la méthode de recherche est supportée."""
+        valid_methods = ["rag", "hybrid", "semantic", "disabled"]
+        if v not in valid_methods:
+            raise ValueError(f"Méthode de recherche invalide. Valeurs possibles : {valid_methods}")
+        return v
     
     # Types de réponses DEPRECIATED
     RESPONSE_TYPES: Dict[str, Dict[str, Any]] = {
