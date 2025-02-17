@@ -30,6 +30,7 @@ from core.database.manager import DatabaseManager
 from core.config.config import settings
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
+from core.streaming.stream_manager import StreamManager
 
 
 #A supprimer
@@ -119,35 +120,26 @@ async def test_search_configuration(
     query: str = Query(..., min_length=1),
     components=Depends(get_components)
 ) -> Dict[str, Any]:
-    """
-    Teste une configuration de recherche spécifique.
-    """
+    """Teste une configuration de recherche spécifique."""
     try:
-        # Création d'un SearchManager temporaire pour le test
+        # Les paramètres sont déjà validés et du bon type
         search_manager = components.search_manager.__class__(components)
         search_manager.configure(
             method=config.method,
-            search_params=config.params,
+            search_params=config.params.dict(),  # Conversion en dict pour l'API
             metadata_filter=config.metadata_filter
         )
 
-        # Exécution de la recherche
-        start_time = datetime.utcnow()
         results = await search_manager.search_context(
             query=query,
             metadata_filter=config.metadata_filter
         )
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
 
         return {
             "success": True,
             "results_count": len(results),
-            "processing_time": processing_time,
-            "results": results[:3],  # Premiers résultats pour aperçu
-            "metrics": {
-                "memory_usage": metrics.get_memory_usage(),
-                "cache_status": search_manager._get_cache_stats()
-            }
+            "results": results[:3],
+            "configuration_used": config.dict()
         }
 
     except Exception as e:
@@ -156,8 +148,6 @@ async def test_search_configuration(
             status_code=500,
             detail=f"Erreur test configuration: {str(e)}"
         )
-
-# api/routes/chat_routes.py
 
 @router.get("/stream")
 async def stream_chat_response(

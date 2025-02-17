@@ -5,6 +5,7 @@ from datetime import datetime
 import re
 from enum import Enum
 from core.search.strategies import SearchMethod
+from core.config.config import settings
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
@@ -28,42 +29,118 @@ class MessageData(BaseModel):
         if not v.strip():
             raise ValueError("Le contenu ne peut pas être vide ou contenir uniquement des espaces")
         return v.strip()
-    
+
+class SearchParamsBase(BaseModel):
+    """Modèle de base pour les paramètres de recherche."""
+    max_docs: int = Field(
+        default=settings.MAX_RELEVANT_DOCS,
+        ge=1,
+        le=20,
+        description="Nombre maximum de documents à retourner"
+    )
+    min_score: float = Field(
+        default=settings.CONFIDENCE_THRESHOLD,
+        ge=0.0,
+        le=1.0,
+        description="Score minimum de confiance"
+    )
+
+class RAGParams(SearchParamsBase):
+    """Paramètres spécifiques pour la recherche RAG."""
+    vector_weight: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Poids pour le score vectoriel"
+    )
+    semantic_weight: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Poids pour le score sémantique"
+    )
+
+class HybridParams(SearchParamsBase):
+    """Paramètres spécifiques pour la recherche hybride."""
+    rerank_top_k: int = Field(
+        default=10,
+        ge=1,
+        description="Nombre de documents à reranker"
+    )
+    combine_method: str = Field(
+        default="weighted_sum",
+        pattern="^(weighted_sum|max|average)$",
+        description="Méthode de combinaison des scores"
+    )
+
+class SemanticParams(SearchParamsBase):
+    """Paramètres spécifiques pour la recherche sémantique."""
+    use_concepts: bool = Field(
+        default=True,
+        description="Utiliser l'extraction de concepts"
+    )
+    boost_exact_matches: bool = Field(
+        default=True,
+        description="Booster les correspondances exactes"
+    )
+
 class SearchConfig(BaseModel):
-    """Configuration de la recherche."""
+    """Configuration complète de la recherche."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "method": "rag",
+                "params": {
+                    "max_docs": 5,
+                    "min_score": 0.3,
+                    "vector_weight": 0.7,
+                    "semantic_weight": 0.3
+                }
+            }
+        }
+    )
+
     method: SearchMethod = Field(
         default=SearchMethod.RAG,
         description="Méthode de recherche à utiliser"
     )
-    params: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "max_docs": 5,
-            "min_score": 0.3
-        },
-        description="Paramètres spécifiques à la méthode"
+    params: Union[RAGParams, HybridParams, SemanticParams, Dict[str, Any]] = Field(
+        default_factory=RAGParams,
+        description="Paramètres de la recherche"
     )
     metadata_filter: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Filtres de métadonnées pour la recherche"
+        description="Filtres de métadonnées"
     )
 
-    @validator("params")
+    @validator('params')
     def validate_params(cls, v, values):
         """Valide les paramètres selon la méthode."""
-        method = values.get("method", SearchMethod.RAG)
+        method = values.get('method', SearchMethod.RAG)
         
-        # Paramètres requis par méthode
-        required_params = {
-            SearchMethod.RAG: {"max_docs", "min_score"},
-            SearchMethod.HYBRID: {"max_docs", "min_score", "rerank_top_k"},
-            SearchMethod.SEMANTIC: {"max_docs", "min_score", "use_concepts"}
+        # Si params est déjà un dictionnaire, le convertir en classe appropriée
+        if isinstance(v, dict):
+            if method == SearchMethod.RAG:
+                v = RAGParams(**v)
+            elif method == SearchMethod.HYBRID:
+                v = HybridParams(**v)
+            elif method == SearchMethod.SEMANTIC:
+                v = SemanticParams(**v)
+            elif method == SearchMethod.DISABLED:
+                v = SearchParamsBase(**v)
+                
+        # Vérifier que le type de paramètres correspond à la méthode
+        param_class_mapping = {
+            SearchMethod.RAG: RAGParams,
+            SearchMethod.HYBRID: HybridParams,
+            SearchMethod.SEMANTIC: SemanticParams,
+            SearchMethod.DISABLED: SearchParamsBase
         }
         
-        if method != SearchMethod.DISABLED:
-            missing = required_params.get(method, set()) - set(v.keys())
-            if missing:
-                raise ValueError(f"Paramètres manquants pour {method}: {missing}")
-                
+        expected_class = param_class_mapping.get(method)
+        if not isinstance(v, expected_class):
+            raise ValueError(f"Type de paramètres incorrect pour {method}. Attendu: {expected_class.__name__}")
+            
         return v
 
 class ChatContext(BaseModel):
@@ -97,9 +174,32 @@ class BusinessType(str, Enum):
     GENERIC = "generic"
     
 class ChatRequest(BaseModel):
-    """Modèle de requête de chat."""
+    """Modèle pour la requête de chat."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Comment configurer la recherche RAG ?",
+                "user_id": "123",
+                "search_config": {
+                    "method": "rag",
+                    "params": {
+                        "max_docs": 5,
+                        "min_score": 0.3,
+                        "vector_weight": 0.7,
+                        "semantic_weight": 0.3
+                    }
+                }
+            }
+        }
+    )
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        description="Question de l'utilisateur"
+    )
     user_id: str = Field(..., description="Identifiant de l'utilisateur")
-    query: str = Field(..., min_length=1, max_length=4096)
     session_id: Optional[str] = Field(default=None)
     search_config: Optional[SearchConfig] = Field(
         default=None,
@@ -110,7 +210,7 @@ class ChatRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @validator('search_config')
-    def setup_search_config(cls, v, values):
+    def setup_search_config(cls, v):
         """Configure la recherche avec des valeurs par défaut."""
         if v is None:
             return SearchConfig()
