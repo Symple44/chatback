@@ -18,7 +18,7 @@ class SearchStrategyFactory:
         SearchMethod.DISABLED: DisabledSearch,
         SearchMethod.RAG: EnhancedRAGSearch,
         SearchMethod.HYBRID: EnhancedHybridSearch,
-        SearchMethod.SEMANTIC: EnhancedSemanticS-arch
+        SearchMethod.SEMANTIC: EnhancedSemanticSearch
     }
 
     @classmethod
@@ -30,14 +30,14 @@ class SearchStrategyFactory:
     ) -> SearchStrategy:
         """
         Crée et retourne une instance de la stratégie demandée.
-
+        
         Args:
             method: Méthode de recherche souhaitée
-            components: Composants nécessaires à la stratégie
-            **kwargs: Paramètres supplémentaires pour la stratégie
-
+            components: Composants nécessaires
+            **kwargs: Paramètres additionnels
+            
         Returns:
-            Instance de la stratégie de recherche
+            Instance de SearchStrategy
         """
         try:
             # Récupération de la classe de stratégie
@@ -57,32 +57,3 @@ class SearchStrategyFactory:
             logger.error(f"Erreur création stratégie {method.value}: {e}")
             # Fallback vers la stratégie désactivée
             return DisabledSearch(components)
-
-    @classmethod
-    def register_strategy(
-        cls,
-        method: SearchMethod,
-        strategy_class: Type[SearchStrategy]
-    ) -> None:
-        """
-        Enregistre une nouvelle stratégie dans la factory.
-        
-        Args:
-            method: Identifiant de la méthode
-            strategy_class: Classe d'implémentation de la stratégie
-        """
-        if not issubclass(strategy_class, SearchStrategy):
-            raise ValueError(f"La classe {strategy_class.__name__} doit hériter de SearchStrategy")
-            
-        cls._strategies[method] = strategy_class
-        logger.info(f"Stratégie {method.value} enregistrée: {strategy_class.__name__}")
-
-    @classmethod
-    def get_available_methods(cls) -> List[SearchMethod]:
-        """Retourne la liste des méthodes disponibles."""
-        return list(cls._strategies.keys())
-
-    @classmethod
-    def get_strategy_class(cls, method: SearchMethod) -> Type[SearchStrategy]:
-        """Retourne la classe de stratégie pour une méthode donnée."""
-        return cls._strategies.get(method, DisabledSearch)

@@ -97,106 +97,23 @@ class BusinessType(str, Enum):
     GENERIC = "generic"
     
 class ChatRequest(BaseModel):
-    """Modèle pour les requêtes de chat."""
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "user_id": "123e4567-e89b-12d3-a456-426614174000",
-                "session_id": "987fcdeb-51d3-a456-426614174000",
-                "query": "Comment puis-je vous aider?",
-                "business": "steel",
-                "search_config": {
-                    "method": "rag",
-                    "params": {
-                        "max_docs": 5,
-                        "min_score": 0.3
-                    }
-                },
-                "language": "fr"
-            }
-        }
-    )
-    
-    user_id: UUID4 = Field(..., description="Identifiant unique de l'utilisateur")
-    query: str = Field(
-        ...,
-        min_length=1,
-        max_length=1000,
-        description="Question ou requête de l'utilisateur"
-    )
-    session_id: Optional[UUID4] = Field(
-        None,
-        description="Identifiant de session au format UUID"
-    )
-    context: Optional[ChatContext] = Field(
-        default=None,
-        description="Contexte de la conversation"
-    )
-    business: BusinessType = Field(
-        default=None,
-        description="Type de métier (steel, generic)"
-    )
-    language: str = Field(
-        default="fr",
-        min_length=2,
-        max_length=5,
-        description="Code de langue (fr, en, etc.)"
-    )
-    application: Optional[str] = Field(
-        None,
-        max_length=50,
-        description="Nom de l'application source"
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Métadonnées au format JSONB"
-    )
+    """Modèle de requête de chat."""
+    user_id: str = Field(..., description="Identifiant de l'utilisateur")
+    query: str = Field(..., min_length=1, max_length=4096)
+    session_id: Optional[str] = Field(default=None)
     search_config: Optional[SearchConfig] = Field(
         default=None,
         description="Configuration de la recherche"
     )
+    language: str = Field(default="fr")
+    application: Optional[str] = Field(default=None)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    @validator('query')
-    def validate_query(cls, v):
-        """Valide et nettoie la requête."""
-        v = v.strip()
-        if not v:
-            raise ValueError("La requête ne peut pas être vide")
-        if len(v.split()) < 2:
-            raise ValueError("La requête doit contenir au moins deux mots")
-        return v
+    @validator('search_config')
     def setup_search_config(cls, v, values):
-        """Configure la recherche en tenant compte de vector_search."""
+        """Configure la recherche avec des valeurs par défaut."""
         if v is None:
-            vector_search = values.get("vector_search")
-            if vector_search is not None:
-                return SearchConfig(
-                    method=SearchMethod.RAG if vector_search else SearchMethod.DISABLED
-                )
             return SearchConfig()
-        return v
-
-    @validator('language')
-    def validate_language(cls, v):
-        """Valide le code de langue."""
-        allowed_languages = {'fr', 'en', 'es', 'de', 'it'}
-        if v.lower() not in allowed_languages:
-            raise ValueError(f"Langue non supportée. Langues autorisées: {allowed_languages}")
-        return v.lower()
-
-    @validator('metadata')
-    def validate_metadata(cls, v):
-        """Valide les métadonnées."""
-        max_depth = 3
-        def check_depth(obj, current_depth=0):
-            if current_depth > max_depth:
-                raise ValueError(f"Profondeur maximale des métadonnées dépassée ({max_depth})")
-            if isinstance(obj, dict):
-                return all(check_depth(value, current_depth + 1) for value in obj.values())
-            return True
-        
-        if not check_depth(v):
-            raise ValueError("Structure des métadonnées trop profonde")
         return v
 
 class SessionCreate(BaseModel):
