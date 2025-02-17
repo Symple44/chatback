@@ -266,3 +266,65 @@ class HealthCheckResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     components: Dict[str, bool] = Field(default_factory=dict)
     metrics: Dict[str, Any] = Field(default_factory=dict)
+
+class HealthCheckResponse(BaseModel):
+    """Réponse du health check."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "components": {"database": True, "cache": True}
+            }
+        }
+    )
+    
+    status: bool
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    components: Dict[str, bool] = Field(default_factory=dict)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+
+class SearchMetrics(BaseModel):
+    """Métriques détaillées de recherche."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total_searches": 100,
+                "success_rate": 0.95,
+                "average_time": 0.234,
+                "cache_hit_rate": 0.80,
+                "methods_usage": {
+                    "rag": {
+                        "total": 80,
+                        "success_rate": 0.96,
+                        "average_time": 0.220
+                    },
+                    "hybrid": {
+                        "total": 20,
+                        "success_rate": 0.90,
+                        "average_time": 0.290
+                    }
+                }
+            }
+        }
+    )
+    
+    total_searches: int = Field(..., ge=0)
+    success_rate: float = Field(..., ge=0.0, le=1.0)
+    average_time: float = Field(..., ge=0.0)
+    cache_hit_rate: float = Field(..., ge=0.0, le=1.0)
+    methods_usage: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @validator('success_rate', 'cache_hit_rate', 'average_time')
+    def round_floats(cls, v: float) -> float:
+        return round(v, 4)
+    
+__all__ = [
+    'ChatResponse',
+    'ErrorResponse',
+    'DocumentReference',
+    'SimilarQuestion',
+    'VectorStats',
+    'SearchMetadata',
+    'SearchMetrics'
+]
