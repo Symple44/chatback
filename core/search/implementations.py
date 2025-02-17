@@ -1,5 +1,5 @@
 # core/search/implementations.py
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import numpy as np
 from datetime import datetime
 import asyncio
