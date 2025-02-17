@@ -7,6 +7,7 @@ from core.utils.metrics import metrics
 from core.config.config import settings
 from .strategies import SearchMethod, SearchStrategy
 from .factory import SearchStrategyFactory
+from core.config.search_config import SEARCH_STRATEGIES_CONFIG
 
 logger = get_logger("search_manager")
 
@@ -16,9 +17,10 @@ class SearchManager:
     def __init__(self, components):
         """Initialise le gestionnaire de recherche."""
         self.components = components
+        self.config = SEARCH_STRATEGIES_CONFIG  # Ajout de cette ligne
         self.enabled = True
         self.current_method = SearchMethod.RAG
-        self.current_params = {}
+        self.current_params = self.config["rag"]["search_params"].copy()  # Paramètres par défaut
         self.metadata_filter = None
         self.cache = {}
         self.cache_ttl = 3600  # 1 heure
