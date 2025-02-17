@@ -165,40 +165,39 @@ async def stream_chat_response(
         default=SearchMethod.RAG,
         description="Méthode de recherche"
     ),
-    search_params: Dict[str, Any] = Query(
-        default={
-            "max_docs": settings.MAX_RELEVANT_DOCS,
-            "min_score": settings.CONFIDENCE_THRESHOLD
-        },
-        description="Paramètres de recherche"
+    max_docs: int = Query(
+        default=settings.MAX_RELEVANT_DOCS,
+        description="Nombre maximum de documents"
+    ),
+    min_score: float = Query(
+        default=settings.CONFIDENCE_THRESHOLD,
+        description="Score minimum de confiance"
     ),
     session_id: Optional[str] = None,
-    language: str = "fr",
+    language: str = Query(default="fr", min_length=2, max_length=5),
     application: Optional[str] = None,
     components=Depends(get_components)
 ):
     """
     Stream une réponse de chat avec stratégie de recherche configurable.
-    
-    Args:
-        query: Question de l'utilisateur
-        user_id: ID de l'utilisateur
-        search_method: Méthode de recherche
-        search_params: Paramètres de recherche
-        session_id: ID de session optionnel
-        language: Code de langue
-        application: Application source
-        components: Composants de l'application
     """
     async def event_generator():
         try:
+            # Construction des paramètres de recherche
+            search_params = {
+                "max_docs": max_docs,
+                "min_score": min_score
+            }
+
             # Création de la requête
             chat_request = ChatRequest(
                 query=query,
                 user_id=user_id,
                 session_id=session_id,
-                search_method=search_method,
-                search_params=search_params,
+                search_config=SearchConfig(
+                    method=search_method,
+                    params=search_params
+                ),
                 application=application,
                 language=language
             )
@@ -232,7 +231,8 @@ async def stream_chat_response(
                 relevant_docs = await processor.search_manager.search_context(
                     query=query,
                     metadata_filter={"application": application} if application else None,
-                    **search_params
+                    max_docs=max_docs,
+                    min_score=min_score
                 )
 
             # Streaming de la réponse
@@ -255,7 +255,7 @@ async def stream_chat_response(
                 "data": json.dumps({
                     "status": "completed",
                     "metadata": {
-                        "search_method": search_method,
+                        "search_method": search_method.value,
                         "docs_used": len(relevant_docs),
                         "search_params": search_params,
                         "processing_time": metrics.get_timer_value("chat_processing")
