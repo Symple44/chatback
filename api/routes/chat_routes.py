@@ -229,8 +229,20 @@ async def get_search_configuration() -> Dict[str, Any]:
         },
         "defaults": {
             "method": settings.DEFAULT_SEARCH_METHOD,
-            "max_docs": settings.MAX_RELEVANT_DOCS,
-            "min_score": settings.CONFIDENCE_THRESHOLD
+            "max_docs": settings.SEARCH_MAX_DOCS,
+            "min_score": settings.SEARCH_MIN_SCORE,
+            "rag": {
+                "vector_weight": settings.RAG_VECTOR_WEIGHT,
+                "semantic_weight": settings.RAG_SEMANTIC_WEIGHT
+            },
+            "hybrid": {
+                "rerank_top_k": settings.HYBRID_RERANK_TOP_K,
+                "window_size": settings.HYBRID_WINDOW_SIZE
+            },
+            "semantic": {
+                "max_concepts": settings.SEMANTIC_MAX_CONCEPTS,
+                "boost_exact": settings.SEMANTIC_BOOST_EXACT
+            }
         },
         "constraints": {
             "max_docs_limit": 20,
@@ -240,12 +252,11 @@ async def get_search_configuration() -> Dict[str, Any]:
         },
         "performance": {
             "cache_enabled": True,
-            "cache_ttl": 3600,
-            "max_concurrent_searches": settings.MAX_CONCURRENT_REQUESTS
+            "cache_ttl": settings.SEARCH_CACHE_TTL,
+            "max_concurrent_searches": settings.SEARCH_MAX_CONCURRENT
         },
         "metrics": await get_search_metrics()
     }
-
 @router.get("/search/methods")
 async def get_search_methods():
     """

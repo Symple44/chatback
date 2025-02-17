@@ -155,7 +155,28 @@ class Settings(BaseSettings):
         "context": "Voici le contexte pertinent :",
     }
 
+     # === Search Configuration ===
     DEFAULT_SEARCH_METHOD: str = os.getenv("DEFAULT_SEARCH_METHOD", "rag")
+    SEARCH_MAX_DOCS: int = int(os.getenv("SEARCH_MAX_DOCS", "5"))
+    SEARCH_MIN_SCORE: float = float(os.getenv("SEARCH_MIN_SCORE", "0.3"))
+    
+    # Configuration des stratégies de recherche
+    SEARCH_CACHE_TTL: int = int(os.getenv("SEARCH_CACHE_TTL", "3600"))
+    SEARCH_MAX_CONCURRENT: int = int(os.getenv("SEARCH_MAX_CONCURRENT", "10"))
+    SEARCH_BATCH_SIZE: int = int(os.getenv("SEARCH_BATCH_SIZE", "32"))
+    
+    # Configuration RAG
+    RAG_VECTOR_WEIGHT: float = float(os.getenv("RAG_VECTOR_WEIGHT", "0.7"))
+    RAG_SEMANTIC_WEIGHT: float = float(os.getenv("RAG_SEMANTIC_WEIGHT", "0.3"))
+    
+    # Configuration Hybrid
+    HYBRID_RERANK_TOP_K: int = int(os.getenv("HYBRID_RERANK_TOP_K", "10"))
+    HYBRID_WINDOW_SIZE: int = int(os.getenv("HYBRID_WINDOW_SIZE", "3"))
+    
+    # Configuration Semantic
+    SEMANTIC_MAX_CONCEPTS: int = int(os.getenv("SEMANTIC_MAX_CONCEPTS", "5"))
+    SEMANTIC_BOOST_EXACT: bool = os.getenv("SEMANTIC_BOOST_EXACT", "true").lower() == "true"
+
 
     @validator('DEFAULT_SEARCH_METHOD')
     def validate_search_method(cls, v):

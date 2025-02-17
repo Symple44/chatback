@@ -37,6 +37,7 @@ from core.llm.embedding_manager import EmbeddingManager
 from core.llm.summarizer import DocumentSummarizer
 from core.llm.tokenizer_manager import TokenizerManager
 from core.llm.model import ModelInference
+from core.search.search_manager import SearchManager
 
 from core.storage.google_drive import GoogleDriveManager
 from core.document_processing.extractor import DocumentExtractor
@@ -149,10 +150,16 @@ class ComponentManager:
                 self._components["model"] = model
                 logger.info("Model Inference initialisé")
 
+                # SearchManager
+                search_manager = SearchManager(self)
+                self._components["search_manager"] = search_manager  # 
+                logger.info("Search Manager initialisé")
+
                 # Document Processing
                 self._components["doc_extractor"] = DocumentExtractor()
                 self._components["pdf_processor"] = PDFProcessor(es_client)
                 logger.info("Processeurs de documents initialisés")
+                
                 
                 # Google Drive (optionnel)
                 if settings.GOOGLE_DRIVE_CREDENTIALS_PATH:
