@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import numpy as np
 import uuid
+from core.search.strategies import SearchMethod
 
 class UserResponse(BaseModel):
     """Réponse utilisateur."""
