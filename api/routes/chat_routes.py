@@ -22,6 +22,7 @@ from ..models.responses import (
 )
 from ..dependencies import get_components
 from main import CustomJSONEncoder
+from main import CustomJSONResponse
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
@@ -204,7 +205,10 @@ async def test_search_configuration(
             processed_results.append(doc_ref)
 
         # 7. Collecte des métriques globales
-        metrics_data = metrics.get_request_metrics(str(test_id))
+        metrics_data = {
+            "cache_hit": metrics.get_cache_hit_rate() if hasattr(metrics, 'get_cache_hit_rate') else False,
+            "processing_time": metrics.get_timer_value("search_time")
+        }
         cache_info = search_manager.get_cache_info() if hasattr(search_manager, 'get_cache_info') else {}
 
         # 8. Construction de la réponse
@@ -277,7 +281,11 @@ async def test_search_configuration(
                 "query": query
             }
         )
-        raise HTTPException(status_code=500, detail=error.dict())
+        # Utilisation de CustomJSONResponse pour gérer la sérialisation
+        return CustomJSONResponse(
+            status_code=500,
+            content=error.dict()
+        )
 
     finally:
         # Nettoyage final
