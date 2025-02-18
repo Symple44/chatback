@@ -33,11 +33,6 @@ from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 from core.streaming.stream_manager import StreamManager
 
-
-
-#A supprimer
-from core.chat.processor import ChatProcessor
-
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
 

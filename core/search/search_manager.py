@@ -50,23 +50,36 @@ class SearchManager:
         
         logger.info(f"Recherche configurée: {method.value}, params: {self.current_params}")
 
+    def _validate_search_params(
+        self,
+        params: Dict[str, Any],
+        method: SearchMethod
+    ) -> Dict[str, Any]:
+        """Valide et normalise les paramètres de recherche."""
+        validated = {}
+        default_config = self.config.get(method.value, self.config["rag"])["search_params"]
+        
+        # Validation des paramètres spécifiques à la méthode
+        for key, value in params.items():
+            if key in default_config:
+                if key == "max_docs":
+                    validated[key] = min(max(1, value), settings.SEARCH_MAX_DOCS)
+                elif key == "min_score":
+                    validated[key] = min(max(0.0, value), 1.0)
+                elif key in ["vector_weight", "semantic_weight"]:
+                    validated[key] = min(max(0.0, value), 1.0)
+                else:
+                    validated[key] = value
+                    
+        return validated
+    
     async def search_context(
         self,
         query: str,
         metadata_filter: Optional[Dict] = None,
         **kwargs
     ) -> List[Dict]:
-        """
-        Effectue la recherche selon la configuration actuelle.
-        
-        Args:
-            query: Requête utilisateur
-            metadata_filter: Filtres optionnels
-            **kwargs: Paramètres additionnels
-            
-        Returns:
-            Liste des documents trouvés
-        """
+        """Effectue la recherche selon la configuration actuelle."""
         if not self.enabled:
             logger.debug("Recherche désactivée")
             return []
@@ -80,24 +93,32 @@ class SearchManager:
                 metrics.increment_counter("search_cache_hits")
                 return cached_result
 
-            # Création de la stratégie via factory
+            start_time = datetime.utcnow()
+
+            # Fusion des paramètres de recherche
+            search_params = self.current_params.copy()
+            search_params.update(kwargs)
+            
+            # Fusion des filtres de métadonnées
+            combined_filter = {}
+            if self.metadata_filter:
+                combined_filter.update(self.metadata_filter)
+            if metadata_filter:
+                combined_filter.update(metadata_filter)
+
+            # Création et configuration de la stratégie
             strategy = SearchStrategyFactory.create_strategy(
                 method=self.current_method,
                 components=self.components
             )
 
-            # Configuration de la stratégie
-            strategy.configure({
-                **self.current_params,
-                **kwargs
-            })
-
-            # Exécution de la recherche
-            start_time = datetime.utcnow()
+            strategy.configure(search_params)
             results = await strategy.search(
                 query=query,
-                metadata_filter=metadata_filter or self.metadata_filter
+                metadata_filter=combined_filter or None
             )
+
+            # Calcul du temps de traitement
             processing_time = (datetime.utcnow() - start_time).total_seconds()
 
             # Mise à jour des métriques
@@ -107,7 +128,7 @@ class SearchManager:
                 processing_time=processing_time
             )
 
-            # Mise en cache
+            # Mise en cache des résultats
             self._cache_results(cache_key, results)
 
             return results
