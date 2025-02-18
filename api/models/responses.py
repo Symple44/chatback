@@ -1,8 +1,7 @@
 # api/models/responses.py
 from pydantic import BaseModel, Field, UUID4, EmailStr, validator, constr, ConfigDict
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-import numpy as np
 import uuid
 from core.search.strategies import SearchMethod
 
@@ -290,7 +289,7 @@ class SearchDebugInfo(BaseModel):
 
 class SearchTestResponse(BaseModel):
     """Réponse du test de recherche."""
-    test_id: UUID = Field(..., description="Identifiant unique du test")
+    test_id: UUID4 = Field(..., description="Identifiant unique du test")
     success: bool = Field(..., description="Succès du test")
     method: SearchMethod = Field(..., description="Méthode de recherche utilisée")
     configuration_used: Dict[str, Any] = Field(..., description="Configuration appliquée")
