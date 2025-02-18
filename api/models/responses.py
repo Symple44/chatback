@@ -267,58 +267,116 @@ class HealthCheckResponse(BaseModel):
     components: Dict[str, bool] = Field(default_factory=dict)
     metrics: Dict[str, Any] = Field(default_factory=dict)
 
-class HealthCheckResponse(BaseModel):
-    """Réponse du health check."""
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "status": "healthy",
-                "components": {"database": True, "cache": True}
-            }
-        }
-    )
-    
-    status: bool
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    components: Dict[str, bool] = Field(default_factory=dict)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-
 class SearchMetrics(BaseModel):
-    """Métriques détaillées de recherche."""
-    model_config = ConfigDict(
-        json_schema_extra={
+    """Métriques de recherche enrichies."""
+    total_searches: int = Field(default=0, description="Nombre total de recherches")
+    success_rate: float = Field(default=0.0, description="Taux de succès")
+    average_time: float = Field(default=0.0, description="Temps moyen de traitement")
+    cache_hit_rate: float = Field(default=0.0, description="Taux d'utilisation du cache")
+    processing_time: float = Field(..., description="Temps de traitement")
+    results_count: int = Field(..., description="Nombre de résultats")
+    cache_hit: bool = Field(..., description="Utilisation du cache")
+    memory_usage: Dict[str, float] = Field(..., description="Utilisation mémoire")
+    query_vector_time: float = Field(..., description="Temps de création du vecteur")
+
+class SearchDebugInfo(BaseModel):
+    """Informations de debug pour la recherche."""
+    raw_config: Dict[str, Any] = Field(..., description="Configuration brute")
+    search_strategy: str = Field(..., description="Stratégie utilisée")
+    cache_status: Dict[str, Any] = Field(..., description="Statut du cache")
+    memory_details: Dict[str, Any] = Field(..., description="Détails mémoire")
+    request_headers: Dict[str, str] = Field(..., description="En-têtes de la requête")
+    timing_breakdown: Dict[str, float] = Field(..., description="Détail des temps")
+
+class SearchTestResponse(BaseModel):
+    """Réponse du test de recherche."""
+    test_id: UUID = Field(..., description="Identifiant unique du test")
+    success: bool = Field(..., description="Succès du test")
+    method: SearchMethod = Field(..., description="Méthode de recherche utilisée")
+    configuration_used: Dict[str, Any] = Field(..., description="Configuration appliquée")
+    results: List[DocumentReference] = Field(..., description="Résultats de recherche")
+    metrics: SearchMetrics = Field(..., description="Métriques de performance")
+    debug_info: Optional[SearchDebugInfo] = Field(None, description="Informations de debug")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        json_schema_extra = {
             "example": {
-                "total_searches": 100,
-                "success_rate": 0.95,
-                "average_time": 0.234,
-                "cache_hit_rate": 0.80,
-                "methods_usage": {
-                    "rag": {
-                        "total": 80,
-                        "success_rate": 0.96,
-                        "average_time": 0.220
-                    },
-                    "hybrid": {
-                        "total": 20,
-                        "success_rate": 0.90,
-                        "average_time": 0.290
+                "test_id": "123e4567-e89b-12d3-a456-426614174000",
+                "success": True,
+                "method": "rag",
+                "configuration_used": {
+                    "max_docs": 5,
+                    "min_score": 0.3,
+                    "vector_weight": 0.7,
+                    "semantic_weight": 0.3
+                },
+                "results": [
+                    {
+                        "title": "Document 1",
+                        "score": 0.95,
+                        "content": "Extrait du contenu..."
                     }
+                ],
+                "metrics": {
+                    "processing_time": 0.234,
+                    "results_count": 1,
+                    "cache_hit": False,
+                    "memory_usage": {
+                        "gpu": 1024,
+                        "ram": 2048
+                    },
+                    "query_vector_time": 0.023
                 }
             }
         }
-    )
-    
-    total_searches: int = Field(..., ge=0)
-    success_rate: float = Field(..., ge=0.0, le=1.0)
-    average_time: float = Field(..., ge=0.0)
-    cache_hit_rate: float = Field(..., ge=0.0, le=1.0)
-    methods_usage: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+class SearchError(BaseModel):
+    """Erreur détaillée de recherche."""
+    error_code: str = Field(..., description="Code d'erreur")
+    detail: str = Field(..., description="Description de l'erreur")
+    metadata: Dict[str, Any] = Field(..., description="Métadonnées de l'erreur")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    @validator('success_rate', 'cache_hit_rate', 'average_time')
-    def round_floats(cls, v: float) -> float:
-        return round(v, 4)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "error_code": "VALIDATION_ERROR",
+                "detail": "Paramètre invalide",
+                "metadata": {
+                    "field": "max_docs",
+                    "value": 25,
+                    "constraint": "max_value: 20"
+                },
+                "timestamp": "2024-02-18T12:00:00Z"
+            }
+        }
+
+class SearchValidationError(SearchError):
+    """Erreur de validation spécifique à la recherche."""
+    def __init__(self, field: str, value: Any, constraint: str):
+        super().__init__(
+            error_code="VALIDATION_ERROR",
+            detail=f"Validation error for {field}: {constraint}",
+            metadata={
+                "field": field,
+                "value": value,
+                "constraint": constraint
+            }
+        )
+
+class SearchLimits(BaseModel):
+    """Limites de configuration de recherche."""
+    max_docs: int = Field(default=20, ge=1, le=100)
+    min_score: float = Field(default=0.1, ge=0.0, le=1.0)
+    vector_weight: float = Field(default=0.7, ge=0.0, le=1.0)
+    semantic_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     
+    class Config:
+        frozen = True  # Rend l'objet immuable
+
+SEARCH_LIMITS = SearchLimits()
+
 __all__ = [
     'ChatResponse',
     'ErrorResponse',
@@ -326,5 +384,8 @@ __all__ = [
     'SimilarQuestion',
     'VectorStats',
     'SearchMetadata',
-    'SearchMetrics'
+    'SearchMetrics',
+    'SearchTestResponse',
+    'SearchDebugInfo',
+    'SearchError'
 ]

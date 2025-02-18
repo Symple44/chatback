@@ -1,32 +1,28 @@
 # api/routes/chat_routes.py
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Dict, Optional, List, Any
 from datetime import datetime
 import uuid
 import asyncio
 from sse_starlette.sse import EventSourceResponse
 import json
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-
+from pydantic import ValidationError
+import torch
+import psutil
 from ..models.requests import ChatRequest, SearchConfig  
 from ..models.responses import (
     ChatResponse, 
     SearchMetrics,
-    SearchMetadata, 
-    ErrorResponse,
     DocumentReference,
-    SimilarQuestion,
-    VectorStats
+    VectorStats,
+    SearchTestResponse,  
+    SearchError,
+    SearchDebugInfo,
+    SearchValidationError
 )
 from ..dependencies import get_components
 from core.utils.logger import get_logger
-from core.database.base import get_session_manager
 from core.utils.metrics import metrics
-from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument
-from core.database.base import DatabaseSession
-from core.database.manager import DatabaseManager
 from core.config.config import settings
 from core.config.search_config import SEARCH_STRATEGIES_CONFIG
 from core.chat.processor_factory import ProcessorFactory
@@ -102,40 +98,226 @@ async def get_search_metrics() -> SearchMetrics:
         timestamp=datetime.utcnow()
     )
 
-@router.post("/search/test")
+@router.post("/search/test", response_model=SearchTestResponse)
 async def test_search_configuration(
+    request: Request,
     config: SearchConfig,
-    query: str = Query(..., min_length=1),
+    query: str = Query(
+        ..., 
+        min_length=1,
+        max_length=500,
+        description="Requête de test pour la recherche"
+    ),
+    debug: bool = Query(
+        False,
+        description="Active les informations de debug"
+    ),
     components=Depends(get_components)
-) -> Dict[str, Any]:
-    """Teste une configuration de recherche spécifique."""
+) -> SearchTestResponse:
+    """
+    Teste une configuration de recherche spécifique.
+    
+    Args:
+        request: Requête FastAPI
+        config: Configuration de recherche à tester
+        query: Requête de test
+        debug: Mode debug pour plus d'informations
+        components: Composants de l'application
+        
+    Returns:
+        SearchTestResponse: Résultats détaillés du test
+        
+    Raises:
+        HTTPException: En cas d'erreur de validation ou d'exécution
+    """
     try:
-        # Les paramètres sont déjà validés et du bon type
+        # Création d'un identifiant unique pour le test
+        test_id = uuid.uuid4()
+        start_time = datetime.utcnow()
+        
+        # Démarrage du suivi des métriques
+        metrics.start_request_tracking(str(test_id))
+
+        # 1. Validation des paramètres
+        await validate_search_config(config)
+        
+        # 2. Configuration du SearchManager
         search_manager = components.search_manager.__class__(components)
-        search_manager.configure(
+        search_params = {
+            **SEARCH_STRATEGIES_CONFIG[config.method.value]["search_params"],
+            **config.params.dict()
+        }
+        
+        await search_manager.configure(
             method=config.method,
-            search_params=config.params.dict(),  # Conversion en dict pour l'API
+            search_params=search_params,
             metadata_filter=config.metadata_filter
         )
 
+        # 3. Collecte des métriques de performance initiales
+        initial_memory = {
+            "gpu": torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0,
+            "gpu_reserved": torch.cuda.max_memory_reserved() / 1024**2 if torch.cuda.is_available() else 0,
+            "ram": psutil.Process().memory_info().rss / 1024**2
+        }
+
+        # 4. Exécution de la recherche
+        vector_start = datetime.utcnow()
+        query_vector = await components.model.create_embedding(query)
+        query_vector_time = (datetime.utcnow() - vector_start).total_seconds()
+
+        search_start = datetime.utcnow()
         results = await search_manager.search_context(
             query=query,
             metadata_filter=config.metadata_filter
         )
+        search_time = (datetime.utcnow() - search_start).total_seconds()
 
-        return {
-            "success": True,
-            "results_count": len(results),
-            "results": results[:3],
-            "configuration_used": config.dict()
+        # 5. Collecte des métriques finales
+        final_memory = {
+            "gpu": torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0,
+            "gpu_reserved": torch.cuda.max_memory_reserved() / 1024**2 if torch.cuda.is_available() else 0,
+            "ram": psutil.Process().memory_info().rss / 1024**2
         }
 
-    except Exception as e:
-        logger.error(f"Erreur test configuration: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur test configuration: {str(e)}"
+        memory_usage = {
+            "gpu_delta": final_memory["gpu"] - initial_memory["gpu"],
+            "ram_delta": final_memory["ram"] - initial_memory["ram"]
+        }
+
+        # 6. Préparation des résultats
+        processed_results = []
+        for result in results:
+            doc_ref = DocumentReference(
+                title=result.get("title", ""),
+                score=result.get("score", 0),
+                content=result.get("content", "")[:200],  # Limite pour l'aperçu
+                metadata={
+                    **result.get("metadata", {}),
+                    "relevance_score": result.get("score", 0),
+                    "source": result.get("source_type", "unknown")
+                },
+                vector_id=result.get("vector_id", str(uuid.uuid4())),
+                last_updated=datetime.utcnow()
+            )
+            processed_results.append(doc_ref)
+
+        # 7. Collecte des métriques globales
+        metrics_data = metrics.get_request_metrics(str(test_id))
+        cache_info = search_manager.get_cache_info() if hasattr(search_manager, 'get_cache_info') else {}
+
+        # 8. Construction de la réponse
+        response = SearchTestResponse(
+            test_id=test_id,
+            success=True,
+            method=config.method,
+            configuration_used=search_params,
+            results=processed_results[:10],
+            metrics=SearchMetrics(
+                processing_time=search_time,
+                results_count=len(results),
+                cache_hit=metrics_data.get("cache_hit", False),
+                memory_usage=memory_usage,
+                query_vector_time=query_vector_time,
+                gpu_metrics={  # Ajout des métriques GPU
+                    "total_memory": torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0,
+                    "used_memory": torch.cuda.memory_allocated() if torch.cuda.is_available() else 0,
+                    "peak_memory": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
+                } if torch.cuda.is_available() else None
+            ),
+            timestamp=datetime.utcnow()
         )
+
+        # 9. Ajout des informations de debug si demandées
+        if debug:
+            response.debug_info = SearchDebugInfo(
+                raw_config=config.dict(),
+                search_strategy=search_manager.current_method.value,
+                cache_status=cache_info,
+                memory_details={
+                    "initial": initial_memory,
+                    "final": final_memory,
+                    "delta": memory_usage
+                },
+                request_headers=dict(request.headers),
+                timing_breakdown={
+                    "total_time": (datetime.utcnow() - start_time).total_seconds(),
+                    "vector_generation": query_vector_time,
+                    "search_execution": search_time,
+                    "processing_overhead": metrics_data.get("processing_time", 0)
+                }
+            )
+
+        # 10. Nettoyage et retour
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            
+        return response
+
+    except ValidationError as e:
+        error = SearchValidationError(
+            field=e.errors()[0]["loc"][0],
+            value=e.errors()[0]["input"],
+            constraint=e.errors()[0]["msg"]
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=error.dict()
+        )
+
+    except Exception as e:
+        metrics.increment_counter("search_errors")
+        error = SearchError(
+            error_code="SEARCH_ERROR",
+            detail=str(e),
+            metadata={
+                "method": config.method.value if config else None,
+                "error_type": type(e).__name__,
+                "query": query
+            }
+        )
+        raise HTTPException(status_code=500, detail=error.dict())
+
+    finally:
+        # Nettoyage final
+        metrics.finish_request_tracking(str(test_id))
+        
+async def validate_search_config(config: SearchConfig) -> None:
+    """Valide la configuration de recherche."""
+    base_config = SEARCH_STRATEGIES_CONFIG.get(config.method.value)
+    if not base_config:
+        raise SearchValidationError(
+            field="method",
+            value=config.method.value,
+            constraint="unsupported_method"
+        )
+
+    method_params = base_config["search_params"]
+    for key, value in config.params.dict().items():
+        # Vérification des paramètres supportés
+        if key not in method_params:
+            raise SearchValidationError(
+                field=key,
+                value=value,
+                constraint="unsupported_parameter"
+            )
+        
+        # Validation des plages de valeurs
+        if isinstance(value, (int, float)):
+            if key in ["min_score", "vector_weight", "semantic_weight"]:
+                if not 0 <= value <= 1:
+                    raise SearchValidationError(
+                        field=key,
+                        value=value,
+                        constraint="value_out_of_range_0_1"
+                    )
+            elif key == "max_docs":
+                if not 1 <= value <= 20:
+                    raise SearchValidationError(
+                        field=key,
+                        value=value,
+                        constraint="value_out_of_range_1_20"
+                    )
 
 @router.get("/stream")
 async def stream_chat_response(
