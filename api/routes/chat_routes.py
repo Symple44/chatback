@@ -188,16 +188,14 @@ async def test_search_configuration(
         # 6. Préparation des résultats
         processed_results = []
         for result in results:
+            # Traitement direct des objets SearchResult
             doc_ref = DocumentReference(
-                title=result.get("title", ""),
-                score=result.get("score", 0),
-                content=result.get("content", "")[:200],  # Limite pour l'aperçu
-                metadata={
-                    **result.get("metadata", {}),
-                    "relevance_score": result.get("score", 0),
-                    "source": result.get("source_type", "unknown")
-                },
-                vector_id=result.get("vector_id", str(uuid.uuid4())),
+                title=result.content[:50] if result.content else "Sans titre",  # Utilise les premiers caractères comme titre
+                score=result.score,
+                content=result.content[:200],  # Limite pour l'aperçu
+                metadata=result.metadata,
+                source_type=result.source_type,
+                vector_id=str(uuid.uuid4()),
                 last_updated=datetime.utcnow()
             )
             processed_results.append(doc_ref)
@@ -276,7 +274,10 @@ async def test_search_configuration(
                 "query": query
             }
         )
-        raise HTTPException(status_code=500, detail=error.dict())
+        error_dict = json.loads(
+            json.dumps(error.dict(), cls=CustomJSONEncoder)
+        )
+        raise HTTPException(status_code=500, detail=error_dict)
 
     finally:
         # Nettoyage final
