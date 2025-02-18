@@ -21,6 +21,7 @@ from ..models.responses import (
     SearchValidationError
 )
 from ..dependencies import get_components
+from main import CustomJSONEncoder
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
@@ -188,13 +189,15 @@ async def test_search_configuration(
         # 6. Préparation des résultats
         processed_results = []
         for result in results:
-            # Traitement direct des objets SearchResult
             doc_ref = DocumentReference(
                 title=result.content[:50] if result.content else "Sans titre",  # Utilise les premiers caractères comme titre
                 score=result.score,
                 content=result.content[:200],  # Limite pour l'aperçu
-                metadata=result.metadata,
-                source_type=result.source_type,
+                metadata={
+                    **result.metadata,
+                    "relevance_score": result.score,
+                    "source": "search_result"  # Valeur par défaut
+                },
                 vector_id=str(uuid.uuid4()),
                 last_updated=datetime.utcnow()
             )
@@ -274,10 +277,7 @@ async def test_search_configuration(
                 "query": query
             }
         )
-        error_dict = json.loads(
-            json.dumps(error.dict(), cls=CustomJSONEncoder)
-        )
-        raise HTTPException(status_code=500, detail=error_dict)
+        raise HTTPException(status_code=500, detail=error.dict())
 
     finally:
         # Nettoyage final
