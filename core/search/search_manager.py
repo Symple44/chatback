@@ -17,15 +17,15 @@ class SearchManager:
     def __init__(self, components):
         """Initialise le gestionnaire de recherche."""
         self.components = components
-        self.config = SEARCH_STRATEGIES_CONFIG  # Ajout de cette ligne
+        self.config = SEARCH_STRATEGIES_CONFIG
         self.enabled = True
         self.current_method = SearchMethod.RAG
         self.current_params = self.config["rag"]["search_params"].copy()  # Paramètres par défaut
         self.metadata_filter = None
         self.cache = {}
-        self.cache_ttl = 3600  # 1 heure
+        self.cache_ttl = settings.SEARCH_CACHE_TTL
         
-    def configure(
+    async def configure(
         self,
         method: SearchMethod,
         search_params: Dict[str, Any],
@@ -33,10 +33,22 @@ class SearchManager:
     ):
         """Configure la stratégie de recherche."""
         self.current_method = method
-        self.current_params = search_params
+        
+        # Fusion avec les paramètres par défaut
+        default_params = self.config.get(
+            method.value, 
+            self.config["rag"]
+        )["search_params"].copy()
+        
+        # Mise à jour avec les nouveaux paramètres validés
+        validated_params = self._validate_search_params(search_params, method)
+        default_params.update(validated_params)
+        
+        self.current_params = default_params
         self.metadata_filter = metadata_filter
         self.enabled = method != SearchMethod.DISABLED
-        logger.info(f"Recherche configurée: {method.value}, params: {search_params}")
+        
+        logger.info(f"Recherche configurée: {method.value}, params: {self.current_params}")
 
     async def search_context(
         self,

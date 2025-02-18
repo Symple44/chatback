@@ -46,41 +46,46 @@ async def process_chat_message(
     request: ChatRequest,
     components=Depends(get_components)
 ) -> ChatResponse:
-    """
-    Traite une requête de chat avec configuration de recherche personnalisée.
-    """
     try:
-        # Initialisation des métriques de requête
         request_id = str(uuid.uuid4())
         metrics.start_request_tracking(request_id)
 
-        # Vérification et obtention de la session
+        # Récupération ou création de la session avec config de recherche
         chat_session = await components.session_manager.get_or_create_session(
             session_id=request.session_id,
             user_id=request.user_id,
             metadata={
                 "search_config": request.search_config.dict() if request.search_config else None,
-                "application": request.application
+                "application": request.application,
+                "language": request.language
             }
         )
 
-        # Obtention du processeur approprié
+        # Mise à jour des paramètres de recherche dans le SearchManager
+        if request.search_config:
+            await components.search_manager.configure(
+                method=request.search_config.method,
+                search_params=request.search_config.params.dict(),
+                metadata_filter=request.search_config.metadata_filter
+            )
+
+        # Obtention du processeur avec les paramètres
         processor = await components.processor_factory.get_processor(
             business_type=request.business,
             components=components
         )
 
-        # Traitement du message
-        response = await processor.process_message(request=request)
+        # Traitement avec tous les paramètres
+        response = await processor.process_message(
+            request=request,
+            chat_session=chat_session
+        )
 
-        # Mise à jour des métriques
         metrics.finish_request_tracking(request_id)
-        
         return response
 
     except Exception as e:
         metrics.increment_counter("chat_errors")
-        logger.error(f"Erreur traitement message: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/search/metrics")

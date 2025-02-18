@@ -1,22 +1,17 @@
 # core/chat/processor.py
 from fastapi import HTTPException
 from datetime import datetime
-from typing import Dict, List, Optional, Set
-import asyncio
+from typing import Dict, List, Optional
 import uuid
-import re
 import traceback
-from pathlib import Path
 from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.utils.system_optimizer import SystemOptimizer
 from core.chat.context_analyzer import context_analyzer
-from core.search.search_manager import SearchManager
-
+from core.search.strategies import SearchMethod
 from api.models.requests import ChatRequest
-from api.models.responses import ChatResponse, DocumentReference, SimilarQuestion
-from core.database.models import User, ChatSession, ChatHistory, ReferencedDocument, ErrorLog
+from api.models.responses import ChatResponse, DocumentReference
+from core.database.models import ChatSession, ErrorLog
 
 logger = get_logger("chat_processor")
 
@@ -30,36 +25,46 @@ class ChatProcessor:
         self.max_clarification_attempts = settings.MAX_CLARIFICATION_ATTEMPTS
         self.min_query_length = settings.MIN_QUERY_LENGTH
         self.max_context_docs = settings.MAX_CONTEXT_DOCS
-        # Initialisation du SearchManager
-        self.search_manager = SearchManager(components)
+        self.search_manager = components.search_manager
 
     async def process_message(
         self,
         request: ChatRequest,
         chat_session: Optional[ChatSession] = None
     ) -> ChatResponse:
-        """
-        Traite un message chat avec une logique améliorée d'interaction.
-        """
+        """Traite un message chat avec paramètres de recherche configurables."""
         start_time = datetime.utcnow()
         metrics.increment_counter("chat_requests")
 
         try:
-            # Configuration de la recherche vectorielle selon la requête
-            vector_search_enabled = request.vector_search
-            self.search_manager.set_enabled(vector_search_enabled)
+            # Configuration de la recherche si spécifiée
+            vector_search_enabled = True
+            if request.search_config:
+                try:
+                    await self.search_manager.configure(
+                        method=request.search_config.method,
+                        search_params=request.search_config.params.dict(),
+                        metadata_filter=request.search_config.metadata_filter
+                    )
+                    vector_search_enabled = request.search_config.method != SearchMethod.DISABLED
+                except Exception as e:
+                    logger.error(f"Erreur configuration recherche: {e}")
+                    vector_search_enabled = False
 
             # 1. Génération du vecteur de requête si la recherche est activée
             relevant_docs = []
             query_vector = None
             if vector_search_enabled:
-                query_vector = await self.components.model.create_embedding(request.query)
+                query_vector = await self.components.model.create_embedding(
+                    request.query,
+                    language=request.language
+                )
                 if query_vector:
                     relevant_docs = await self.search_manager.search_context(
                         query=request.query,
-                        metadata_filter={"application": request.application} if request.application else None,
-                        min_score=self.confidence_threshold,
-                        max_docs=self.max_context_docs
+                        metadata_filter={
+                            "application": request.application
+                        } if request.application else None
                     )
 
             # 2. Analyse du contexte avec ou sans documents
@@ -119,7 +124,8 @@ class ChatProcessor:
         self,
         query: str,
         relevant_docs: List[Dict],
-        context_confidence: float
+        context_confidence: float,
+        language: str = "fr"
     ) -> Dict:
         """Analyse le contexte de la conversation."""
         try:
@@ -127,7 +133,8 @@ class ChatProcessor:
                 query=query,
                 context_docs=relevant_docs,
                 context_confidence=context_confidence,
-                summarizer=self.components.model.summarizer if hasattr(self.components.model, 'summarizer') else None
+                summarizer=self.components.model.summarizer if hasattr(self.components.model, 'summarizer') else None,
+                language=language
             )
             
             return context_analysis
@@ -141,34 +148,45 @@ class ChatProcessor:
             }
             
     async def _handle_clarification_response(
-       self,
-       request: ChatRequest, 
-       chat_session: ChatSession,
-       context_analysis: Dict
+        self,
+        request: ChatRequest,
+        chat_session: ChatSession,
+        context_analysis: Dict
     ) -> ChatResponse:
-       start_time = datetime.utcnow()
-       query = f"{chat_session.session_context.get('original_query', '')} {request.query}"
-       
-       relevant_docs = await self.components.es_client.search_documents(
-           query=query,
-           size=self.max_context_docs
-       )
+        start_time = datetime.utcnow()
+        query = f"{chat_session.session_context.get('original_query', '')} {request.query}"
+        
+        # Utiliser les paramètres de recherche de la requête si disponibles
+        search_params = {}
+        if hasattr(request, 'search_config') and request.search_config:
+            search_params = request.search_config.params.dict()
+        else:
+            search_params = {
+                "max_docs": self.max_context_docs,
+                "min_score": self.confidence_threshold
+            }
 
-       response = await self._generate_final_response(
-           request=request,
-           chat_session=chat_session, 
-           relevant_docs=relevant_docs,
-           context_analysis=context_analysis,
-           start_time=start_time
-       )
+        relevant_docs = await self.search_manager.search_context(
+            query=query,
+            metadata_filter={"application": request.application} if request.application else None,
+            **search_params
+        )
 
-       # Reset clarification state
-       await self.components.session_manager.update_session_context(
-           chat_session.session_id,
-           {"pending_clarification": False}
-       )
+        response = await self._generate_final_response(
+            request=request,
+            chat_session=chat_session,
+            relevant_docs=relevant_docs,
+            context_analysis=context_analysis,
+            start_time=start_time
+        )
 
-       return response
+        # Reset clarification state
+        await self.components.session_manager.update_session_context(
+            chat_session.session_id,
+            {"pending_clarification": False}
+        )
+
+        return response
         
     async def _should_handle_clarification(
         self,
@@ -211,7 +229,6 @@ class ChatProcessor:
         except Exception as e:
             logger.error(f"Erreur analyse clarification: {e}")
             return {"is_valid": False}
-    
 
     async def _create_clarification_response(
         self,
@@ -251,10 +268,16 @@ class ChatProcessor:
         # Construction du message de clarification
         clarification_text = templates.get(reason, templates["query_ambiguity"]).format(
             themes="\n".join(f"- {theme}" for theme in context_analysis.get("themes", [])),
-            understanding=await self._generate_query_understanding(request.query),
+            understanding=await self._generate_query_understanding(
+                query=request.query,
+                language=request.language
+            ),
             key_concepts=", ".join(context_analysis["query_analysis"]["key_concepts"]),
             interpretations="\n".join(
-                f"- {interp}" for interp in await self._generate_query_interpretations(request.query)
+                f"- {interp}" for interp in await self._generate_query_interpretations(
+                    query=request.query,
+                    language=request.language
+                )
             )
         )
 
@@ -271,20 +294,20 @@ class ChatProcessor:
                 }
             )
 
-        # S'assurer que tous les champs requis sont présents
         return ChatResponse(
             response=clarification_text,
             session_id=str(chat_session.session_id) if chat_session else None,
             conversation_id=str(uuid.uuid4()),
             confidence_score=context_analysis.get("context_confidence", 0.0),
-            processing_time=(datetime.utcnow() - start_time).total_seconds(),  # Ajout du processing_time
-            tokens_used=0,  # Valeur par défaut pour tokens_used
-            documents=[],  # Liste vide pour les documents
+            processing_time=(datetime.utcnow() - start_time).total_seconds(),
+            tokens_used=0,
+            documents=[],
             metadata={
                 "needs_clarification": True,
                 "clarification_reason": reason,
                 "themes": context_analysis.get("themes", []),
-                "query_analysis": context_analysis.get("query_analysis", {})
+                "query_analysis": context_analysis.get("query_analysis", {}),
+                "language": request.language
             }
         )
 
@@ -313,13 +336,14 @@ class ChatProcessor:
                 context_docs=relevant_docs if relevant_docs else None,
                 conversation_history=conversation_history,
                 response_type=response_type,
-                prompt_prefix=prompt_prefix
+                prompt_prefix=prompt_prefix,
+                language=request.language
             )
 
             # Construction de la réponse finale
             processing_time = (datetime.utcnow() - start_time).total_seconds()
             
-            final_response = ChatResponse(
+            return ChatResponse(
                 response=response.get("response", ""),
                 session_id=str(chat_session.session_id) if chat_session else None,
                 conversation_id=str(uuid.uuid4()),
@@ -343,18 +367,10 @@ class ChatProcessor:
                     "vector_search_enabled": self.search_manager.enabled,
                     "docs_used": len(relevant_docs),
                     "source": "model",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "language": request.language
                 }
             )
-
-            # Mise à jour des métriques
-            metrics.increment_counter("responses_generated")
-            metrics.record_time(
-                "response_generation",
-                processing_time
-            )
-
-            return final_response
 
         except Exception as e:
             logger.error(f"Erreur génération réponse finale: {e}", exc_info=True)
@@ -364,44 +380,54 @@ class ChatProcessor:
         self,
         chat_session: ChatSession,
         request: ChatRequest,
-        response: ChatResponse,
-        context_analysis: Dict,
-        vector_search_enabled: bool
+        response: Optional[ChatResponse] = None,
+        context_analysis: Optional[Dict] = None,
+        context_update: Optional[Dict] = None,
+        vector_search_enabled: bool = True
     ) -> None:
-        """Met à jour le contexte de la session avec l'état de la recherche."""
+        """Met à jour le contexte de la session."""
         try:
-            current_context = chat_session.session_context or {}
+            current_context = chat_session.session_context.copy() or {}
 
-            # Mise à jour de l'historique
-            history = current_context.get("history", [])
-            history.extend([
-                {
-                    "role": "user",
-                    "content": request.query,
-                    "timestamp": datetime.utcnow().isoformat()
-                },
-                {
-                    "role": "assistant",
-                    "content": response.response,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            ])
-            # Limiter l'historique aux 5 dernières interactions
-            history = history[-10:]
+            # Mise à jour de l'historique si une réponse est fournie
+            if response:
+                history = current_context.get("history", [])
+                history.extend([
+                    {
+                        "role": "user",
+                        "content": request.query,
+                        "timestamp": datetime.utcnow().isoformat()
+                    },
+                    {
+                        "role": "assistant",
+                        "content": response.response,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                ])
+                # Limiter l'historique selon la configuration
+                history = history[-settings.MAX_HISTORY_MESSAGES * 2:]
+                current_context["history"] = history
 
-            # Construction du nouveau contexte avec l'état de la recherche
+            # Mise à jour du contexte avec les nouvelles informations
             new_context = {
                 **current_context,
-                "history": history,
                 "last_interaction": datetime.utcnow().isoformat(),
                 "last_query": request.query,
                 "vector_search_enabled": vector_search_enabled,
-                "analysis": {
+                "language": request.language
+            }
+
+            # Ajout des analyses si fournies
+            if context_analysis:
+                new_context["analysis"] = {
                     "themes": context_analysis.get("themes", []),
                     "confidence": context_analysis.get("context_confidence"),
-                    "response_type": context_analysis.get("response_type"),
+                    "response_type": context_analysis.get("response_type")
                 }
-            }
+
+            # Ajout des mises à jour supplémentaires
+            if context_update:
+                new_context.update(context_update)
 
             # Mise à jour de la session
             chat_session.session_context = new_context
@@ -416,27 +442,27 @@ class ChatProcessor:
             logger.error(f"Erreur mise à jour contexte session: {e}")
             raise
 
-    async def _generate_query_understanding(self, query: str) -> str:
+
+    async def _generate_query_understanding(self, query: str, language: Optional[str] = None) -> str:
         """Génère une reformulation de la compréhension de la requête."""
         try:
-            # Utilisation du modèle pour reformuler la question
             response = await self.components.model.generate_response(
                 query=f"Reformule cette question pour vérifier la compréhension: {query}",
-                response_type="concise",  # Utilisation du type de réponse au lieu de max_tokens
-                language="fr"
+                response_type="concise",  
+                language=language or "fr"
             )
             return response.get("response", "")
         except Exception as e:
             logger.error(f"Erreur génération reformulation: {e}")
             return f"Vous demandez des informations sur {query}"
 
-    async def _generate_query_interpretations(self, query: str) -> List[str]:
+    async def _generate_query_interpretations(self, query: str, language: Optional[str] = None) -> List[str]:
         """Génère différentes interprétations possibles de la requête."""
         try:
             response = await self.components.model.generate_response(
                 query=f"Génère 3 interprétations possibles de cette question: {query}",
                 response_type="concise",  
-                language="fr"
+                language=language or "fr"
             )
             
             interpretations = response.get("response", "").split("\n")
@@ -444,7 +470,7 @@ class ChatProcessor:
         except Exception as e:
             logger.error(f"Erreur génération interprétations: {e}")
             return []
-
+        
     def _calculate_context_confidence(self, docs: List[Dict]) -> float:
         """Calcule le score de confiance moyen des documents."""
         if not docs:
