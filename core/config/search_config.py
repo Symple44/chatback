@@ -10,7 +10,7 @@ SEARCH_STRATEGIES_CONFIG = {
             "batch_size": 32
         },
         "search_params": {
-            "max_docs": 5,
+            "max_docs": 10,
             "min_score": 0.3,
             "vector_weight": 0.7,
             "semantic_weight": 0.3,
