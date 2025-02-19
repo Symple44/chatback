@@ -34,17 +34,20 @@ class EnhancedRAGSearch(SearchStrategy):
             if not query_vector:
                 return []
 
+            # Respect strict du max_docs configuré
+            max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
             # 2. Recherche vectorielle
             results = await self._vector_search(
                 query=query,
                 query_vector=query_vector,
                 metadata_filter=metadata_filter,
+                max_docs=max_docs,  
                 **kwargs
             )
 
             # 3. Post-traitement des résultats
             processed_results = await self._post_process_results(
-                results=results,
+                results=results[:max_docs],  
                 query_vector=query_vector,
                 **kwargs
             )
@@ -52,7 +55,7 @@ class EnhancedRAGSearch(SearchStrategy):
             # 4. Mise à jour des métriques
             self._update_metrics(len(processed_results))
 
-            return processed_results
+            return processed_results[:max_docs]
 
         except Exception as e:
             logger.error(f"Erreur recherche RAG: {e}")
@@ -80,11 +83,14 @@ class EnhancedRAGSearch(SearchStrategy):
     ) -> List[Dict]:
         """Effectue la recherche vectorielle."""
         try:
+            # Extraction explicite de max_docs avec une valeur par défaut élevée
+            max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
+            logger.debug(f"Requesting {max_docs} documents from Elasticsearch")
             docs = await self.es_client.search_documents(
                 query=query,
                 vector=query_vector,
                 metadata_filter=metadata_filter,
-                size=kwargs.get("max_docs", self.config["search_params"]["max_docs"]),
+                size=max_docs,
                 min_score=kwargs.get("min_score", self.config["search_params"]["min_score"])
             )
             return docs
@@ -100,6 +106,7 @@ class EnhancedRAGSearch(SearchStrategy):
     ) -> List[SearchResult]:
         """Post-traite les résultats de recherche."""
         processed_results = []
+        max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
         
         for result in results:
             try:
@@ -136,8 +143,10 @@ class EnhancedRAGSearch(SearchStrategy):
             except Exception as e:
                 logger.error(f"Erreur traitement résultat: {e}")
                 continue
-
-        return sorted(processed_results, key=lambda x: x.score, reverse=True)
+        
+        sorted_results = sorted(processed_results, key=lambda x: x.score, reverse=True)
+        logger.debug(f"Returning {min(len(sorted_results), max_docs)} documents after processing")
+        return sorted_results[:max_docs]
 
     def _calculate_semantic_score(
         self,
@@ -906,10 +915,9 @@ class EnhancedSemanticSearch(SearchStrategy):
             # Recherche simple sans analyse complexe
             docs = await self.es_client.search_documents(
                 query=query,
-                vector=query_vector,
                 metadata_filter=metadata_filter,
-                size=kwargs.get("max_docs", self.config["search_params"]["max_docs"]),
-                min_score=kwargs.get("min_score", self.config["search_params"]["min_score"])
+                size=self.config["search_params"]["max_docs"],
+                min_score=self.config["search_params"]["min_score"]
             )
             
             return [

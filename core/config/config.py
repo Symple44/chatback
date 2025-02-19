@@ -157,7 +157,7 @@ class Settings(BaseSettings):
 
      # === Search Configuration ===
     DEFAULT_SEARCH_METHOD: str = os.getenv("DEFAULT_SEARCH_METHOD", "rag")
-    SEARCH_MAX_DOCS: int = int(os.getenv("SEARCH_MAX_DOCS", "5"))
+    SEARCH_MAX_DOCS: int = int(os.getenv("SEARCH_MAX_DOCS", "20")) # Limite max de documents dans la recherche (niveau le plus haut)
     SEARCH_MIN_SCORE: float = float(os.getenv("SEARCH_MIN_SCORE", "0.3"))
     
     # Configuration des stratégies de recherche
