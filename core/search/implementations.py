@@ -906,9 +906,10 @@ class EnhancedSemanticSearch(SearchStrategy):
             # Recherche simple sans analyse complexe
             docs = await self.es_client.search_documents(
                 query=query,
+                vector=query_vector,
                 metadata_filter=metadata_filter,
-                size=self.config["search_params"]["max_docs"],
-                min_score=self.config["search_params"]["min_score"]
+                size=kwargs.get("max_docs", self.config["search_params"]["max_docs"]),
+                min_score=kwargs.get("min_score", self.config["search_params"]["min_score"])
             )
             
             return [

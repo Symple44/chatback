@@ -147,8 +147,11 @@ async def test_search_configuration(
         search_manager = components.search_manager.__class__(components)
         search_params = {
             **SEARCH_STRATEGIES_CONFIG[config.method.value]["search_params"],
-            **config.params.dict()
+            "max_docs": config.params.dict().get("max_docs", SEARCH_STRATEGIES_CONFIG[config.method.value]["search_params"]["max_docs"])
         }
+
+        # Mise à jour des autres paramètres validés
+        search_params.update(config.params.dict())
         
         await search_manager.configure(
             method=config.method,

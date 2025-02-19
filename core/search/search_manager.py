@@ -55,22 +55,25 @@ class SearchManager:
         params: Dict[str, Any],
         method: SearchMethod
     ) -> Dict[str, Any]:
-        """Valide et normalise les paramètres de recherche."""
         validated = {}
         default_config = self.config.get(method.value, self.config["rag"])["search_params"]
         
-        # Validation des paramètres spécifiques à la méthode
+        # Ne permettre que les paramètres connus
+        allowed_params = set(default_config.keys())
+        
         for key, value in params.items():
-            if key in default_config:
-                if key == "max_docs":
-                    validated[key] = min(max(1, value), settings.SEARCH_MAX_DOCS)
-                elif key == "min_score":
-                    validated[key] = min(max(0.0, value), 1.0)
-                elif key in ["vector_weight", "semantic_weight"]:
-                    validated[key] = min(max(0.0, value), 1.0)
-                else:
-                    validated[key] = value
-                    
+            if key not in allowed_params:
+                continue
+                
+            if key == "max_docs":
+                validated[key] = min(max(1, int(value)), 20)  # Force la plage 1-20
+            elif key == "min_score":
+                validated[key] = min(max(0.0, float(value)), 1.0)
+            elif key in ["vector_weight", "semantic_weight"]:
+                validated[key] = min(max(0.0, float(value)), 1.0)
+            else:
+                validated[key] = value
+                
         return validated
     
     async def search_context(

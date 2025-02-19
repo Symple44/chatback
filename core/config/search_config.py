@@ -27,7 +27,7 @@ SEARCH_STRATEGIES_CONFIG = {
     "hybrid": {
         "model_params": {
             "embedding_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-            "semantic_model": "mistralai/Mistral-7B-Instruct-v0.1",
+            "semantic_model": "Mistral-Small-24B-Instruct-2501",
             "device": "cuda"
         },
         "search_params": {
@@ -48,7 +48,7 @@ SEARCH_STRATEGIES_CONFIG = {
     },
     "semantic": {
         "model_params": {
-            "model": "mistralai/Mistral-7B-Instruct-v0.1",
+            "model": "Mistral-Small-24B-Instruct-2501",
             "device": "cuda",
             "max_tokens": 100
         },
