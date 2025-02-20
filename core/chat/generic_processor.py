@@ -173,13 +173,16 @@ class GenericProcessor(BaseProcessor):
                 conversation_id=str(uuid.uuid4()),
                 context_docs=[
                     DocumentReference(
-                        title=doc.get("title", ""),
+                        title=doc.get("title") or doc.get("name") or \
+                              doc.metadata.get("title") or doc.metadata.get("name") or \
+                              "Document " + str(idx + 1),  # Fallback avec un numéro unique
                         page=int(doc.get("metadata", {}).get("page", 1)),
                         score=float(doc.get("score", 0.0)),
-                        content=doc.get("content", ""),
+                        content=doc.get("content") or "Pas de contenu disponible",  # Fallback pour le contenu
                         metadata=doc.get("metadata", {})
-                    ) for doc in relevant_docs
+                    ) for idx, doc in enumerate(relevant_docs)  # Ajout de l'index pour le fallback
                 ] if relevant_docs else [],
+                search_metadata=search_metadata,
                 confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 processing_time=float(processing_time),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),

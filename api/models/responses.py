@@ -44,11 +44,18 @@ class DocumentReference(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     page: Optional[int] = Field(default=0, ge=1)  
     score: float = Field(..., ge=0.0)
-    content: str = Field(default="")  
+    content: str = Field(default="Pas de contenu disponible")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     vector_id: str = Field(default_factory=lambda: str(uuid.uuid4()))  
     last_updated: datetime = Field(default_factory=datetime.utcnow)
 
+    @validator('title')
+    def ensure_title(cls, v: str) -> str:
+        """S'assure qu'un titre est toujours présent."""
+        if not v.strip():
+            return "Document sans titre"
+        return v.strip()
+    
     @validator('score')
     def normalize_score(cls, v: float) -> float:
         """Normalise le score si nécessaire."""
