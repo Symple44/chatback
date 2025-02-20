@@ -178,8 +178,9 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "query": "Comment configurer la recherche RAG ?",
+                "query": "Comment créer une commande d'achat ?",
                 "user_id": "123",
+                "business": "generic",
                 "search_config": {
                     "method": "rag",
                     "params": {
@@ -200,6 +201,10 @@ class ChatRequest(BaseModel):
         description="Question de l'utilisateur"
     )
     user_id: str = Field(..., description="Identifiant de l'utilisateur")
+    business: BusinessType = Field(
+        default=BusinessType.GENERIC,
+        description="Type de processeur métier à utiliser"
+    )
     session_id: Optional[str] = Field(default=None)
     search_config: Optional[SearchConfig] = Field(
         default=None,
