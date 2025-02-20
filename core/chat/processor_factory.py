@@ -2,6 +2,7 @@
 from typing import Dict, Optional
 from core.utils.logger import get_logger
 from .generic_processor import GenericProcessor
+from core.config.chat_config import BusinessType
 
 logger = get_logger("processor_factory")
 
@@ -14,9 +15,9 @@ class ProcessorFactory:
     async def get_processor(cls, business_type: Optional[str], components) -> 'GenericProcessor':
         """Récupère ou crée un processeur approprié."""
         try:
-            # Si business_type est None ou une chaîne vide, utiliser le processeur générique
-            if not business_type:
-                logger.info("Aucun type métier spécifié, utilisation du processeur générique")
+            # Si business_type est None, vide, ou "generic", utiliser directement le processeur générique
+            if not business_type or business_type.lower() == BusinessType.GENERIC:
+                logger.info("Utilisation du processeur générique")
                 if "generic" not in cls._processors:
                     cls._processors["generic"] = GenericProcessor(components)
                 return cls._processors["generic"]
