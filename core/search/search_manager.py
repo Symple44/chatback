@@ -34,20 +34,21 @@ class SearchManager:
         """Configure la stratégie de recherche."""
         self.current_method = method
         
-        # Fusion avec les paramètres par défaut
-        default_params = self.config.get(
+        # Récupérer d'abord les paramètres par défaut
+        base_params = self.config.get(
             method.value, 
             self.config["rag"]
         )["search_params"].copy()
         
-        # Mise à jour avec les nouveaux paramètres validés
-        validated_params = self._validate_search_params(search_params, method)
-        default_params.update(validated_params)
+        # Créer un nouveau dictionnaire en priorisant les paramètres utilisateur
+        self.current_params = {
+            **base_params,  # Base à partir de SEARCH_STRATEGIES_CONFIG
+            **self._validate_search_params(search_params, method)  # Écrase avec les paramètres utilisateur validés
+        }
         
-        self.current_params = default_params
         self.metadata_filter = metadata_filter
         self.enabled = method != SearchMethod.DISABLED
-        
+            
         logger.info(f"Recherche configurée: {method.value}, params: {self.current_params}")
 
     def _validate_search_params(
