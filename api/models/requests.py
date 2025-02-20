@@ -6,7 +6,7 @@ import re
 from enum import Enum
 from core.search.strategies import SearchMethod
 from core.config.config import settings
-from core.chat.processor_factory import BusinessType
+from core.config.chat_config import BusinessType
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
