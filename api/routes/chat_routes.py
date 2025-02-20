@@ -33,6 +33,7 @@ from core.config.search_config import SEARCH_STRATEGIES_CONFIG
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 from core.streaming.stream_manager import StreamManager
+from core.config.chat_config import BusinessType
 
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -350,6 +351,7 @@ async def validate_search_config(config: SearchConfig) -> None:
 async def stream_chat_response(
     query: str = Query(..., min_length=1),
     user_id: str = Query(...),
+    business: BusinessType = Query(default=BusinessType.GENERIC),
     search_method: SearchMethod = Query(default=SearchMethod.RAG),
     session_id: Optional[str] = None,
     language: str = Query(default="fr"),
@@ -374,13 +376,14 @@ async def stream_chat_response(
                 user_id=user_id,
                 metadata={
                     "search_method": search_method,
-                    "application": application
+                    "application": application,
+                    "business": business
                 }
             )
             
             # Configuration du processeur
-            processor = await ProcessorFactory.get_processor(
-                business_type="generic",
+            processor = await components.processor_factory.get_processor(
+                business_type=business,
                 components=components
             )
             
@@ -399,6 +402,7 @@ async def stream_chat_response(
                 model=components.model,
                 context_docs=relevant_docs,
                 language=language,
+                business=business,  
                 session=chat_session
             ):
                 yield event

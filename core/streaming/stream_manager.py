@@ -1,9 +1,10 @@
 # core/streaming/stream_manager.py
-from typing import AsyncGenerator, Any, Dict, List
+from typing import AsyncGenerator, Any, Dict, List, Optional
 from datetime import datetime
 from core.utils.metrics import metrics
 from core.utils.logger import get_logger
 from core.config.config import settings
+from core.config.chat_config import BusinessType
 import json
 import asyncio
 
@@ -24,18 +25,37 @@ class StreamManager:
         query: str,
         model,
         context_docs: List[Dict] = None,
+        business: BusinessType = BusinessType.GENERIC,
+        language: str = "fr",
+        session: Optional[Any] = None,
         **kwargs
     ) -> AsyncGenerator[Dict, None]:
         """
         Stream une réponse avec gestion optimisée de la mémoire et du réseau.
+        
+        Args:
+            query: Question de l'utilisateur
+            model: Instance du modèle LLM
+            context_docs: Documents de contexte optionnels
+            business: Type de processeur métier
+            language: Langue de la réponse
+            session: Session de chat optionnelle
+            **kwargs: Paramètres additionnels
         """
         try:
             token_batch = []
             start_time = datetime.utcnow()
             
+            # Configuration du type de réponse selon le business
+            response_type = "technical" if business != BusinessType.GENERIC else "comprehensive"
+            
             async for token in model.generate_streaming_response(
                 query=query,
                 context_docs=context_docs,
+                language=language,
+                response_type=response_type,
+                business=business,  # Ajout du business type
+                session=session,
                 **kwargs
             ):
                 # Accumulation des tokens
@@ -76,6 +96,7 @@ class StreamManager:
                     "metadata": {
                         "processing_time": (datetime.utcnow() - start_time).total_seconds(),
                         "tokens_generated": len(token_batch),
+                        "business_type": business,
                         "stream_config": {
                             "batch_size": self.batch_size,
                             "max_queue_size": self.max_queue_size

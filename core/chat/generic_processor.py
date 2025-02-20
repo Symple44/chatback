@@ -85,7 +85,15 @@ class GenericProcessor(BaseProcessor):
                     query=query,
                     metadata_filter=request.get("metadata")
                 )
-                relevant_docs = results
+                # Convertir les SearchResult en dictionnaires
+                relevant_docs = [{
+                    "content": doc.content,
+                    "score": doc.score,
+                    "metadata": doc.metadata,
+                    "title": doc.metadata.get("title", ""),
+                    "name": doc.metadata.get("name", "")
+                } for doc in results] if results else []
+                
                 search_metadata = {
                     "method": self.components.search_manager.current_method.value,
                     "params": self.components.search_manager.current_params,
@@ -148,7 +156,7 @@ class GenericProcessor(BaseProcessor):
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
                 referenced_docs=[{
-                    "name": doc.get("title", doc.get("name", "Unknown Document")),
+                    "name": doc.get("name", doc.get("title", "Unknown Document")),
                     "page": doc.get("metadata", {}).get("page", 1),
                     "score": float(doc.get("score", 0.0)),
                     "snippet": doc.get("content", ""),
@@ -163,7 +171,7 @@ class GenericProcessor(BaseProcessor):
                 response=response_text,
                 session_id=session_id,
                 conversation_id=str(uuid.uuid4()),
-                documents=[
+                context_docs=[
                     DocumentReference(
                         title=doc.get("title", ""),
                         page=int(doc.get("metadata", {}).get("page", 1)),
