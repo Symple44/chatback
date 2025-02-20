@@ -37,6 +37,7 @@ from core.llm.embedding_manager import EmbeddingManager
 from core.llm.summarizer import DocumentSummarizer
 from core.llm.tokenizer_manager import TokenizerManager
 from core.llm.model import ModelInference
+from core.chat.processor_factory import ProcessorFactory
 from core.search.search_manager import SearchManager
 
 from core.storage.google_drive import GoogleDriveManager
@@ -150,6 +151,11 @@ class ComponentManager:
                 self._components["model"] = model
                 logger.info("Model Inference initialisé")
 
+                # Processor Factory
+                processor_factory = ProcessorFactory()
+                self._components["processor_factory"] = processor_factory
+                logger.info("Processor Factory initialisé")
+
                 # SearchManager
                 search_manager = SearchManager(self)
                 self._components["search_manager"] = search_manager  # 
@@ -178,7 +184,7 @@ class ComponentManager:
                 logger.critical(f"Erreur critique lors de l'initialisation: {e}")
                 await self.cleanup()
                 raise
-            
+
     async def sync_drive_documents(self):
         """Synchronise les documents."""
         try:
