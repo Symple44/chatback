@@ -145,17 +145,14 @@ async def test_search_configuration(
         
         # 2. Configuration du SearchManager
         search_manager = components.search_manager.__class__(components)
-        search_params = {
-            **SEARCH_STRATEGIES_CONFIG[config.method.value]["search_params"],
-            "max_docs": config.params.dict().get("max_docs", SEARCH_STRATEGIES_CONFIG[config.method.value]["search_params"]["max_docs"])
-        }
 
-        # Mise à jour des autres paramètres validés
-        search_params.update(config.params.dict())
-        
+        # Simplifier la fusion des paramètres
+        search_params = config.params.dict()  # Commencer avec les paramètres utilisateur
+        logger.debug(f"User params: {search_params}")
+
         await search_manager.configure(
             method=config.method,
-            search_params=search_params,
+            search_params=search_params,  # Passer directement les paramètres utilisateur
             metadata_filter=config.metadata_filter
         )
 
