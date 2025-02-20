@@ -2,6 +2,7 @@
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import logging
+from api.models.responses import SearchResult
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
@@ -34,17 +35,20 @@ class SearchManager:
         """Configure la stratégie de recherche."""
         self.current_method = method
         
-        # Récupérer d'abord les paramètres par défaut
+        # Récupérer d'abord les paramètres par défaut de la config
         base_params = self.config.get(
             method.value, 
             self.config["rag"]
         )["search_params"].copy()
         
-        # Créer un nouveau dictionnaire en priorisant les paramètres utilisateur
+        # Les paramètres utilisateur écrasent les paramètres par défaut
         self.current_params = {
-            **base_params,  # Base à partir de SEARCH_STRATEGIES_CONFIG
-            **self._validate_search_params(search_params, method)  # Écrase avec les paramètres utilisateur validés
+            **base_params,  # Paramètres de base depuis SEARCH_STRATEGIES_CONFIG
+            **{k: v for k, v in search_params.items() if v is not None}  # Ne prendre que les valeurs non nulles
         }
+        
+        # Validation des paramètres
+        self.current_params = self._validate_search_params(self.current_params, method)
         
         self.metadata_filter = metadata_filter
         self.enabled = method != SearchMethod.DISABLED
@@ -64,25 +68,33 @@ class SearchManager:
         
         for key, value in params.items():
             if key not in allowed_params:
+                logger.warning(f"Paramètre ignoré car non autorisé: {key}")
                 continue
                 
+            original_value = value
             if key == "max_docs":
-                validated[key] = min(max(1, int(value)), 20)  # Force la plage 1-20
+                validated[key] = min(max(1, int(value)), 20)
+                if validated[key] != value:
+                    logger.info(f"max_docs ajusté de {value} à {validated[key]} pour respecter les limites [1-20]")
             elif key == "min_score":
                 validated[key] = min(max(0.0, float(value)), 1.0)
+                if validated[key] != value:
+                    logger.info(f"min_score ajusté de {value} à {validated[key]} pour respecter les limites [0-1]")
             elif key in ["vector_weight", "semantic_weight"]:
                 validated[key] = min(max(0.0, float(value)), 1.0)
+                if validated[key] != value:
+                    logger.info(f"{key} ajusté de {value} à {validated[key]} pour respecter les limites [0-1]")
             else:
                 validated[key] = value
                 
         return validated
-    
+
     async def search_context(
         self,
         query: str,
         metadata_filter: Optional[Dict] = None,
         **kwargs
-    ) -> List[Dict]:
+    ) -> List[SearchResult]:
         """Effectue la recherche selon la configuration actuelle."""
         if not self.enabled:
             logger.debug("Recherche désactivée")
@@ -93,15 +105,16 @@ class SearchManager:
             cache_key = self._get_cache_key(query, metadata_filter)
             cached_result = self._get_from_cache(cache_key)
             if cached_result:
-                logger.debug("Résultat trouvé en cache")
-                metrics.increment_counter("search_cache_hits")
-                return cached_result
+                # Pour les résultats en cache, respecter aussi max_docs
+                max_docs = kwargs.get("max_docs", self.current_params.get("max_docs", 10))
+                logger.debug(f"Utilisation de max_docs={max_docs} pour les résultats en cache")
+                return cached_result[:max_docs]
 
-            start_time = datetime.utcnow()
-
-            # Fusion des paramètres de recherche
-            search_params = self.current_params.copy()
-            search_params.update(kwargs)
+            # Fusion des paramètres de recherche - priorité aux paramètres spécifiques
+            search_params = {
+                **self.current_params,
+                **kwargs  # kwargs écrase les paramètres de la configuration
+            }
             
             # Fusion des filtres de métadonnées
             combined_filter = {}
@@ -116,26 +129,18 @@ class SearchManager:
                 components=self.components
             )
 
-            strategy.configure(search_params)
+            strategy.configure(search_params)  # Utilise les paramètres fusionnés
             results = await strategy.search(
                 query=query,
                 metadata_filter=combined_filter or None
             )
 
-            # Calcul du temps de traitement
-            processing_time = (datetime.utcnow() - start_time).total_seconds()
-
-            # Mise à jour des métriques
-            self._update_metrics(
-                method=self.current_method,
-                results_count=len(results),
-                processing_time=processing_time
-            )
-
-            # Mise en cache des résultats
+            # Mise en cache des résultats COMPLETS
             self._cache_results(cache_key, results)
 
-            return results
+            # Retourne les résultats limités par max_docs
+            max_docs = search_params.get("max_docs", 10)
+            return results[:max_docs]
 
         except Exception as e:
             logger.error(f"Erreur recherche contexte: {e}", exc_info=True)
