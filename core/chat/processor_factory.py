@@ -1,5 +1,6 @@
 # core/chat/processor_factory.py
 from typing import Dict, Optional
+from enum import Enum
 from core.utils.logger import get_logger
 from .generic_processor import GenericProcessor
 
