@@ -174,8 +174,9 @@ class GenericProcessor(BaseProcessor):
                 context_docs=[
                     DocumentReference(
                         title=doc.get("title") or doc.get("name") or \
-                              doc.metadata.get("title") or doc.metadata.get("name") or \
-                              "Document " + str(idx + 1),  # Fallback avec un numéro unique
+                              doc.get("metadata", {}).get("title") or \
+                              doc.get("metadata", {}).get("name") or \
+                              f"Document {idx + 1}",  # Fallback avec un numéro unique
                         page=int(doc.get("metadata", {}).get("page", 1)),
                         score=float(doc.get("score", 0.0)),
                         content=doc.get("content") or "Pas de contenu disponible",  # Fallback pour le contenu
