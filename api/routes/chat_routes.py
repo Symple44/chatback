@@ -1,5 +1,5 @@
 # api/routes/chat_routes.py
-import select
+from sqlalchemy import select
 from core.database.base import DatabaseSession
 from core.database.models import User
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
