@@ -212,12 +212,13 @@ async def test_search_configuration(
         cache_info = search_manager.get_cache_info() if hasattr(search_manager, 'get_cache_info') else {}
 
         # 8. Construction de la réponse
+        max_docs = search_params.get('max_docs', settings.SEARCH_MAX_DOCS)
         response = SearchTestResponse(
             test_id=test_id,
             success=True,
             method=config.method,
             configuration_used=search_params,
-            results=processed_results[:10],
+            results=processed_results[:max_docs],
             metrics=SearchMetrics(
                 processing_time=search_time,
                 results_count=len(results),
