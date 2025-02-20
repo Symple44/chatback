@@ -75,28 +75,27 @@ class GenericProcessor(BaseProcessor):
                     ])
                 history_used = len(conversation_history) > 0
 
-            # Génération de l'embedding pour la recherche
-            query_vector = await self.model.create_embedding(query)
+            # Recherche via le SearchManager si disponible
+            relevant_docs = []
+            search_metadata = None
             
-            # Recherche de documents pertinents
-            relevant_docs = await self.es_client.search_documents(
-                query=query,
-                vector=query_vector,
-                metadata_filter=request.get("metadata"),
-                size=settings.MAX_RELEVANT_DOCS,
-                min_score=0.3
-            )
-            
-            # Filtrage des documents par score
-            filtered_docs = [
-                doc for doc in relevant_docs 
-                if doc["score"] >= settings.CONFIDENCE_THRESHOLD
-            ]
+            if hasattr(self.components, 'search_manager') and self.components.search_manager.enabled:
+                query_vector = await self.model.create_embedding(query)
+                results = await self.components.search_manager.search_context(
+                    query=query,
+                    metadata_filter=request.get("metadata")
+                )
+                relevant_docs = results
+                search_metadata = {
+                    "method": self.components.search_manager.current_method.value,
+                    "params": self.components.search_manager.current_params,
+                    "results_count": len(results)
+                }
 
             # Construction du prompt avec l'historique
             messages = await self.prompt_system.build_chat_prompt(
                 query=query,
-                context_docs=filtered_docs,
+                context_docs=relevant_docs,
                 conversation_history=conversation_history,
                 language=request.get("language", "fr")
             )
@@ -121,8 +120,8 @@ class GenericProcessor(BaseProcessor):
                 "history_length": len(conversation_history) if conversation_history else 0,
                 "response_type": response_type,
                 "processor_type": "generic",
-                "documents_found": len(filtered_docs),
-                "context_quality": float(sum(doc.get("score", 0) for doc in filtered_docs) / len(filtered_docs)) if filtered_docs else 0.0,
+                "search_enabled": bool(search_metadata),
+                "search_info": search_metadata if search_metadata else {"method": "disabled"},
                 "chat_context": {
                     "timestamp": datetime.utcnow().isoformat(),
                     "language": request.get("language", "fr"),
@@ -130,21 +129,22 @@ class GenericProcessor(BaseProcessor):
                 },
                 "processing_info": {
                     "total_time": processing_time,
-                    "embedding_generated": query_vector is not None,
                     "prompt_tokens": model_response.get("tokens_used", {}).get("input", 0),
                     "completion_tokens": model_response.get("tokens_used", {}).get("output", 0)
                 }
             }
 
-            # Sauvegarde de l'interaction avec les métadonnées enrichies
+            # Sauvegarde de l'interaction
+            response_vector = await self.model.create_embedding(response_text) if relevant_docs else None
+            
             chat_history_id = await self.components.db_manager.save_chat_interaction(
                 session_id=session_id,
                 user_id=request.get("user_id"),
                 query=query,
                 response=response_text,
-                query_vector=query_vector,
-                response_vector=await self.model.create_embedding(response_text),
-                confidence_score=float(self._calculate_confidence(filtered_docs)),
+                query_vector=query_vector if relevant_docs else None,
+                response_vector=response_vector,
+                confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
                 referenced_docs=[{
@@ -153,7 +153,7 @@ class GenericProcessor(BaseProcessor):
                     "score": float(doc.get("score", 0.0)),
                     "snippet": doc.get("content", ""),
                     "metadata": doc.get("metadata", {})
-                } for doc in filtered_docs] if filtered_docs else None,
+                } for doc in relevant_docs] if relevant_docs else None,
                 metadata=enriched_metadata,
                 raw_response=model_response.get("metadata", {}).get("raw_response"),
                 raw_prompt=model_response.get("metadata", {}).get("raw_prompt")
@@ -170,9 +170,9 @@ class GenericProcessor(BaseProcessor):
                         score=float(doc.get("score", 0.0)),
                         content=doc.get("content", ""),
                         metadata=doc.get("metadata", {})
-                    ) for doc in filtered_docs
-                ],
-                confidence_score=float(self._calculate_confidence(filtered_docs)),
+                    ) for doc in relevant_docs
+                ] if relevant_docs else [],
+                confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 processing_time=float(processing_time),
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 tokens_details=model_response.get("tokens_used", {}),

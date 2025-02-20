@@ -5,6 +5,12 @@ from .generic_processor import GenericProcessor
 
 logger = get_logger("processor_factory")
 
+class BusinessType(str, Enum):
+    STEEL = "steel"
+    WOOD = "wood"
+    ALUMINUM = "aluminum"
+    GENERIC = "generic"
+
 class ProcessorFactory:
     """Factory pour la création des processeurs."""
     

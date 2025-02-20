@@ -70,8 +70,11 @@ async def process_chat_message(
 
         # Traitement avec tous les paramètres
         response = await processor.process_message(
-            request=request,
-            chat_session=chat_session
+            request=request.dict(), 
+            context={
+                "history": chat_session.history if hasattr(chat_session, "history") else [],
+                "metadata": chat_session.metadata if hasattr(chat_session, "metadata") else {}
+            }
         )
 
         metrics.finish_request_tracking(request_id)

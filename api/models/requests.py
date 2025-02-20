@@ -6,6 +6,7 @@ import re
 from enum import Enum
 from core.search.strategies import SearchMethod
 from core.config.config import settings
+from core.chat.processor_factory import BusinessType
 
 class MessageData(BaseModel):
     """Modèle pour les données de message."""
@@ -166,12 +167,6 @@ class ChatContext(BaseModel):
     preferences: Dict[str, Union[str, int, float, bool]] = Field(default_factory=dict)
     last_interaction: Optional[datetime] = None
     source_documents: List[str] = Field(default_factory=list)
-
-class BusinessType(str, Enum):
-    STEEL = "steel"
-    WOOD = "wood"
-    ALUMINUM = "aluminum"
-    GENERIC = "generic"
     
 class ChatRequest(BaseModel):
     """Modèle pour la requête de chat."""
