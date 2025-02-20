@@ -189,7 +189,7 @@ class ChatResponse(BaseModel):
     session_id: UUID4
     conversation_id: UUID4
     # Résultats de recherche enrichis
-    context_docs: List[SearchResult] = Field(
+    context_docs: List[DocumentReference] = Field(
         default_factory=list,
         description="Documents de contexte trouvés"
     )

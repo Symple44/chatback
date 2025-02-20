@@ -76,6 +76,7 @@ class GenericProcessor(BaseProcessor):
                 history_used = len(conversation_history) > 0
 
             # Recherche via le SearchManager si disponible
+            query_vector = None
             relevant_docs = []
             search_metadata = None
             
@@ -85,15 +86,7 @@ class GenericProcessor(BaseProcessor):
                     query=query,
                     metadata_filter=request.get("metadata")
                 )
-                # Convertir les SearchResult en dictionnaires
-                relevant_docs = [{
-                    "content": doc.content,
-                    "score": doc.score,
-                    "metadata": doc.metadata,
-                    "title": doc.metadata.get("title", ""),
-                    "name": doc.metadata.get("name", "")
-                } for doc in results] if results else []
-                
+                relevant_docs = results
                 search_metadata = {
                     "method": self.components.search_manager.current_method.value,
                     "params": self.components.search_manager.current_params,
@@ -142,6 +135,32 @@ class GenericProcessor(BaseProcessor):
                 }
             }
 
+            # Préparation des DocumentReference
+            doc_references = []
+            if relevant_docs:
+                for idx, doc in enumerate(relevant_docs):
+                    if isinstance(doc, SearchResult):
+                        # Si c'est un SearchResult
+                        doc_references.append(DocumentReference(
+                            title=doc.metadata.get("title") or doc.metadata.get("name") or f"Document {idx + 1}",
+                            page=int(doc.metadata.get("page", 1)),
+                            score=float(doc.score),
+                            content=doc.content or "Pas de contenu disponible",
+                            metadata=doc.metadata
+                        ))
+                    else:
+                        # Si c'est un dictionnaire
+                        doc_references.append(DocumentReference(
+                            title=doc.get("title") or doc.get("name") or \
+                                  doc.get("metadata", {}).get("title") or \
+                                  doc.get("metadata", {}).get("name") or \
+                                  f"Document {idx + 1}",
+                            page=int(doc.get("metadata", {}).get("page", 1)),
+                            score=float(doc.get("score", 0.0)),
+                            content=doc.get("content") or "Pas de contenu disponible",
+                            metadata=doc.get("metadata", {})
+                        ))
+
             # Sauvegarde de l'interaction
             response_vector = await self.model.create_embedding(response_text) if relevant_docs else None
             
@@ -150,17 +169,17 @@ class GenericProcessor(BaseProcessor):
                 user_id=request.get("user_id"),
                 query=query,
                 response=response_text,
-                query_vector=query_vector if relevant_docs else None,
+                query_vector=query_vector,
                 response_vector=response_vector,
                 confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
                 referenced_docs=[{
-                    "name": doc.get("name", doc.get("title", "Unknown Document")),
-                    "page": doc.get("metadata", {}).get("page", 1),
-                    "score": float(doc.get("score", 0.0)),
-                    "snippet": doc.get("content", ""),
-                    "metadata": doc.get("metadata", {})
+                    "name": doc.title if hasattr(doc, 'title') else doc.get("title", ""),
+                    "page": doc.metadata.get("page", 1) if hasattr(doc, 'metadata') else doc.get("metadata", {}).get("page", 1),
+                    "score": float(doc.score if hasattr(doc, 'score') else doc.get("score", 0.0)),
+                    "snippet": doc.content if hasattr(doc, 'content') else doc.get("content", ""),
+                    "metadata": doc.metadata if hasattr(doc, 'metadata') else doc.get("metadata", {})
                 } for doc in relevant_docs] if relevant_docs else None,
                 metadata=enriched_metadata,
                 raw_response=model_response.get("metadata", {}).get("raw_response"),
@@ -171,18 +190,7 @@ class GenericProcessor(BaseProcessor):
                 response=response_text,
                 session_id=session_id,
                 conversation_id=str(uuid.uuid4()),
-                context_docs=[
-                    DocumentReference(
-                        title=doc.get("title") or doc.get("name") or \
-                              doc.get("metadata", {}).get("title") or \
-                              doc.get("metadata", {}).get("name") or \
-                              f"Document {idx + 1}",  # Fallback avec un numéro unique
-                        page=int(doc.get("metadata", {}).get("page", 1)),
-                        score=float(doc.get("score", 0.0)),
-                        content=doc.get("content") or "Pas de contenu disponible",  # Fallback pour le contenu
-                        metadata=doc.get("metadata", {})
-                    ) for idx, doc in enumerate(relevant_docs)  # Ajout de l'index pour le fallback
-                ] if relevant_docs else [],
+                context_docs=doc_references,
                 search_metadata=search_metadata,
                 confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 processing_time=float(processing_time),
