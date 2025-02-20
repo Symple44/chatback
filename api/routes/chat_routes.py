@@ -1,4 +1,7 @@
 # api/routes/chat_routes.py
+import select
+from core.database.base import DatabaseSession
+from core.database.models import User
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Dict, Optional, List, Any
 from datetime import datetime
@@ -42,16 +45,24 @@ async def process_chat_message(
     try:
         request_id = str(uuid.uuid4())
         metrics.start_request_tracking(request_id)
-
-        # Récupération ou création de la session avec config de recherche
+        
+        # 1. Vérification de l'utilisateur
+        async with DatabaseSession() as session:
+            user = await session.execute(
+                select(User).where(User.id == request.user_id)
+            )
+            user = user.scalar_one_or_none()
+            if not user:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Utilisateur non trouvé"
+                )
+            
+        # 2. Récupération ou création de la session
         chat_session = await components.session_manager.get_or_create_session(
-            session_id=request.session_id,
-            user_id=request.user_id,
-            metadata={
-                "search_config": request.search_config.dict() if request.search_config else None,
-                "application": request.application,
-                "language": request.language
-            }
+            str(request.session_id) if request.session_id else None,
+            str(request.user_id),
+            request.metadata
         )
 
         # Mise à jour des paramètres de recherche dans le SearchManager
@@ -70,7 +81,10 @@ async def process_chat_message(
 
         # Traitement avec tous les paramètres
         response = await processor.process_message(
-            request=request.dict(), 
+            request={
+                **request.dict(exclude_unset=True),
+                "session_id": chat_session.session_id
+            },
             context={
                 "history": chat_session.history if hasattr(chat_session, "history") else [],
                 "metadata": chat_session.metadata if hasattr(chat_session, "metadata") else {}
