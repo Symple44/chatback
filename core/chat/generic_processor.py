@@ -12,7 +12,7 @@ from core.database.models import ChatHistory, ReferencedDocument
 from core.database.base import DatabaseSession
 from core.llm.prompt_system import PromptSystem
 from core.llm.model_loader import ModelType
-
+from core.search.strategies import SearchResult
 from api.models.responses import (
     ChatResponse,
     DocumentReference,

@@ -9,6 +9,7 @@ from core.config.models import (
     SUMMARIZER_MODELS
 )
 from core.utils.logger import get_logger
+from core.search.strategies import SearchResult
 import re
 
 logger = get_logger("prompt_system")
@@ -239,9 +240,10 @@ class PromptSystem:
             return None
 
         model_type = self._detect_model_type(model_name)
+        # On trie par score, qu'il s'agisse d'objets SearchResult ou de dictionnaires
         sorted_docs = sorted(
             context_docs,
-            key=lambda x: float(x.get("score", 0)),
+            key=lambda x: float(x.score if isinstance(x, SearchResult) else x.get("score", 0)),
             reverse=True
         )
 
@@ -249,33 +251,45 @@ class PromptSystem:
 
         # Format spécifique selon le type de modèle
         for doc in sorted_docs:
-            if not doc.get("content"):
+            if not (isinstance(doc, SearchResult) or isinstance(doc, dict)):
                 continue
 
             doc_parts = []
             
+            # Extraction des données selon le type d'objet
+            if isinstance(doc, SearchResult):
+                content = doc.content
+                metadata = doc.metadata
+                score = doc.score
+                title = metadata.get("title", "")
+            else:
+                content = doc.get("content", "")
+                metadata = doc.get("metadata", {})
+                score = doc.get("score", 0.0)
+                title = doc.get("title", "") or metadata.get("title", "")
+
+            if not content:
+                continue
+
             if model_type in [ModelType.T5, ModelType.MT5]:
                 # Format plus concis pour T5/MT5
-                doc_parts.append(f"text: {doc['content']}")
-                if include_metadata and doc.get("metadata"):
-                    doc_parts.append(f"source: {doc['metadata'].get('source', 'unknown')}")
+                doc_parts.append(f"text: {content}")
+                if include_metadata:
+                    doc_parts.append(f"source: {metadata.get('source', 'unknown')}")
             else:
                 # Format standard pour autres modèles
                 if include_metadata:
-                    if doc.get("title"):
-                        doc_parts.append(f"Document: {doc['title']}")
-                    metadata = doc.get("metadata", {})
+                    if title:
+                        doc_parts.append(f"Document: {title}")
                     if metadata.get("page"):
                         doc_parts.append(f"Page: {metadata['page']}")
                     if metadata.get("section"):
                         doc_parts.append(f"Section: {metadata['section']}")
-                    doc_parts.append(f"Pertinence: {doc.get('score', 0):.2f}")
+                    doc_parts.append(f"Pertinence: {score:.2f}")
                 
-                doc_parts.append(f"Contenu: {doc['content']}")
-            
+                doc_parts.append(f"Contenu: {content}")
+                
             # Nettoyage du contenu
-            cleaned_content = self._clean_message_content(doc.get("content", ""))
-            doc_parts.append(f"Contenu: {cleaned_content}")
             context_parts.append("\n".join(doc_parts))
 
         return "\n\n".join(context_parts)

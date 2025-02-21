@@ -47,8 +47,9 @@ class EnhancedRAGSearch(SearchStrategy):
 
             # 3. Post-traitement des résultats
             processed_results = await self._post_process_results(
-                results=results[:max_docs],  
+                rresults=results,  
                 query_vector=query_vector,
+                max_docs=max_docs,
                 **kwargs
             )
 
@@ -86,6 +87,7 @@ class EnhancedRAGSearch(SearchStrategy):
             # Extraction explicite de max_docs avec une valeur par défaut élevée
             max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
             logger.debug(f"Requesting {max_docs} documents from Elasticsearch")
+
             docs = await self.es_client.search_documents(
                 query=query,
                 vector=query_vector,
@@ -93,7 +95,8 @@ class EnhancedRAGSearch(SearchStrategy):
                 size=max_docs,
                 min_score=kwargs.get("min_score", self.config["search_params"]["min_score"])
             )
-            return docs
+            return docs[:max_docs]
+        
         except Exception as e:
             logger.error(f"Erreur recherche vectorielle: {e}")
             return []

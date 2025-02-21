@@ -104,10 +104,12 @@ class SearchManager:
             # Vérification du cache
             cache_key = self._get_cache_key(query, metadata_filter)
             cached_result = self._get_from_cache(cache_key)
+            # On donne priorité au max_docs des kwargs sur la config
+            max_docs = kwargs.get("max_docs") or self.current_params.get("max_docs", 10)
+            logger.debug(f"Using max_docs={max_docs} from {'kwargs' if 'max_docs' in kwargs else 'config'}")
+
             if cached_result:
-                # Pour les résultats en cache, respecter aussi max_docs
-                max_docs = kwargs.get("max_docs", self.current_params.get("max_docs", 10))
-                logger.debug(f"Utilisation de max_docs={max_docs} pour les résultats en cache")
+                logger.debug("Utilisation du cache avec limite max_docs=%d", max_docs)
                 return cached_result[:max_docs]
 
             # Fusion des paramètres de recherche - priorité aux paramètres spécifiques
@@ -116,6 +118,11 @@ class SearchManager:
                 **kwargs  # kwargs écrase les paramètres de la configuration
             }
             
+             # On s'assure que max_docs est passé à Elasticsearch
+            search_params["max_docs"] = max_docs
+
+            logger.debug(f"Paramètres de recherche finaux: {search_params}")
+
             # Fusion des filtres de métadonnées
             combined_filter = {}
             if self.metadata_filter:
@@ -138,8 +145,6 @@ class SearchManager:
             # Mise en cache des résultats COMPLETS
             self._cache_results(cache_key, results)
 
-            # Retourne les résultats limités par max_docs
-            max_docs = search_params.get("max_docs", 10)
             return results[:max_docs]
 
         except Exception as e:
