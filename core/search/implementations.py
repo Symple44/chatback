@@ -36,27 +36,31 @@ class EnhancedRAGSearch(SearchStrategy):
 
             # Respect strict du max_docs configuré
             max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
+            
             # 2. Recherche vectorielle
             results = await self._vector_search(
                 query=query,
                 query_vector=query_vector,
                 metadata_filter=metadata_filter,
-                max_docs=max_docs,  
+                max_docs=max_docs,  # Passer max_docs explicitement
                 **kwargs
             )
 
-            # 3. Post-traitement des résultats
+            if not results:
+                return []
+
+            # 3. Post-traitement des résultats avec passage explicite des paramètres
             processed_results = await self._post_process_results(
-                rresults=results,  
+                results=results,
                 query_vector=query_vector,
-                max_docs=max_docs,
+                max_docs=max_docs,  # Passer max_docs explicitement
                 **kwargs
             )
 
             # 4. Mise à jour des métriques
             self._update_metrics(len(processed_results))
 
-            return processed_results[:max_docs]
+            return processed_results
 
         except Exception as e:
             logger.error(f"Erreur recherche RAG: {e}")
@@ -105,11 +109,11 @@ class EnhancedRAGSearch(SearchStrategy):
         self,
         results: List[Dict],
         query_vector: List[float],
+        max_docs: int,
         **kwargs
     ) -> List[SearchResult]:
         """Post-traite les résultats de recherche."""
         processed_results = []
-        max_docs = kwargs.get("max_docs", self.config["search_params"]["max_docs"])
         
         for result in results:
             try:
@@ -147,9 +151,9 @@ class EnhancedRAGSearch(SearchStrategy):
                 logger.error(f"Erreur traitement résultat: {e}")
                 continue
         
+        # Tri et limitation des résultats
         sorted_results = sorted(processed_results, key=lambda x: x.score, reverse=True)
-        logger.debug(f"Returning {min(len(sorted_results), max_docs)} documents after processing")
-        return sorted_results[:max_docs]
+        return sorted_results[:max_docs]  
 
     def _calculate_semantic_score(
         self,
