@@ -325,17 +325,37 @@ async def lifespan(app: FastAPI):
 async def setup_environment():
     """Configure l'environnement."""
     try:
-        # Configuration des bibliothèques numériques
+        # Récupération de la configuration matérielle
+        from core.config.hardware_config import get_hardware_config
+        
+        # Charger la configuration matérielle appropriée
+        hardware_config = get_hardware_config()
+        
+        # Configuration des bibliothèques numériques avec les valeurs de la config matérielle
+        thread_config = hardware_config["cpu"]["thread_config"]
         os.environ.update({
-            "MKL_NUM_THREADS": str(settings.MKL_NUM_THREADS),
-            "NUMEXPR_NUM_THREADS": str(settings.NUMEXPR_NUM_THREADS),
-            "OMP_NUM_THREADS": str(settings.OMP_NUM_THREADS),
-            "OPENBLAS_NUM_THREADS": str(settings.OPENBLAS_NUM_THREADS),
+            "MKL_NUM_THREADS": str(thread_config.get("workers", settings.MKL_NUM_THREADS)),
+            "NUMEXPR_NUM_THREADS": str(thread_config.get("workers", settings.NUMEXPR_NUM_THREADS)),
+            "OMP_NUM_THREADS": str(thread_config.get("inference_threads", settings.OMP_NUM_THREADS)),
+            "OPENBLAS_NUM_THREADS": str(thread_config.get("inference_threads", settings.OPENBLAS_NUM_THREADS)),
             "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF,
             "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD).lower(),
             "CUDA_MODULE_LOADING": settings.CUDA_MODULE_LOADING,
             "CUDA_VISIBLE_DEVICES": str(settings.CUDA_VISIBLE_DEVICES)
         })
+        
+        # Log de la configuration matérielle
+        gpu_config = hardware_config["gpu"]
+        cpu_config = hardware_config["cpu"]
+        logger.info(f"Configuration matérielle chargée: CPU={os.environ.get('CPU_MODEL', 'non spécifié')}")
+        logger.info(f"GPU={os.environ.get('GPU_NAME', 'non spécifié')}")
+        logger.info(f"VRAM totale: {gpu_config['vram_total']}")
+        logger.info(f"Allocation VRAM: {gpu_config['vram_allocation']}")
+        logger.info(f"RAM totale: {cpu_config['ram_total']}")
+        logger.info(f"Allocation RAM: {cpu_config['ram_allocation']}")
+        logger.info(f"Configuration threads: workers={thread_config['workers']}, "
+                   f"inference={thread_config['inference_threads']}, "
+                   f"io={thread_config['io_threads']}")
         
         # Création des répertoires
         dirs = [

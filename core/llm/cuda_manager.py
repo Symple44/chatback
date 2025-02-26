@@ -90,12 +90,34 @@ class CUDAManager:
     def _load_config(self) -> CUDAConfig:
         """Charge et valide la configuration CUDA."""
         try:
-            # Conversion des configurations mémoire
+            # Importation de la configuration matérielle
+            from core.config.hardware_config import get_hardware_config
+            
+            # Récupération de la configuration matérielle
+            hardware_config = get_hardware_config()
+            gpu_config = hardware_config["gpu"]
+            cuda_config = gpu_config["cuda_config"]
+            
+            # Conversion des configurations mémoire pour les priorités de modèles
             memory_configs = {
                 ModelPriority.HIGH: {"0": "16GiB", "cpu": "12GB"},
                 ModelPriority.MEDIUM: {"0": "4GiB", "cpu": "8GB"},
                 ModelPriority.LOW: {"0": "2GiB", "cpu": "4GB"}
             }
+            
+            # Ajustement basé sur la configuration matérielle
+            vram_alloc = gpu_config["vram_allocation"]
+            memory_configs[ModelPriority.HIGH]["0"] = f"{vram_alloc['model'].replace('GB', '')}GiB"
+            memory_configs[ModelPriority.LOW]["0"] = f"{vram_alloc['embeddings'].replace('GB', '')}GiB"
+            memory_configs[ModelPriority.MEDIUM]["0"] = f"{vram_alloc.get('summarizer', '4')}GiB"
+            
+            # Mise à jour des allocations RAM
+            ram_alloc = hardware_config["cpu"]["ram_allocation"]
+            memory_configs[ModelPriority.HIGH]["cpu"] = ram_alloc["model_offload"]
+            memory_configs[ModelPriority.MEDIUM]["cpu"] = "8GB"
+            memory_configs[ModelPriority.LOW]["cpu"] = "4GB"
+
+            logger.info(f"Configuration CUDA chargée: {memory_configs}")
 
             return CUDAConfig(
                 device_type=DeviceType.AUTO,
@@ -103,18 +125,19 @@ class CUDAManager:
                 memory_configs=memory_configs,
                 compute_dtype=torch.float16 if settings.USE_FP16 else torch.float32,
                 module_loading=settings.CUDA_MODULE_LOADING,
-                max_split_size_mb=CUDA_CONFIG["memory_config"]["max_split_size_mb"],
-                gc_threshold=CUDA_CONFIG["memory_config"]["gpu_memory_fraction"],
+                max_split_size_mb=cuda_config.get("max_split_size_mb", 4096),
+                gc_threshold=float(settings.CUDA_MEMORY_FRACTION),
                 enable_tf32=True,
                 allow_fp16=settings.USE_FP16,
                 deterministic=False,
                 benchmark=settings.CUDNN_BENCHMARK,
-                use_flash_attention=CUDA_CONFIG["optimization"]["use_flash_attention"]
+                use_flash_attention=cuda_config.get("flash_attention", True)
             )
             
         except Exception as e:
             logger.error(f"Erreur chargement config CUDA: {e}")
-            raise
+            # Fallback vers une configuration par défaut en cas d'erreur
+            return CUDAConfig()
 
     async def initialize(self):
         """Initialise l'environnement CUDA."""
