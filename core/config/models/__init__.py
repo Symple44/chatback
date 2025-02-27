@@ -1,7 +1,7 @@
 # core/config/models/__init__.py
 import os
 from .base import ModelType
-from .chat import CHAT_MODELS
+from .chat import CHAT_MODELS, MODEL_PERFORMANCE_CONFIGS
 from .embedding import EMBEDDING_MODELS
 from .summarizer import SUMMARIZER_MODELS
 
@@ -17,6 +17,7 @@ class ModelsConfig:
         
         # Dictionnaires des configurations
         self.chat_models = CHAT_MODELS
+        self.model_performance_configs = MODEL_PERFORMANCE_CONFIGS
         self.embedding_models = EMBEDDING_MODELS
         self.summarizer_models = SUMMARIZER_MODELS
         
