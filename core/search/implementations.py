@@ -5,8 +5,8 @@ from datetime import datetime
 import asyncio
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
-from core.config.search_config import (
-    SEARCH_STRATEGIES_CONFIG,
+from core.config.config import settings
+from core.config.search import (
     SEARCH_LIMITS,
     ERROR_HANDLING
 )
@@ -19,7 +19,7 @@ class EnhancedRAGSearch(SearchStrategy):
     
     def __init__(self, components):
         super().__init__(components)
-        self.config = SEARCH_STRATEGIES_CONFIG["rag"]
+        self.config = settings.search.get_strategy_config("rag")
         self._cache = {}  # Cache simple pour les embeddings
 
     async def search(
@@ -220,7 +220,7 @@ class EnhancedHybridSearch(SearchStrategy):
     
     def __init__(self, components):
         super().__init__(components)
-        self.config = SEARCH_STRATEGIES_CONFIG["hybrid"]
+        self.config = settings.search.get_strategy_config("hybrid")
         self._cache = {}
 
     async def search(
@@ -455,7 +455,7 @@ class EnhancedSemanticSearch(SearchStrategy):
     
     def __init__(self, components):
         super().__init__(components)
-        self.config = SEARCH_STRATEGIES_CONFIG["semantic"]
+        self.config = settings.search.get_strategy_config("semantic")
         self._concept_cache = {}
         self._query_expansions = {}
 

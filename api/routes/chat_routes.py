@@ -29,7 +29,7 @@ from main import CustomJSONResponse
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
-from core.config.search_config import SEARCH_STRATEGIES_CONFIG
+from core.config.search import SEARCH_STRATEGIES_CONFIG
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 from core.streaming.stream_manager import StreamManager
