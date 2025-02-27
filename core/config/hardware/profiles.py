@@ -1,5 +1,6 @@
 # core/config/hardware/profiles.py
 from typing import Dict, Any
+import os
 
 # Configuration spécifique pour AMD 8845HS (16 cœurs) + RTX 3090 (24GB VRAM)
 AMD_RTX3090_CONFIG = {
