@@ -15,9 +15,9 @@ class StreamManager:
     
     def __init__(self):
         """Initialise le gestionnaire de streaming."""
-        self.batch_size = settings.STREAM_BATCH_SIZE
-        self.max_queue_size = settings.STREAM_MAX_QUEUE_SIZE
-        self.timeout = settings.STREAM_TIMEOUT
+        self.batch_size = settings.server.STREAM_BATCH_SIZE
+        self.max_queue_size = settings.server.STREAM_MAX_QUEUE_SIZE
+        self.timeout = settings.server.STREAM_TIMEOUT
         self.queue = asyncio.Queue(maxsize=self.max_queue_size)
         
     async def stream_response(

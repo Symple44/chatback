@@ -57,9 +57,9 @@ class ModelInference:
 
                     # 2. Vérification de l'accès aux modèles
                     models_to_check = [
-                        settings.MODEL_NAME,
-                        settings.EMBEDDING_MODEL,
-                        settings.MODEL_NAME_SUMMARIZER
+                        settings.models.MODEL_NAME,
+                        settings.models.EMBEDDING_MODEL,
+                        settings.models.MODEL_NAME_SUMMARIZER
                     ]
                     for model in models_to_check:
                         if not self.auth_manager.get_model_access(model):
@@ -90,7 +90,7 @@ class ModelInference:
             # Génération du prompt formaté (à sauvegarder comme raw_prompt)
             formatted_prompt = self.tokenizer_manager.encode_with_truncation(
                 messages,
-                max_length=settings.MAX_INPUT_LENGTH,
+                max_length=settings.models.MAX_INPUT_LENGTH,
                 model_name=chat_model.model_name,
                 return_text=True  # Nouveau paramètre pour obtenir le texte formaté
             )
@@ -98,7 +98,7 @@ class ModelInference:
             # Encodage des entrées
             inputs = self.tokenizer_manager.encode_with_truncation(
                 messages,
-                max_length=settings.MAX_INPUT_LENGTH,
+                max_length=settings.models.MAX_INPUT_LENGTH,
                 return_tensors="pt"
             )
             

@@ -12,10 +12,10 @@ class ContextAnalyzer:
     """Classe utilitaire pour l'analyse de contexte."""
     
     def __init__(self):
-        self.min_query_length = settings.MIN_QUERY_LENGTH
-        self.max_themes = settings.MAX_THEMES
-        self.confidence_threshold = settings.CONFIDENCE_THRESHOLD
-        self.min_relevant_docs = settings.MIN_RELEVANT_DOCS
+        self.min_query_length = settings.chat.MIN_QUERY_LENGTH
+        self.max_themes = settings.chat.MAX_THEMES
+        self.confidence_threshold = settings.chat.CONFIDENCE_THRESHOLD
+        self.min_relevant_docs = settings.chat.MIN_RELEVANT_DOCS
 
     async def analyze_context(
         self,

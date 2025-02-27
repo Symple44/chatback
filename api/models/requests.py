@@ -34,13 +34,13 @@ class MessageData(BaseModel):
 class SearchParamsBase(BaseModel):
     """Modèle de base pour les paramètres de recherche."""
     max_docs: int = Field(
-        default=settings.MAX_RELEVANT_DOCS,
+        default=settings.search.SEARCH_MAX_DOCS,
         ge=1,
         le=20,
         description="Nombre maximum de documents à retourner"
     )
     min_score: float = Field(
-        default=settings.CONFIDENCE_THRESHOLD,
+        default=settings.search.SEARCH_MIN_SCORE,
         ge=0.0,
         le=1.0,
         description="Score minimum de confiance"

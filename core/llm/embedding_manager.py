@@ -15,7 +15,7 @@ class EmbeddingManager:
     """Gestionnaire des modèles d'embedding."""
     
     def __init__(self):
-        self.model_name = settings.EMBEDDING_MODEL
+        self.model_name = settings.models.EMBEDDING_MODEL
         self.model: Optional[LoadedModel] = None
         self._initialized = False
         self.embedding_cache = {}

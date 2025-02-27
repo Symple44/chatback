@@ -17,23 +17,23 @@ class ElasticsearchClient:
     def __init__(self):
         """Initialise le client Elasticsearch."""
         self.es = self._initialize_client()
-        self.index_prefix = settings.ELASTICSEARCH_INDEX_PREFIX
-        self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
+        self.index_prefix = settings.document.ELASTICSEARCH_INDEX_PREFIX
+        self.embedding_dim = settings.document.ELASTICSEARCH_EMBEDDING_DIM
         self.initialized = False
         self.index_manager = None
 
     def _initialize_client(self) -> AsyncElasticsearch:
         """Initialise le client avec SSL."""
         ssl_context = {
-            'verify_certs': bool(settings.ELASTICSEARCH_CA_CERT),
-            'ca_certs': settings.ELASTICSEARCH_CA_CERT,
-            'client_cert': settings.ELASTICSEARCH_CLIENT_CERT,
-            'client_key': settings.ELASTICSEARCH_CLIENT_KEY
+            'verify_certs': bool(settings.document.ELASTICSEARCH_CA_CERT),
+            'ca_certs': settings.document.ELASTICSEARCH_CA_CERT,
+            'client_cert': settings.document.ELASTICSEARCH_CLIENT_CERT,
+            'client_key': settings.document.ELASTICSEARCH_CLIENT_KEY
         }
 
         return AsyncElasticsearch(
-            hosts=[settings.ELASTICSEARCH_HOST],
-            basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
+            hosts=[settings.document.ELASTICSEARCH_HOST],
+            basic_auth=(settings.document.ELASTICSEARCH_USER, settings.document.ELASTICSEARCH_PASSWORD),
             **ssl_context,
             retry_on_timeout=True,
             max_retries=3,

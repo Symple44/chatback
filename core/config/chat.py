@@ -1,4 +1,4 @@
-# core/config/chat_config.py
+# core/config/chat.py
 import os
 from enum import Enum
 from pydantic import BaseModel

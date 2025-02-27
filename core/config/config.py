@@ -14,6 +14,7 @@ from .hardware import HardwareConfig
 from .models import ModelsConfig
 from .search import SearchConfig
 from .document import DocumentConfig
+from .chat import ChatConfig
 
 load_dotenv()
 
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     # Application settings
     APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
     VERSION: str = os.getenv("VERSION", "1.0.0")
+    BUILD_DATE: int = int(os.getenv("BUILD_DATE", "2025"))
+    CONTACT_EMAIL : int = int(os.getenv("CONTACT_EMAIL", "contact@symple.fr"))
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     ENV: str = os.getenv("ENV", "production")
     PORT: int = int(os.getenv("PORT", "8000"))
@@ -54,6 +57,7 @@ class Settings(BaseSettings):
         self.models = ModelsConfig()
         self.search = SearchConfig()
         self.document = DocumentConfig()
+        self.chat = ChatConfig()
         
         # Créer les répertoires requis
         for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, self.MODELS_DIR, self.TEMP_DIR]:

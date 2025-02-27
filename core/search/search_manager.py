@@ -24,7 +24,7 @@ class SearchManager:
         self.current_params = self.config["rag"]["search_params"].copy()  # Paramètres par défaut
         self.metadata_filter = None
         self.cache = {}
-        self.cache_ttl = settings.SEARCH_CACHE_TTL
+        self.cache_ttl = settings.search.SEARCH_CACHE_TTL
         
     async def configure(
         self,

@@ -86,14 +86,14 @@ class ComponentManager:
                 await self.system_optimizer.optimize()
 
                 # Base de données
-                db_session_manager = get_session_manager(settings.get_database_url())
+                db_session_manager = get_session_manager(settings.db.get_database_url())
                 db_manager = DatabaseManager(db_session_manager.session_factory)
                 self._components["db_manager"] = db_manager
                 self._components["db"] = db_session_manager
                 logger.info("Base de données initialisée")
 
                 # Session Manager
-                self._components["session_manager"] = SessionManager(settings.get_database_url())
+                self._components["session_manager"] = SessionManager(settings.db.get_database_url())
                 logger.info("Session manager initialisé")
 
                 # Cache Redis
@@ -131,7 +131,7 @@ class ComponentManager:
                 self._components["model_loader"] = model_loader
 
                 # Model Manager
-                model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
+                model_manager = ModelManager(self.cuda.cuda_manager, self.tokenizer_manager)
                 await model_manager.initialize()
                 self._components["model_manager"] = model_manager
 
@@ -168,9 +168,9 @@ class ComponentManager:
                 
                 
                 # Google Drive (optionnel)
-                if settings.GOOGLE_DRIVE_CREDENTIALS_PATH:
+                if settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH:
                     drive_manager = GoogleDriveManager(
-                        credentials_path=settings.GOOGLE_DRIVE_CREDENTIALS_PATH
+                        credentials_path=settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH
                     )
                     if await drive_manager.initialize():
                         self._components["drive_manager"] = drive_manager
@@ -191,7 +191,7 @@ class ComponentManager:
             downloaded_files = set()
             if "drive_manager" in self._components:
                 downloaded_files = await self._components["drive_manager"].sync_drive_folder(
-                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    settings.document.GOOGLE_DRIVE_FOLDER_ID,
                     save_path="documents"
                 )
 
@@ -307,7 +307,7 @@ async def lifespan(app: FastAPI):
         from api.routes.router import router as api_router
         app.include_router(api_router)
                 
-        if settings.GOOGLE_DRIVE_SYNC_INTERVAL:
+        if settings.document.GOOGLE_DRIVE_SYNC_INTERVAL:
             asyncio.create_task(periodic_sync())
 
         yield
@@ -325,48 +325,52 @@ async def lifespan(app: FastAPI):
 async def setup_environment():
     """Configure l'environnement."""
     try:
-        # Récupération de la configuration matérielle
-        from core.config.hardware_config import get_hardware_config
+        # Utilisation directe de la configuration hardware depuis settings
+        # Plus besoin d'importer get_hardware_config
         
-        # Charger la configuration matérielle appropriée
-        hardware_config = get_hardware_config()
+        # Récupérer les configurations CPU et CUDA directement
+        thread_config = settings.hardware.thread_config
+        cuda_config = settings.hardware.cuda
         
-        # Configuration des bibliothèques numériques avec les valeurs de la config matérielle
-        thread_config = hardware_config["cpu"]["thread_config"]
+        # Configuration des bibliothèques numériques
         os.environ.update({
-            "MKL_NUM_THREADS": str(thread_config.get("workers", settings.MKL_NUM_THREADS)),
-            "NUMEXPR_NUM_THREADS": str(thread_config.get("workers", settings.NUMEXPR_NUM_THREADS)),
-            "OMP_NUM_THREADS": str(thread_config.get("inference_threads", settings.OMP_NUM_THREADS)),
-            "OPENBLAS_NUM_THREADS": str(thread_config.get("inference_threads", settings.OPENBLAS_NUM_THREADS)),
-            "PYTORCH_CUDA_ALLOC_CONF": settings.PYTORCH_CUDA_ALLOC_CONF,
-            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD).lower(),
-            "CUDA_MODULE_LOADING": settings.CUDA_MODULE_LOADING,
-            "CUDA_VISIBLE_DEVICES": str(settings.CUDA_VISIBLE_DEVICES)
+            # Configurations CPU
+            "MKL_NUM_THREADS": str(thread_config.mkl_num_threads),
+            "NUMEXPR_NUM_THREADS": str(thread_config.numexpr_num_threads),
+            "OMP_NUM_THREADS": str(thread_config.omp_num_threads),
+            "OPENBLAS_NUM_THREADS": str(thread_config.openblas_num_threads),
+            
+            # Configurations CUDA
+            "PYTORCH_CUDA_ALLOC_CONF": f"max_split_size_mb:{cuda_config.max_split_size_mb},garbage_collection_threshold:{cuda_config.gc_threshold}",
+            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(cuda_config.enable_mem_efficient_offload).lower(),
+            "CUDA_MODULE_LOADING": cuda_config.module_loading,
+            "CUDA_VISIBLE_DEVICES": str(cuda_config.device_id)
         })
         
         # Log de la configuration matérielle
-        gpu_config = hardware_config["gpu"]
-        cpu_config = hardware_config["cpu"]
-        logger.info(f"Configuration matérielle chargée: CPU={os.environ.get('CPU_MODEL', 'non spécifié')}")
-        logger.info(f"GPU={os.environ.get('GPU_NAME', 'non spécifié')}")
-        logger.info(f"VRAM totale: {gpu_config['vram_total']}")
-        logger.info(f"Allocation VRAM: {gpu_config['vram_allocation']}")
-        logger.info(f"RAM totale: {cpu_config['ram_total']}")
-        logger.info(f"Allocation RAM: {cpu_config['ram_allocation']}")
-        logger.info(f"Configuration threads: workers={thread_config['workers']}, "
-                   f"inference={thread_config['inference_threads']}, "
-                   f"io={thread_config['io_threads']}")
+        cpu_info = settings.hardware.cpu
+        gpu_info = settings.hardware.gpu
+        
+        logger.info(f"Configuration matérielle chargée: CPU={cpu_info.model}")
+        logger.info(f"GPU={gpu_info.name}")
+        logger.info(f"VRAM totale: {gpu_info.vram_total}")
+        logger.info(f"Allocation VRAM: {gpu_info.vram_allocation}")
+        logger.info(f"RAM totale: {cpu_info.ram_total}")
+        logger.info(f"Allocation RAM: {cpu_info.ram_allocation}")
+        logger.info(f"Configuration threads: workers={thread_config.workers}, "
+                   f"inference={thread_config.inference_threads}, "
+                   f"io={thread_config.io_threads}")
         
         # Création des répertoires
         dirs = [
-            "offload_folder",
+            cuda_config.offload_folder,
             "static",
             "documents",
             "model_cache",
             "logs",
             "data",
             "temp",
-            str(settings.MODELS_DIR)
+            str(settings.models.MODELS_DIR)  # Chemin des modèles maintenant dans settings.models
         ]
         
         for dir_name in dirs:
@@ -384,10 +388,10 @@ async def periodic_sync():
     """Tâche périodique de synchronisation."""
     while True:
         try:
-            await asyncio.sleep(settings.GOOGLE_DRIVE_SYNC_INTERVAL)
+            await asyncio.sleep(settings.document.GOOGLE_DRIVE_SYNC_INTERVAL)
             if hasattr(components, 'drive_manager'):
                 downloaded_files = await components.drive_manager.sync_drive_folder(
-                    settings.GOOGLE_DRIVE_FOLDER_ID,
+                    settings.document.GOOGLE_DRIVE_FOLDER_ID,
                     save_path="documents"
                 )
                 if downloaded_files:
@@ -407,7 +411,7 @@ app = FastAPI(
 # Middlewares
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.security.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -501,12 +505,12 @@ if __name__ == "__main__":
             host="0.0.0.0",
             port=settings.PORT,
             reload=settings.DEBUG,
-            workers=1 if settings.DEBUG else settings.WORKERS,
+            workers=1 if settings.DEBUG else settings.server.WORKERS,
             log_level="info",
             loop="uvloop",
-            timeout_keep_alive=settings.KEEPALIVE,
-            limit_max_requests=settings.MAX_REQUESTS,
-            limit_concurrency=settings.MAX_CONCURRENT_REQUESTS,
+            timeout_keep_alive=settings.server.KEEPALIVE,
+            limit_max_requests=settings.server.MAX_REQUESTS,
+            limit_concurrency=settings.server.MAX_CONCURRENT_REQUESTS,
             backlog=2048
         )
         

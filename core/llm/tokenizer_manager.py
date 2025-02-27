@@ -69,7 +69,7 @@ class TokenizerManager:
             
             # Configuration de base
             tokenizer_kwargs = {
-                "revision": settings.MODEL_REVISION,
+                "revision": settings.models.MODEL_REVISION,
                 "padding_side": config.padding_side,
                 "truncation_side": config.truncation_side,
                 "use_fast": config.use_fast,
@@ -128,11 +128,11 @@ class TokenizerManager:
             configs = {
                 TokenizerType.CHAT: TokenizerConfig(
                     padding_side="left",
-                    max_length=settings.MAX_CONTEXT_LENGTH
+                    max_length=settings.models.MAX_CONTEXT_LENGTH
                 ),
                 TokenizerType.SUMMARIZER: TokenizerConfig(
                     padding_side="right",
-                    max_length=settings.MAX_INPUT_LENGTH
+                    max_length=settings.models.MAX_INPUT_LENGTH
                 ),
                 TokenizerType.EMBEDDING: TokenizerConfig(
                     padding_side="right",
@@ -158,7 +158,7 @@ class TokenizerManager:
                 
             # Chargement des tokenizers pour l'embedding
             await self.load_tokenizer(
-                settings.EMBEDDING_MODEL,
+                settings.models.EMBEDDING_MODEL,
                 TokenizerType.EMBEDDING,
                 configs[TokenizerType.EMBEDDING]
             )

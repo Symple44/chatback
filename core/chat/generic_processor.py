@@ -57,7 +57,7 @@ class GenericProcessor(BaseProcessor):
             elif session_id:
                 history = await self.components.session_manager.get_session_history(
                     session_id=session_id,
-                    limit=settings.MAX_HISTORY_MESSAGES
+                    limit=settings.chat.MAX_HISTORY_MESSAGES
                 )
                 # Formatage de l'historique pour le prompt
                 for msg in history:
@@ -116,7 +116,7 @@ class GenericProcessor(BaseProcessor):
 
             # Enrichissement des métadonnées
             enriched_metadata = {
-                "model_name": self.components.model_manager.current_models[ModelType.CHAT].model_name if self.components.model_manager.current_models[ModelType.CHAT] else settings.MODEL_NAME,
+                "model_name": self.components.model_manager.current_models[ModelType.CHAT].model_name if self.components.model_manager.current_models[ModelType.CHAT] else settings.models.MODEL_NAME,
                 "history_used": history_used,
                 "history_length": len(conversation_history) if conversation_history else 0,
                 "response_type": response_type,
@@ -240,7 +240,7 @@ class GenericProcessor(BaseProcessor):
                         "prompt_messages": messages,
                         "application": request.get("application"),
                         "language": request.get("language", "fr"),
-                        "model": settings.MODEL_NAME
+                        "model": settings.models.MODEL_NAME
                     }
                 )
                 session.add(chat_history)
@@ -299,7 +299,7 @@ class GenericProcessor(BaseProcessor):
         ]
         
         # Garder uniquement les 5 dernières interactions (10 messages)
-        max_history = settings.MAX_HISTORY_MESSAGES * 2  # 2 messages par interaction
+        max_history = settings.chat.MAX_HISTORY_MESSAGES * 2  # 2 messages par interaction
         return updated_history[-max_history:] if max_history > 0 else updated_history
     
     def _create_error_response(self, error_message: str) -> ChatResponse:

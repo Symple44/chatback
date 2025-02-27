@@ -230,7 +230,7 @@ async def test_search_configuration(
         cache_info = search_manager.get_cache_info() if hasattr(search_manager, 'get_cache_info') else {}
 
         # 8. Construction de la réponse
-        max_docs = search_params.get('max_docs', settings.SEARCH_MAX_DOCS)
+        max_docs = search_params.get('max_docs', settings.search.SEARCH_MAX_DOCS)
         response = SearchTestResponse(
             test_id=test_id,
             success=True,
@@ -366,8 +366,8 @@ async def stream_chat_response(
         try:
             # Configuration de la recherche
             search_params = {
-                "max_docs": settings.MAX_RELEVANT_DOCS,
-                "min_score": settings.CONFIDENCE_THRESHOLD
+                "max_docs": settings.search.SEARCH_MAX_DOCS,
+                "min_score": settings.chat.CONFIDENCE_THRESHOLD  
             }
             
             # Récupération de la session
@@ -441,20 +441,20 @@ async def get_search_configuration() -> Dict[str, Any]:
             if method != SearchMethod.DISABLED
         },
         "defaults": {
-            "method": settings.DEFAULT_SEARCH_METHOD,
-            "max_docs": settings.SEARCH_MAX_DOCS,
-            "min_score": settings.SEARCH_MIN_SCORE,
+            "method": settings.search.DEFAULT_SEARCH_METHOD,
+            "max_docs": settings.search.SEARCH_MAX_DOCS,
+            "min_score": settings.search.SEARCH_MIN_SCORE,
             "rag": {
-                "vector_weight": settings.RAG_VECTOR_WEIGHT,
-                "semantic_weight": settings.RAG_SEMANTIC_WEIGHT
+                "vector_weight": settings.search.RAG_VECTOR_WEIGHT,
+                "semantic_weight": settings.search.RAG_SEMANTIC_WEIGHT
             },
             "hybrid": {
-                "rerank_top_k": settings.HYBRID_RERANK_TOP_K,
-                "window_size": settings.HYBRID_WINDOW_SIZE
+                "rerank_top_k": settings.search.HYBRID_RERANK_TOP_K,
+                "window_size": settings.search.HYBRID_WINDOW_SIZE
             },
             "semantic": {
-                "max_concepts": settings.SEMANTIC_MAX_CONCEPTS,
-                "boost_exact": settings.SEMANTIC_BOOST_EXACT
+                "max_concepts": settings.search.SEMANTIC_MAX_CONCEPTS,
+                "boost_exact": settings.search.SEMANTIC_BOOST_EXACT
             }
         },
         "constraints": {
@@ -465,8 +465,8 @@ async def get_search_configuration() -> Dict[str, Any]:
         },
         "performance": {
             "cache_enabled": True,
-            "cache_ttl": settings.SEARCH_CACHE_TTL,
-            "max_concurrent_searches": settings.SEARCH_MAX_CONCURRENT
+            "cache_ttl": settings.search.SEARCH_CACHE_TTL,
+            "max_concurrent_searches": settings.search.SEARCH_MAX_CONCURRENT
         },
         "metrics": await get_search_metrics()
     }

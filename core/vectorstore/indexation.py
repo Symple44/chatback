@@ -17,16 +17,16 @@ class ElasticsearchIndexManager:
     def __init__(self, es_client: AsyncElasticsearch, index_prefix: str = None):
         """Initialise le gestionnaire d'index."""
         self.es = es_client
-        self.index_prefix = index_prefix or settings.ELASTICSEARCH_INDEX_PREFIX
-        self.embedding_dim = settings.ELASTICSEARCH_EMBEDDING_DIM
+        self.index_prefix = index_prefix or settings.document.ELASTICSEARCH_INDEX_PREFIX
+        self.embedding_dim = settings.document.ELASTICSEARCH_EMBEDDING_DIM
 
     async def setup_indices(self) -> None:
         """Configure tous les indices nécessaires."""
         base_settings = {
             "settings": {
-                "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
-                "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
+                "number_of_shards": settings.document.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                "number_of_replicas": settings.document.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "refresh_interval": settings.document.ELASTICSEARCH_REFRESH_INTERVAL,
                 "analysis": {
                     "analyzer": {
                         "french_analyzer": {
@@ -137,9 +137,9 @@ class ElasticsearchIndexManager:
         """Retourne le mapping optimisé pour l'index documents."""
         return {
             "settings": {
-                "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
-                "refresh_interval": settings.ELASTICSEARCH_REFRESH_INTERVAL,
+                "number_of_shards": settings.document.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                "number_of_replicas": settings.document.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "refresh_interval": settings.document.ELASTICSEARCH_REFRESH_INTERVAL,
                 "analysis": {
                     "analyzer": {
                         "french_analyzer": {
@@ -220,8 +220,8 @@ class ElasticsearchIndexManager:
         """Retourne le mapping pour l'index vectors."""
         return {
             "settings": {
-                "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "number_of_shards": settings.document.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                "number_of_replicas": settings.document.ELASTICSEARCH_NUMBER_OF_REPLICAS,
                 "analysis": {
                     "analyzer": {
                         "french_analyzer": {
@@ -274,8 +274,8 @@ class ElasticsearchIndexManager:
         """Retourne le mapping pour l'index chunks."""
         return {
             "settings": {
-                "number_of_shards": settings.ELASTICSEARCH_NUMBER_OF_SHARDS,
-                "number_of_replicas": settings.ELASTICSEARCH_NUMBER_OF_REPLICAS,
+                "number_of_shards": settings.document.ELASTICSEARCH_NUMBER_OF_SHARDS,
+                "number_of_replicas": settings.document.ELASTICSEARCH_NUMBER_OF_REPLICAS,
                 "analysis": {  # Ajout de la configuration de l'analyseur
                     "analyzer": {
                         "french_analyzer": {

@@ -274,7 +274,7 @@ class SessionManager:
                     "history": [],
                     "preferences": metadata.get("preferences", {
                         "language": "fr",
-                        "model": settings.MODEL_NAME,
+                        "model": settings.models.MODEL_NAME,
                         "max_history": 5
                     })
                 },

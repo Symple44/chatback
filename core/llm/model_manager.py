@@ -80,20 +80,20 @@ class ModelManager:
         try:
             # Modèle de chat principal
             self.current_models[ModelType.CHAT] = await self.model_loader.load_model(
-                settings.MODEL_NAME,
+                settings.models.MODEL_NAME,
                 ModelType.CHAT
             )
 
             # Modèle d'embedding
             self.current_models[ModelType.EMBEDDING] = await self.model_loader.load_model(
-                settings.EMBEDDING_MODEL,
+                settings.models.EMBEDDING_MODEL,
                 ModelType.EMBEDDING
             )
 
             # Modèle de summarization
-            if settings.MODEL_NAME_SUMMARIZER:
+            if settings.models.MODEL_NAME_SUMMARIZER:
                 self.current_models[ModelType.SUMMARIZER] = await self.model_loader.load_model(
-                    settings.MODEL_NAME_SUMMARIZER,
+                    settings.models.MODEL_NAME_SUMMARIZER,
                     ModelType.SUMMARIZER
                 )
                 

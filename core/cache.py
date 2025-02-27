@@ -29,11 +29,11 @@ class RedisCache:
         for attempt in range(self._init_retries):
             try:
                 self._connection = redis.Redis(
-                    host=settings.REDIS_HOST,
-                    port=settings.REDIS_PORT,
-                    password=settings.REDIS_PASSWORD,
-                    db=settings.REDIS_DB,
-                    ssl=settings.REDIS_SSL,
+                    host=settings.cache.REDIS_HOST,
+                    port=settings.cache.REDIS_PORT,
+                    password=settings.cache.REDIS_PASSWORD,
+                    db=settings.cache.REDIS_DB,
+                    ssl=settings.cache.REDIS_SSL,
                     decode_responses=False,
                     socket_timeout=5.0,
                     socket_keepalive=True,
@@ -92,7 +92,7 @@ class RedisCache:
             return bool(self._connection.set(
                 key,
                 compressed,
-                ex=ttl or settings.CACHE_TTL  # Utilise le TTL par défaut des settings
+                ex=ttl or settings.cache.CACHE_TTL  # Utilise le TTL par défaut des settings
             ))
             
         except Exception as e:

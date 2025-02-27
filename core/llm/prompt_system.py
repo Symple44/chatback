@@ -110,7 +110,7 @@ class PromptSystem:
     
     def __init__(self):
         self.response_types =  {}
-        self.max_context_length = settings.MAX_CONTEXT_LENGTH
+        self.max_context_length = settings.models.MAX_CONTEXT_LENGTH
         self.language_indicators = {
             "fr": "Répondez en français",
             "en": "Respond in English",
@@ -360,7 +360,7 @@ class PromptSystem:
         Construit le prompt complet pour le chat.
         """
         try:
-            model_name = model_name or settings.MODEL_NAME
+            model_name = model_name or settings.models.MODEL_NAME
             model_type = self._detect_model_type(model_name)
             template = self._get_template(model_name)
             
@@ -447,7 +447,7 @@ class PromptSystem:
 
                 # Historique de conversation
                 if conversation_history:
-                    for msg in conversation_history[-settings.MAX_HISTORY_MESSAGES*2:]:
+                    for msg in conversation_history[-settings.chat.MAX_HISTORY_MESSAGES*2:]:
                         clean_content = self._clean_message_content(msg["content"])
                         messages.append({
                             "role": msg["role"],

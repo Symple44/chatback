@@ -10,7 +10,7 @@ logger = get_logger("auth_manager")
 class HuggingFaceAuthManager:
     def __init__(self):
         """Initialise le gestionnaire d'authentification Hugging Face."""
-        self.token = settings.HUGGING_FACE_HUB_TOKEN
+        self.token = settings.security.HUGGING_FACE_HUB_TOKEN
         self.api = HfApi()
         self._is_authenticated = False
 
