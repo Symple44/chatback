@@ -342,7 +342,7 @@ async def setup_environment():
             
             # Configurations CUDA - maintenant accessibles via settings.hardware.cuda
             "PYTORCH_CUDA_ALLOC_CONF": f"max_split_size_mb:{settings.hardware.cuda.max_split_size_mb},garbage_collection_threshold:{settings.hardware.cuda.gc_threshold}",
-            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(cuda_config.enable_mem_efficient_offload).lower(),
+            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": settings.hardware.cuda.efficient_offload,
             "CUDA_MODULE_LOADING": settings.hardware.cuda.module_loading,
             "CUDA_VISIBLE_DEVICES": str(settings.hardware.cuda.device_id)
         })

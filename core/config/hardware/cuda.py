@@ -34,6 +34,7 @@ class CUDAConfig:
     max_split_size_mb: int = 4096
     gc_threshold: float = 0.9
     enable_tf32: bool = True
+    efficient_offload: bool = True
     allow_fp16: bool = True
     deterministic: bool = False
     benchmark: bool = True
@@ -76,6 +77,7 @@ class CUDAConfig:
             max_split_size_mb=cuda_config.get("max_split_size_mb", 4096),
             gc_threshold=float(os.environ.get("CUDA_MEMORY_FRACTION", "0.95")),
             enable_tf32=True,
+            efficient_offload=True,
             allow_fp16=os.environ.get("USE_FP16", "true").lower() == "true",
             deterministic=False,
             benchmark=os.environ.get("CUDNN_BENCHMARK", "true").lower() == "true",
