@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from core.config.config import settings
 from core.config.models import (
-    AVAILABLE_MODELS,
+    CHAT_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS
 )
@@ -148,8 +148,8 @@ class PromptSystem:
 
     def _get_model_config(self, model_name: str) -> Optional[Dict]:
         """Récupère la configuration du modèle."""
-        if model_name in AVAILABLE_MODELS:
-            return AVAILABLE_MODELS[model_name]
+        if model_name in CHAT_MODELS:
+            return CHAT_MODELS[model_name]
         elif model_name in EMBEDDING_MODELS:
             return EMBEDDING_MODELS[model_name]
         elif model_name in SUMMARIZER_MODELS:

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core.config.models import (
-    AVAILABLE_MODELS,
+    CHAT_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
     MODEL_PERFORMANCE_CONFIGS
@@ -125,7 +125,7 @@ class ModelLoader:
             logger.info(f"Chargement du modèle {model_name}")
             
             # 1. Récupération de toutes les configurations pertinentes
-            model_config = AVAILABLE_MODELS[model_name]
+            model_config = CHAT_MODELS[model_name]
             performance_config = MODEL_PERFORMANCE_CONFIGS[model_name]
             
             # 2. Configuration du tokenizer
@@ -402,7 +402,7 @@ class ModelLoader:
         """Récupère la configuration complète d'un modèle."""
         try:
             if model_type == ModelType.CHAT:
-                return AVAILABLE_MODELS.get(model_name)
+                return CHAT_MODELS.get(model_name)
             elif model_type == ModelType.EMBEDDING:
                 return EMBEDDING_MODELS.get(model_name)
             elif model_type == ModelType.SUMMARIZER:

@@ -13,7 +13,7 @@ from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 from core.config.models import (
-    AVAILABLE_MODELS,
+    CHAT_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
     MODEL_PERFORMANCE_CONFIGS,
@@ -163,7 +163,7 @@ class ModelInference:
                 raise RuntimeError("Modèle de chat non initialisé")
 
             # Récupération de la config complète du modèle
-            model_config = AVAILABLE_MODELS.get(chat_model.model_name, {})
+            model_config = CHAT_MODELS.get(chat_model.model_name, {})
             generation_config = model_config.get("generation_config", {})
             
             # Configuration de base depuis generation_params

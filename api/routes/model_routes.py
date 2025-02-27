@@ -28,12 +28,12 @@ class ModelInfo(BaseModel):
     is_active: bool = Field(True, description="Si le modèle est actif")
 
 @router.get("/available", response_model=List[ModelInfo])
-async def list_available_models(components=Depends(get_components)) -> List[Dict]:
+async def list_CHAT_MODELS(components=Depends(get_components)) -> List[Dict]:
     """Liste tous les modèles disponibles."""
     try:
         models_info = []
         for model_type in ModelType:
-            model_configs = components.model_manager._get_available_models_by_type(model_type)
+            model_configs = components.model_manager._get_CHAT_MODELS_by_type(model_type)
             for name, config in model_configs.items():
                 models_info.append(
                     ModelInfo(

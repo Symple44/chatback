@@ -8,7 +8,7 @@ from enum import Enum
 
 from core.config.config import settings
 from core.config.models import (
-    AVAILABLE_MODELS,
+    CHAT_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
     MODEL_PERFORMANCE_CONFIGS
@@ -50,7 +50,7 @@ class TokenizerManager:
     def _get_model_config(self, model_name: str, model_type: TokenizerType) -> Optional[Dict]:
         """Récupère la configuration d'un modèle selon son type."""
         if model_type == TokenizerType.CHAT:
-            return AVAILABLE_MODELS.get(model_name)
+            return CHAT_MODELS.get(model_name)
         elif model_type == TokenizerType.EMBEDDING:
             return EMBEDDING_MODELS.get(model_name)
         elif model_type == TokenizerType.SUMMARIZER:
@@ -141,7 +141,7 @@ class TokenizerManager:
             }
 
             # Chargement des tokenizers pour les modèles de chat
-            for model_name in AVAILABLE_MODELS.keys():
+            for model_name in CHAT_MODELS.keys():
                 await self.load_tokenizer(
                     model_name, 
                     TokenizerType.CHAT, 
@@ -181,7 +181,7 @@ class TokenizerManager:
         try:
             # Récupération de la configuration du modèle
             model_configs = {
-                TokenizerType.CHAT: AVAILABLE_MODELS,
+                TokenizerType.CHAT: CHAT_MODELS,
                 TokenizerType.SUMMARIZER: SUMMARIZER_MODELS,
                 TokenizerType.EMBEDDING: EMBEDDING_MODELS
             }

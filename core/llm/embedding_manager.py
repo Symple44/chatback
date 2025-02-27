@@ -23,8 +23,8 @@ class EmbeddingManager:
         
         # Vérification des configurations
         if self.model_name not in EMBEDDING_MODELS:
-            available_models = ", ".join(EMBEDDING_MODELS.keys())
-            raise ValueError(f"Modèle {self.model_name} non disponible. Modèles disponibles : {available_models}")
+            CHAT_MODELS = ", ".join(EMBEDDING_MODELS.keys())
+            raise ValueError(f"Modèle {self.model_name} non disponible. Modèles disponibles : {CHAT_MODELS}")
             
         # Récupération des configurations
         self.model_config = EMBEDDING_MODELS[self.model_name]
@@ -62,8 +62,8 @@ class EmbeddingManager:
         try:
             # Vérification avec les nouvelles configurations
             if model_name not in EMBEDDING_MODELS:
-                available_models = ", ".join(EMBEDDING_MODELS.keys())
-                raise ValueError(f"Modèle {model_name} non disponible. Modèles disponibles : {available_models}")
+                CHAT_MODELS = ", ".join(EMBEDDING_MODELS.keys())
+                raise ValueError(f"Modèle {model_name} non disponible. Modèles disponibles : {CHAT_MODELS}")
 
             # Chargement avec les nouvelles configurations
             new_model = await model_loader.load_model(

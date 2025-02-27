@@ -14,7 +14,7 @@ from core.utils.metrics import metrics
 from .model_loader import ModelLoader, ModelType, LoadedModel
 from .cuda_manager import ModelPriority
 from core.config.models import (
-    AVAILABLE_MODELS,
+    CHAT_MODELS,
     EMBEDDING_MODELS,
     SUMMARIZER_MODELS,
     MODEL_PERFORMANCE_CONFIGS,
@@ -151,25 +151,25 @@ class ModelManager:
     def is_model_available(self, model_name: str, model_type: ModelType) -> bool:
         """Vérifie si un modèle est disponible."""
         if model_type == ModelType.CHAT:
-            return model_name in AVAILABLE_MODELS
+            return model_name in CHAT_MODELS
         elif model_type == ModelType.EMBEDDING:
             return model_name in EMBEDDING_MODELS
         elif model_type == ModelType.SUMMARIZER:
             return model_name in SUMMARIZER_MODELS
         return False
 
-    async def get_available_models(self) -> Dict[str, List[str]]:
+    async def get_CHAT_MODELS(self) -> Dict[str, List[str]]:
         """Retourne la liste des modèles disponibles par type."""
         return {
-            "chat_models": list(AVAILABLE_MODELS.keys()),
+            "chat_models": list(CHAT_MODELS.keys()),
             "embedding_models": list(EMBEDDING_MODELS.keys()),
             "summarizer_models": list(SUMMARIZER_MODELS.keys())
         }
         
-    def _get_available_models_by_type(self, model_type: ModelType) -> Dict:
+    def _get_CHAT_MODELS_by_type(self, model_type: ModelType) -> Dict:
         """Récupère tous les modèles disponibles pour un type donné."""
         if model_type == ModelType.CHAT:
-            return AVAILABLE_MODELS
+            return CHAT_MODELS
         elif model_type == ModelType.EMBEDDING:
             return EMBEDDING_MODELS
         elif model_type == ModelType.SUMMARIZER:
@@ -215,7 +215,7 @@ class ModelManager:
     def _get_model_config(self, model_name: str, model_type: ModelType) -> Dict:
         """Récupère la configuration d'un modèle."""
         if model_type == ModelType.CHAT:
-            return AVAILABLE_MODELS.get(model_name, {})
+            return CHAT_MODELS.get(model_name, {})
         elif model_type == ModelType.EMBEDDING:
             return EMBEDDING_MODELS.get(model_name, {})
         elif model_type == ModelType.SUMMARIZER:
