@@ -4,6 +4,7 @@ from .base import ModelType
 from .chat import CHAT_MODELS, MODEL_PERFORMANCE_CONFIGS
 from .embedding import EMBEDDING_MODELS
 from .summarizer import SUMMARIZER_MODELS
+from .systems import SYSTEM_CONFIG
 
 class ModelsConfig:
     """Configuration unifiée des modèles."""
@@ -20,6 +21,7 @@ class ModelsConfig:
         self.model_performance_configs = MODEL_PERFORMANCE_CONFIGS
         self.embedding_models = EMBEDDING_MODELS
         self.summarizer_models = SUMMARIZER_MODELS
+        self.system_config = SYSTEM_CONFIG
         
         # Configurations des limites
         self.MAX_INPUT_LENGTH = int(os.getenv("MAX_INPUT_LENGTH", "8192"))

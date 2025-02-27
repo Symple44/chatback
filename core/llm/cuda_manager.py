@@ -11,7 +11,6 @@ import psutil
 from enum import Enum
 
 from core.config.config import settings
-from core.config.models import CUDA_CONFIG
 from core.config.models import SYSTEM_CONFIG
 from core.utils.logger import get_logger
 
