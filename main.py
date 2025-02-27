@@ -364,12 +364,6 @@ async def setup_environment():
         logger.info(f"CUDA disponible: {gpu_info['available']}")
         logger.info(f"VRAM: {gpu_info['vram_gb']} Go")
         logger.info(f"Compute Capability: {gpu_info['compute_capability']}")
-
-        # Configuration des threads
-        logger.info(f"Configuration threads: "
-                    f"workers={thread_config.workers}, "
-                    f"inference={thread_config.inference_threads}, "
-                    f"io={thread_config.io_threads}")
         
         # Création des répertoires
         dirs = [
