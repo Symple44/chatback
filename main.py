@@ -348,18 +348,28 @@ async def setup_environment():
         })
         
         # Log de la configuration matérielle
-        cpu_info = settings.hardware.cpu
-        gpu_info = settings.hardware.gpu
+        hardware = settings.hardware.detector.detect_hardware()
+        cpu_info = hardware['cpu']
+        gpu_info = hardware['gpu']
         
-        logger.info(f"Configuration matérielle chargée: CPU={cpu_info.model}")
-        logger.info(f"GPU={gpu_info.name}")
-        logger.info(f"VRAM totale: {gpu_info.vram_total}")
-        logger.info(f"Allocation VRAM: {gpu_info.vram_allocation}")
-        logger.info(f"RAM totale: {cpu_info.ram_total}")
-        logger.info(f"Allocation RAM: {cpu_info.ram_allocation}")
-        logger.info(f"Configuration threads: workers={thread_config.workers}, "
-                   f"inference={thread_config.inference_threads}, "
-                   f"io={thread_config.io_threads}")
+        # Logs de configuration matérielle
+        logger.info(f"Configuration matérielle chargée:")
+        logger.info(f"CPU: {cpu_info['model']}")
+        logger.info(f"Cores physiques: {cpu_info['physical_cores']}")
+        logger.info(f"Cores logiques: {cpu_info['logical_cores']}")
+        logger.info(f"Architecture CPU: {cpu_info['architecture']}")
+        logger.info(f"RAM totale: {cpu_info['ram_total_gb']} Go")
+
+        logger.info(f"GPU: {gpu_info['name']}")
+        logger.info(f"CUDA disponible: {gpu_info['available']}")
+        logger.info(f"VRAM: {gpu_info['vram_gb']} Go")
+        logger.info(f"Compute Capability: {gpu_info['compute_capability']}")
+
+        # Configuration des threads
+        logger.info(f"Configuration threads: "
+                    f"workers={thread_config.workers}, "
+                    f"inference={thread_config.inference_threads}, "
+                    f"io={thread_config.io_threads}")
         
         # Création des répertoires
         dirs = [
