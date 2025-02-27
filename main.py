@@ -334,17 +334,17 @@ async def setup_environment():
         
         # Configuration des bibliothèques numériques
         os.environ.update({
-            # Configurations CPU
-            "MKL_NUM_THREADS": str(thread_config.mkl_num_threads),
-            "NUMEXPR_NUM_THREADS": str(thread_config.numexpr_num_threads),
-            "OMP_NUM_THREADS": str(thread_config.omp_num_threads),
-            "OPENBLAS_NUM_THREADS": str(thread_config.openblas_num_threads),
+            # Configurations CPU - maintenant accessibles via settings.hardware.thread_config
+            "MKL_NUM_THREADS": str(thread_config.get("workers", settings.hardware.thread_config.get("mkl_num_threads", 16))),
+            "NUMEXPR_NUM_THREADS": str(thread_config.get("workers", settings.hardware.thread_config.get("numexpr_num_threads", 16))),
+            "OMP_NUM_THREADS": str(thread_config.get("inference_threads", settings.hardware.thread_config.get("omp_num_threads", 16))),
+            "OPENBLAS_NUM_THREADS": str(thread_config.get("inference_threads", settings.hardware.thread_config.get("openblas_num_threads", 16))),
             
-            # Configurations CUDA
-            "PYTORCH_CUDA_ALLOC_CONF": f"max_split_size_mb:{cuda_config.max_split_size_mb},garbage_collection_threshold:{cuda_config.gc_threshold}",
-            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(cuda_config.enable_mem_efficient_offload).lower(),
-            "CUDA_MODULE_LOADING": cuda_config.module_loading,
-            "CUDA_VISIBLE_DEVICES": str(cuda_config.device_id)
+            # Configurations CUDA - maintenant accessibles via settings.hardware.cuda
+            "PYTORCH_CUDA_ALLOC_CONF": f"max_split_size_mb:{settings.hardware.cuda.max_split_size_mb},garbage_collection_threshold:{settings.hardware.cuda.gc_threshold}",
+            "PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD": str(settings.hardware.cuda.get("enable_mem_efficient_offload", True)).lower(),
+            "CUDA_MODULE_LOADING": settings.hardware.cuda.module_loading,
+            "CUDA_VISIBLE_DEVICES": str(settings.hardware.cuda.device_id)
         })
         
         # Log de la configuration matérielle

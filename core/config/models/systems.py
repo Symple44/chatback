@@ -15,10 +15,5 @@ SYSTEM_CONFIG = {
         "enable_cuda_graphs": True,
         "enable_channels_last": True,
         "compile_mode": "reduce-overhead"
-    },
-    "thread_config": {
-        "mkl_num_threads": int(os.environ.get("MKL_NUM_THREADS", "16")),
-        "omp_num_threads": int(os.environ.get("OMP_NUM_THREADS", "16")),
-        "numpy_num_threads": int(os.environ.get("NUMEXPR_NUM_THREADS", "16"))
     }
 }
