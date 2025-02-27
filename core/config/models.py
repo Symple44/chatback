@@ -1,7 +1,18 @@
 # core/config/models.py
-from typing import Dict, List, Any
-from pydantic import BaseModel
+from typing import Dict, List, Any, Optional
 import torch
+import os
+import logging
+from pathlib import Path
+import json
+
+logger = logging.getLogger(__name__)
+
+# Import des configurations matérielles et CUDA
+from core.config.cuda_config import DeviceType, get_cuda_config
+
+# Import de la configuration globale pour rester compatible 
+from core.config.config import settings
 
 # Configuration des modèles de chat/instruction disponibles
 AVAILABLE_MODELS = {
@@ -30,7 +41,6 @@ AVAILABLE_MODELS = {
             },
             "attn_implementation": "flash_attention_2"
         },
-        # Nouvelle section pour les paramètres de génération spécifiques au modèle
         "generation_config": {
             "preprocessing": {
                 "max_input_length": 6144,
@@ -107,7 +117,6 @@ AVAILABLE_MODELS = {
             "offload_folder": "offload_folder",
             "attn_implementation": "flash_attention_2"
         },
-        # Configuration spécifique pour Mixtral
         "generation_config": {
             "preprocessing": {
                 "max_input_length": 24576,
@@ -459,30 +468,12 @@ SUMMARIZER_MODELS = {
     }
 }
 
-# Configuration CUDA optimisée pour RTX 3090
-CUDA_CONFIG = {
-    "device_type": "cuda",
-    "compute_capability": "8.6",
-    "memory_config": {
-        "max_split_size_mb": 4096,
-        "gpu_memory_fraction": 0.95,
-        "offload_folder": "offload_folder"
-    },
-    "optimization": {
-        "use_flash_attention": True,
-        "use_cuda_graphs": True,
-        "cudnn_benchmark": True,
-        "enable_tf32": True,
-        "allow_fp16_reduced_precision_reduction": True
-    }
-}
-
-# Configuration système globale
+# Configuration système globale basée sur les valeurs de config.py
 SYSTEM_CONFIG = {
     "memory_management": {
-        "gpu_memory_fraction": 0.95,
-        "cpu_memory_limit": "24GB",
-        "offload_folder": "offload_folder",
+        "gpu_memory_fraction": float(os.environ.get("CUDA_MEMORY_FRACTION", "0.95")),
+        "cpu_memory_limit": os.environ.get("CPU_MEMORY_LIMIT", "24GB"),
+        "offload_folder": os.environ.get("OFFLOAD_FOLDER", "offload_folder"),
         "cleanup_interval": 300
     },
     "optimization": {
@@ -492,8 +483,107 @@ SYSTEM_CONFIG = {
         "compile_mode": "reduce-overhead"
     },
     "thread_config": {
-        "mkl_num_threads": 16,
-        "omp_num_threads": 16,
-        "numpy_num_threads": 16
+        "mkl_num_threads": int(os.environ.get("MKL_NUM_THREADS", "16")),
+        "omp_num_threads": int(os.environ.get("OMP_NUM_THREADS", "16")),
+        "numpy_num_threads": int(os.environ.get("NUMEXPR_NUM_THREADS", "16"))
     }
 }
+
+def get_model_config(model_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Récupère la configuration d'un modèle par son nom.
+    
+    Args:
+        model_name: Nom du modèle à rechercher
+        
+    Returns:
+        Dict[str, Any]: Configuration du modèle ou None si non trouvé
+    """
+    # Chercher dans toutes les catégories de modèles
+    if model_name in AVAILABLE_MODELS:
+        return AVAILABLE_MODELS[model_name]
+    elif model_name in EMBEDDING_MODELS:
+        return EMBEDDING_MODELS[model_name]
+    elif model_name in SUMMARIZER_MODELS:
+        return SUMMARIZER_MODELS[model_name]
+    
+    # Chercher par chemin si le nom exact n'est pas trouvé
+    for models_dict in [AVAILABLE_MODELS, EMBEDDING_MODELS, SUMMARIZER_MODELS]:
+        for key, config in models_dict.items():
+            if config.get("path") == model_name:
+                return config
+    
+    return None
+
+def get_optimized_load_params(model_name: str) -> Dict[str, Any]:
+    """
+    Obtient les paramètres de chargement optimisés pour un modèle spécifique.
+    
+    Args:
+        model_name: Nom du modèle
+        
+    Returns:
+        Dict[str, Any]: Paramètres de chargement optimisés
+    """
+    config = get_model_config(model_name)
+    if not config:
+        logger.warning(f"Configuration non trouvée pour {model_name}, utilisation des paramètres par défaut")
+        return {
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "max_memory": {0: "16GiB", "cpu": "12GB"}
+        }
+    
+    # Récupération des paramètres de base
+    load_params = config.get("load_params", {}).copy()
+    
+    # Adaptation des paramètres de mémoire selon la configuration CUDA
+    cuda_config = get_cuda_config()
+    model_type = config.get("type", "chat")
+    
+    # Mise à jour de max_memory selon le type de modèle
+    if model_type == "chat":
+        load_params["max_memory"] = cuda_config.memory_configs.get("high", {0: "16GiB", "cpu": "12GB"})
+    elif model_type == "summarization":
+        load_params["max_memory"] = cuda_config.memory_configs.get("medium", {0: "4GiB", "cpu": "8GB"})
+    else:  # embedding ou autre
+        load_params["max_memory"] = cuda_config.memory_configs.get("low", {0: "2GiB", "cpu": "4GB"})
+    
+    # Configuration de l'implementation de l'attention
+    if cuda_config.use_flash_attention and "attn_implementation" not in load_params:
+        load_params["attn_implementation"] = "flash_attention_2"
+    
+    return load_params
+
+def export_model_configs(output_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Exporte les configurations des modèles dans un fichier JSON.
+    
+    Args:
+        output_path: Chemin de sortie optionnel
+        
+    Returns:
+        Dict[str, Any]: Configurations des modèles
+    """
+    # Structure pour l'export
+    configs = {
+        "chat_models": {name: config["display_name"] for name, config in AVAILABLE_MODELS.items()},
+        "embedding_models": {name: config["display_name"] for name, config in EMBEDDING_MODELS.items()},
+        "summarizer_models": {name: config["display_name"] for name, config in SUMMARIZER_MODELS.items()},
+        "default_models": {
+            "chat": settings.MODEL_NAME,
+            "embedding": settings.EMBEDDING_MODEL,
+            "summarizer": settings.MODEL_NAME_SUMMARIZER
+        }
+    }
+    
+    if output_path:
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_file, 'w') as f:
+            json.dump(configs, f, indent=2)
+        
+        logger.info(f"Configurations des modèles exportées dans {output_path}")
+    
+    return configs
