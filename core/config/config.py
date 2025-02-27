@@ -1,5 +1,6 @@
 # core/config/config.py
 from pydantic_settings import BaseSettings
+from pydantic import validator
 from pathlib import Path
 import os
 from typing import Dict, List, Optional
@@ -45,8 +46,37 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = True
     
+    @validator('PORT')
+    def validate_port(cls, port):
+        """Validate that port is within valid range."""
+        if not 1 <= port <= 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        return port
+
+    @validator('SUPPORTED_FORMATS')
+    def validate_formats(cls, formats):
+        """Validate file formats."""
+        valid_formats = {'.pdf', '.docx', '.txt', '.md', '.csv'}
+        invalid_formats = set(formats) - valid_formats
+        if invalid_formats:
+            raise ValueError(f"Invalid formats: {invalid_formats}. Supported formats are: {valid_formats}")
+        return formats
+
+    def validate_dirs(self):
+        """Additional directory validations."""
+        # Check if directories are writable
+        for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, 
+                     self.MODELS_DIR, self.TEMP_DIR]:
+            if not os.access(path, os.W_OK):
+                raise PermissionError(f"Directory {path} is not writable")
+
     def __init__(self, **data):
-        super().__init__(**data)
+        # Créer les répertoires requis
+        for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, self.MODELS_DIR, self.TEMP_DIR]:
+            path.mkdir(parents=True, exist_ok=True)
+        
+        # Run additional validations
+        self.validate_dirs()
         
         # Créer les configurations spécialisées
         self.db = DatabaseConfig()
@@ -59,9 +89,8 @@ class Settings(BaseSettings):
         self.document = DocumentConfig()
         self.chat = ChatConfig()
         
-        # Créer les répertoires requis
-        for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, self.MODELS_DIR, self.TEMP_DIR]:
-            path.mkdir(parents=True, exist_ok=True)
+        # Initialize settings
+        super().__init__(**data)
 
 # Instance unique des configurations
 settings = Settings()
