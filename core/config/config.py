@@ -1,5 +1,5 @@
 # core/config/config.py
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import validator
 from pathlib import Path
 import os
@@ -22,15 +22,6 @@ load_dotenv()
 class Settings(BaseSettings):
     """Configuration unifiée de l'application."""
     
-    # Application settings
-    APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
-    VERSION: str = os.getenv("VERSION", "1.0.0")
-    BUILD_DATE: str = os.getenv("BUILD_DATE", "2025")
-    CONTACT_EMAIL : str = os.getenv("CONTACT_EMAIL", "contact@symple.fr")
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
-    ENV: str = os.getenv("ENV", "production")
-    PORT: int = int(os.getenv("PORT", "8000"))
-    
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
     LOG_DIR: Path = BASE_DIR / "logs"
@@ -39,13 +30,35 @@ class Settings(BaseSettings):
     MODELS_DIR: Path = BASE_DIR / "models"
     TEMP_DIR: Path = BASE_DIR / "temp"
     
+    # Application settings
+    APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
+    VERSION: str = os.getenv("VERSION", "1.0.0")
+    BUILD_DATE: str = os.getenv("BUILD_DATE", "2025")
+    CONTACT_EMAIL: str = os.getenv("CONTACT_EMAIL", "contact@symple.fr")
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+    ENV: str = os.getenv("ENV", "production")
+    PORT: int = int(os.getenv("PORT", "8000"))
+    
     # Formats
     SUPPORTED_FORMATS: List[str] = ['.pdf', '.docx', '.txt']
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # Configurations spécialisées
+    db: Optional[DatabaseConfig] = None
+    cache: Optional[CacheConfig] = None
+    server: Optional[ServerConfig] = None
+    security: Optional[SecurityConfig] = None
+    hardware: Optional[HardwareConfig] = None
+    models: Optional[ModelsConfig] = None
+    search: Optional[SearchConfig] = None
+    document: Optional[DocumentConfig] = None
+    chat: Optional[ChatConfig] = None
     
+    model_config = SettingsConfigDict(
+        env_file = ".env",
+        case_sensitive = True,
+        extra = 'ignore'
+    )
+
     @validator('PORT')
     def validate_port(cls, port):
         """Validate that port is within valid range."""
@@ -62,23 +75,23 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid formats: {invalid_formats}. Supported formats are: {valid_formats}")
         return formats
 
-    def validate_dirs(self):
-        """Additional directory validations."""
-        # Check if directories are writable
-        for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, 
-                     self.MODELS_DIR, self.TEMP_DIR]:
-            if not os.access(path, os.W_OK):
-                raise PermissionError(f"Directory {path} is not writable")
-
     def __init__(self, **data):
-        # Créer les répertoires requis
-        for path in [self.LOG_DIR, self.DATA_DIR, self.CACHE_DIR, self.MODELS_DIR, self.TEMP_DIR]:
+        # Créer les répertoires requis avant l'initialisation de Pydantic
+        required_dirs = [
+            Path(__file__).resolve().parent.parent.parent / "logs",
+            Path(__file__).resolve().parent.parent.parent / "data",
+            Path(__file__).resolve().parent.parent.parent / "cache",
+            Path(__file__).resolve().parent.parent.parent / "models",
+            Path(__file__).resolve().parent.parent.parent / "temp"
+        ]
+        
+        for path in required_dirs:
             path.mkdir(parents=True, exist_ok=True)
         
-        # Run additional validations
-        self.validate_dirs()
+        # Initialiser Pydantic
+        super().__init__(**data)
         
-        # Créer les configurations spécialisées
+        # Créer les configurations spécialisées APRÈS l'initialisation de Pydantic
         self.db = DatabaseConfig()
         self.cache = CacheConfig()
         self.server = ServerConfig()
@@ -88,9 +101,6 @@ class Settings(BaseSettings):
         self.search = SearchConfig()
         self.document = DocumentConfig()
         self.chat = ChatConfig()
-        
-        # Initialize settings
-        super().__init__(**data)
 
 # Instance unique des configurations
 settings = Settings()
