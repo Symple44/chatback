@@ -72,13 +72,6 @@ class Settings(BaseSettings):
     PYTORCH_CUDA_ALLOC_CONF: str = os.getenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:4096,garbage_collection_threshold:0.9")
     PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD: bool = os.getenv("PYTORCH_ENABLE_MEM_EFFICIENT_OFFLOAD", "true").lower() == "true"
 
-    # Configuration mémoire # DEPRECIATED
-    MAX_MEMORY: Dict[str, str] = { 
-        "0": "22GiB",  # GPU principal
-        "cpu": "24GB"  # CPU
-    }
-    OFFLOAD_FOLDER: str = os.getenv("OFFLOAD_FOLDER", "offload_folder") # DEPRECIATED
-
     # Configuration quantification
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
 
@@ -147,14 +140,6 @@ class Settings(BaseSettings):
     # Paramètres de configuration utilisateur (chat)
     MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "5"))
     
-    # DEPRECIATED
-    SYSTEM_ROLES: Dict[str, str] = {
-        "system": "Je suis {app_name}, votre assistant IA spécialisé.",
-        "user": "En tant qu'utilisateur, je demande :",
-        "assistant": "En tant qu'assistant technique, je vais vous aider :",
-        "context": "Voici le contexte pertinent :",
-    }
-
      # === Search Configuration ===
     DEFAULT_SEARCH_METHOD: str = os.getenv("DEFAULT_SEARCH_METHOD", "rag")
     SEARCH_MAX_DOCS: int = int(os.getenv("SEARCH_MAX_DOCS", "20")) # Limite max de documents dans la recherche (niveau le plus haut)
@@ -185,30 +170,6 @@ class Settings(BaseSettings):
         if v not in valid_methods:
             raise ValueError(f"Méthode de recherche invalide. Valeurs possibles : {valid_methods}")
         return v
-    
-    # Types de réponses DEPRECIATED
-    RESPONSE_TYPES: Dict[str, Dict[str, Any]] = {
-        "comprehensive": {
-            "description": "Réponse détaillée et approfondie",
-            "temperature": 0.6,
-            "style": "Je vais vous donner une explication détaillée et complète."
-        },
-        "concise": {
-            "description": "Réponse courte et directe",
-            "temperature": 0.5,
-            "style": "Voici une réponse brève et précise."
-        },
-        "technical": {
-            "description": "Réponse technique avec détails d'implémentation",
-            "temperature": 0.3,
-            "style": "Je vais vous fournir les détails techniques."
-        },
-        "clarification": {
-            "description": "Demande de clarification",
-            "temperature": 0.4,
-            "style": "Pour mieux vous répondre, j'ai besoin de quelques précisions."
-        }
-    }
 
     # === Validation Methods ===
     @validator('MAX_MEMORY')

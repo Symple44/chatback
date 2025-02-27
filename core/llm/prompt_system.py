@@ -109,8 +109,7 @@ class PromptSystem:
     """Gestionnaire de prompts pour les modèles LLM."""
     
     def __init__(self):
-        self.system_roles = settings.SYSTEM_ROLES
-        self.response_types = settings.RESPONSE_TYPES or {}
+        self.response_types =  {}
         self.max_context_length = settings.MAX_CONTEXT_LENGTH
         self.language_indicators = {
             "fr": "Répondez en français",
