@@ -1,6 +1,7 @@
 # core/config/document.py
 import os
 from pydantic import BaseModel
+from typing import Optional
 
 class DocumentConfig(BaseModel):
     """Configuration pour le traitement des documents."""
