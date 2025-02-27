@@ -13,11 +13,7 @@ from .summarizer import DocumentSummarizer
 from .tokenizer_manager import TokenizerManager
 from .auth_manager import HuggingFaceAuthManager
 from core.config.models import (
-    CHAT_MODELS,
-    EMBEDDING_MODELS,
-    SUMMARIZER_MODELS,
-    MODEL_PERFORMANCE_CONFIGS,
-    CUDA_CONFIG
+    CHAT_MODELS
 )
 
 
