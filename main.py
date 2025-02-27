@@ -374,7 +374,7 @@ async def setup_environment():
             "logs",
             "data",
             "temp",
-            str(settings.models.MODELS_DIR)  # Chemin des modèles maintenant dans settings.models
+            str(settings.MODELS_DIR)  # Chemin des modèles maintenant dans settings.models
         ]
         
         for dir_name in dirs:
