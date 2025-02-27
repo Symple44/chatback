@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     # Application settings
     APP_NAME: str = os.getenv("APP_NAME", "AI Chat Assistant")
     VERSION: str = os.getenv("VERSION", "1.0.0")
-    BUILD_DATE: str = int(os.getenv("BUILD_DATE", "2025"))
-    CONTACT_EMAIL : str = int(os.getenv("CONTACT_EMAIL", "contact@symple.fr"))
+    BUILD_DATE: str = os.getenv("BUILD_DATE", "2025")
+    CONTACT_EMAIL : str = os.getenv("CONTACT_EMAIL", "contact@symple.fr")
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     ENV: str = os.getenv("ENV", "production")
     PORT: int = int(os.getenv("PORT", "8000"))
