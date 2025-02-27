@@ -4,7 +4,7 @@ from datetime import datetime
 from core.utils.metrics import metrics
 from core.utils.logger import get_logger
 from core.config.config import settings
-from core.config.chat_config import BusinessType
+from core.config.chat import BusinessType
 import json
 import asyncio
 

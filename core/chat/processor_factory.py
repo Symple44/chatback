@@ -2,7 +2,7 @@
 from typing import Dict, Optional
 from core.utils.logger import get_logger
 from .generic_processor import GenericProcessor
-from core.config.chat_config import BusinessType
+from core.config.chat import BusinessType
 
 logger = get_logger("processor_factory")
 

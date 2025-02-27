@@ -33,7 +33,7 @@ from core.config.search_config import SEARCH_STRATEGIES_CONFIG
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 from core.streaming.stream_manager import StreamManager
-from core.config.chat_config import BusinessType
+from core.config.chat import BusinessType
 
 logger = get_logger("chat_routes")
 router = APIRouter(prefix="/chat", tags=["chat"])
