@@ -3,7 +3,7 @@ from typing import Dict, Any
 
 # Configuration des modèles de résumé
 SUMMARIZER_MODELS = {
-    "t5-base-fr-sum-cnndm": {
+    "plguillou/t5-base-fr-sum-cnndm": {
         "display_name": "T5 Base FR Summarizer",
         "path": "plguillou/t5-base-fr-sum-cnndm",
         "type": "summarization",
