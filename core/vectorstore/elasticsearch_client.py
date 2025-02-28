@@ -10,6 +10,7 @@ from core.config.config import settings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from .indexation import ElasticsearchIndexManager
+import os
 
 logger = get_logger(__name__)
 
