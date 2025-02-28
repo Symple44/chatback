@@ -84,12 +84,23 @@ class TokenizerManager:
                     "use_fast": True  # Force l'utilisation du fast tokenizer
                 })
             elif "mt5" in model_path.lower():
-                # Configuration spécifique pour MT5
+                # Configuration spécifique pour MT5 - utilisez le slow tokenizer et ignorez les warnings
                 tokenizer_kwargs.update({
                     "model_max_length": config.max_length,
                     "use_fast": False  # Utilise le slow tokenizer pour éviter les warnings
                 })
                 
+                # Supprimer temporairement les avertissements pour MT5
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, 
+                                        message="The sentencepiece tokenizer.*")
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_path,
+                        **tokenizer_kwargs
+                    )
+                    return tokenizer
+            
             tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
                 **tokenizer_kwargs
@@ -112,9 +123,9 @@ class TokenizerManager:
 
             return tokenizer
 
-        except Exception as e:
-            logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
-            raise
+    except Exception as e:
+        logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
+        raise
 
     async def initialize(self):
         """Initialise les tokenizers."""

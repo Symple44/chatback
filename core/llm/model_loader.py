@@ -144,6 +144,12 @@ class ModelLoader:
             # 4. Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
+                
+                # Supprimer les paramètres non reconnus
+                if "bnb_4bit_use_nested_quant" in quant_config:
+                    logger.warning("Suppression du paramètre 'bnb_4bit_use_nested_quant' non reconnu")
+                    quant_config.pop("bnb_4bit_use_nested_quant")
+                    
                 load_params["quantization_config"] = BitsAndBytesConfig(**quant_config)
             
             # 5. Récupération et fusion des paramètres CUDA optimisés
@@ -236,12 +242,13 @@ class ModelLoader:
             # 4. Configuration de la quantization
             if "quantization_config" in load_params:
                 quant_config = load_params.pop("quantization_config")
-                load_params["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=quant_config["bnb_4bit_compute_dtype"],
-                    bnb_4bit_quant_type=quant_config["bnb_4bit_quant_type"],
-                    bnb_4bit_use_double_quant=quant_config["bnb_4bit_use_double_quant"]
-                )
+                
+                # Supprimer les paramètres non reconnus
+                if "quant_method" in quant_config:
+                    logger.warning("Suppression du paramètre 'quant_method' non reconnu")
+                    quant_config.pop("quant_method")
+                    
+                load_params["quantization_config"] = BitsAndBytesConfig(**quant_config)
 
             # 5. Paramètres CUDA
             cuda_params = self._get_model_load_parameters(
