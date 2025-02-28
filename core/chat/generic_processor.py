@@ -1,4 +1,4 @@
-# core/chat/generic_processor.py
+# core/chat/generic_processor.py - Version corrigée
 from typing import Dict, Optional, List
 from datetime import datetime
 import uuid
@@ -30,7 +30,6 @@ class GenericProcessor(BaseProcessor):
         self.model = components.model
         self.es_client = components.es_client
         self.prompt_system = PromptSystem()
-        
         
     async def process_message(
         self,
@@ -140,30 +139,73 @@ class GenericProcessor(BaseProcessor):
             if relevant_docs:
                 for idx, doc in enumerate(relevant_docs):
                     if isinstance(doc, SearchResult):
-                        # Si c'est un SearchResult
+                        # Si c'est un SearchResult - accès direct aux attributs
+                        title = doc.metadata.get("title") if hasattr(doc.metadata, "get") else None
+                        name = doc.metadata.get("name") if hasattr(doc.metadata, "get") else None
+                        page = doc.metadata.get("page", 1) if hasattr(doc.metadata, "get") else 1
+                        
                         doc_references.append(DocumentReference(
-                            title=doc.metadata.get("title") or doc.metadata.get("name") or f"Document {idx + 1}",
-                            page=int(doc.metadata.get("page", 1)),
+                            title=title or name or f"Document {idx + 1}",
+                            page=int(page),
                             score=float(doc.score),
                             content=doc.content or "Pas de contenu disponible",
                             metadata=doc.metadata
                         ))
                     else:
-                        # Si c'est un dictionnaire
-                        doc_references.append(DocumentReference(
-                            title=doc.get("title") or doc.get("name") or \
-                                doc.get("metadata", {}).get("title") or \
-                                doc.get("metadata", {}).get("name") or \
-                                f"Document {idx + 1}",
-                            page=int(doc.get("metadata", {}).get("page", 1)),
-                            score=float(doc.get("score", 0.0)),
-                            content=doc.get("content") or "Pas de contenu disponible",
-                            metadata=doc.get("metadata", {})
-                        ))
+                        # Si c'est un dictionnaire - accès via get()
+                        try:
+                            title = doc.get("title") or doc.get("name")
+                            if not title and isinstance(doc.get("metadata"), dict):
+                                title = doc["metadata"].get("title") or doc["metadata"].get("name")
+                            
+                            page = 1
+                            if isinstance(doc.get("metadata"), dict):
+                                page = doc["metadata"].get("page", 1)
+                            
+                            doc_references.append(DocumentReference(
+                                title=title or f"Document {idx + 1}",
+                                page=int(page),
+                                score=float(doc.get("score", 0.0)),
+                                content=doc.get("content") or "Pas de contenu disponible",
+                                metadata=doc.get("metadata", {})
+                            ))
+                        except Exception as e:
+                            logger.error(f"Erreur création DocumentReference: {e}")
+                            # Création d'une référence de base en cas d'erreur
+                            doc_references.append(DocumentReference(
+                                title=f"Document {idx + 1}",
+                                page=1,
+                                score=0.0,
+                                content="Erreur récupération contenu",
+                                metadata={}
+                            ))
 
             # Sauvegarde de l'interaction
             response_vector = await self.model.create_embedding(response_text) if relevant_docs else None
             
+            # Préparation des documents référencés pour la sauvegarde
+            referenced_docs = []
+            for doc in relevant_docs:
+                if isinstance(doc, SearchResult):
+                    # Si SearchResult
+                    referenced_docs.append({
+                        "name": doc.metadata.get("title") if hasattr(doc.metadata, "get") else "Document sans titre",
+                        "page": doc.metadata.get("page", 1) if hasattr(doc.metadata, "get") else 1,
+                        "score": float(doc.score),
+                        "snippet": doc.content,
+                        "metadata": doc.metadata
+                    })
+                else:
+                    # Si dictionnaire
+                    referenced_docs.append({
+                        "name": doc.get("title", "Document sans titre"),
+                        "page": doc.get("metadata", {}).get("page", 1) if isinstance(doc.get("metadata"), dict) else 1,
+                        "score": float(doc.get("score", 0.0)),
+                        "snippet": doc.get("content", ""),
+                        "metadata": doc.get("metadata", {})
+                    })
+
+            # Sauvegarde de l'interaction
             chat_history_id = await self.components.db_manager.save_chat_interaction(
                 session_id=session_id,
                 user_id=request.get("user_id"),
@@ -174,13 +216,7 @@ class GenericProcessor(BaseProcessor):
                 confidence_score=float(self._calculate_confidence(relevant_docs)) if relevant_docs else 0.0,
                 tokens_used=int(model_response.get("tokens_used", {}).get("total", 0)),
                 processing_time=float(processing_time),
-                referenced_docs=[{
-                    "name": doc.title if hasattr(doc, 'title') else doc.get("title", ""),
-                    "page": doc.metadata.get("page", 1) if hasattr(doc, 'metadata') else doc.get("metadata", {}).get("page", 1),
-                    "score": float(doc.score if hasattr(doc, 'score') else doc.get("score", 0.0)),
-                    "snippet": doc.content if hasattr(doc, 'content') else doc.get("content", ""),
-                    "metadata": doc.metadata if hasattr(doc, 'metadata') else doc.get("metadata", {})
-                } for doc in relevant_docs] if relevant_docs else None,
+                referenced_docs=referenced_docs,
                 metadata=enriched_metadata,
                 raw_response=model_response.get("metadata", {}).get("raw_response"),
                 raw_prompt=model_response.get("metadata", {}).get("raw_prompt")
@@ -216,12 +252,22 @@ class GenericProcessor(BaseProcessor):
         """Sauvegarde l'interaction en base de données."""
         try:
             # Préparation des documents référencés
-            referenced_docs = [{
-                "title": doc.get("title", "Unknown Document"),
-                "metadata": doc.get("metadata", {}),
-                "score": doc.get("score", 0.0),
-                "content": doc.get("content", "")
-            } for doc in relevant_docs] if relevant_docs else []
+            referenced_docs = []
+            for doc in relevant_docs:
+                if isinstance(doc, SearchResult):
+                    referenced_docs.append({
+                        "title": doc.metadata.get("title") if hasattr(doc.metadata, "get") else "Unknown Document",
+                        "metadata": doc.metadata,
+                        "score": doc.score,
+                        "content": doc.content
+                    })
+                else:
+                    referenced_docs.append({
+                        "title": doc.get("title", "Unknown Document"),
+                        "metadata": doc.get("metadata", {}),
+                        "score": doc.get("score", 0.0),
+                        "content": doc.get("content", "")
+                    })
 
             async with DatabaseSession() as session:
                 # Création de l'historique
@@ -319,7 +365,7 @@ class GenericProcessor(BaseProcessor):
             }
         )
 
-    def _calculate_confidence(self, docs: List[Dict]) -> float:
+    def _calculate_confidence(self, docs: List) -> float:
         """
         Calcule le score de confiance basé sur les documents.
         Args:
@@ -330,14 +376,20 @@ class GenericProcessor(BaseProcessor):
         if not docs:
             return 0.0
         try:
-            # Vérifier le type des documents et extraire les scores en conséquence
+            # Traiter différemment selon le type d'objet
             scores = []
             for doc in docs:
-                if hasattr(doc, 'score'):  # Si c'est un SearchResult
+                if isinstance(doc, SearchResult):
+                    # Si c'est un SearchResult, accéder directement à l'attribut score
                     scores.append(float(doc.score))
-                elif isinstance(doc, dict) and 'score' in doc:  # Si c'est un dictionnaire
-                    scores.append(float(doc['score']))
-            
+                elif isinstance(doc, dict):
+                    # Si c'est un dictionnaire, utiliser get()
+                    scores.append(float(doc.get("score", 0.0)))
+                else:
+                    # Si c'est un autre type d'objet, essayer hasattr
+                    if hasattr(doc, 'score'):
+                        scores.append(float(doc.score))
+                    
             return sum(scores) / len(scores) if scores else 0.0
         except (ValueError, TypeError) as e:
             logger.error(f"Erreur conversion scores: {e}")
