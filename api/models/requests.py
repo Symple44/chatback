@@ -174,7 +174,7 @@ class ChatRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "query": "Comment créer une commande d'achat ?",
-                "user_id": "123",
+                "user_id": "5d15d6f4-2289-4315-a5b5-75db95a2b887",
                 "business": "generic",
                 "search_config": {
                     "method": "rag",

@@ -186,23 +186,52 @@ class GenericProcessor(BaseProcessor):
             # Préparation des documents référencés pour la sauvegarde
             referenced_docs = []
             for doc in relevant_docs:
-                if isinstance(doc, SearchResult):
-                    # Si SearchResult
+                doc_name = "Document sans titre"  # Valeur par défaut pour éviter les NULL
+                doc_page = 1
+                doc_score = 0.0
+                doc_content = ""
+                doc_metadata = {}
+                
+                try:
+                    if isinstance(doc, SearchResult):
+                        # Si SearchResult
+                        if hasattr(doc.metadata, "get"):
+                            doc_name = doc.metadata.get("title") or doc.metadata.get("name") or "Document sans titre"
+                            doc_page = doc.metadata.get("page", 1)
+                        doc_score = float(doc.score)
+                        doc_content = doc.content or ""
+                        doc_metadata = doc.metadata
+                    else:
+                        # Si dictionnaire
+                        doc_name = doc.get("title") or doc.get("name") or "Document sans titre"
+                        if isinstance(doc.get("metadata"), dict):
+                            if not doc_name:
+                                doc_name = doc["metadata"].get("title") or doc["metadata"].get("name") or "Document sans titre"
+                            doc_page = doc["metadata"].get("page", 1)
+                        doc_score = float(doc.get("score", 0.0))
+                        doc_content = doc.get("content", "")
+                        doc_metadata = doc.get("metadata", {})
+
+                    # S'assurer que document_name n'est jamais NULL
+                    if doc_name is None:
+                        doc_name = "Document sans titre"
+                        
                     referenced_docs.append({
-                        "name": doc.metadata.get("title") if hasattr(doc.metadata, "get") else "Document sans titre",
-                        "page": doc.metadata.get("page", 1) if hasattr(doc.metadata, "get") else 1,
-                        "score": float(doc.score),
-                        "snippet": doc.content,
-                        "metadata": doc.metadata
+                        "name": doc_name,
+                        "page": doc_page,
+                        "score": doc_score,
+                        "snippet": doc_content,
+                        "metadata": doc_metadata
                     })
-                else:
-                    # Si dictionnaire
+                except Exception as e:
+                    logger.error(f"Erreur préparation document référencé: {e}")
+                    # Ajouter une entrée par défaut en cas d'erreur
                     referenced_docs.append({
-                        "name": doc.get("title", "Document sans titre"),
-                        "page": doc.get("metadata", {}).get("page", 1) if isinstance(doc.get("metadata"), dict) else 1,
-                        "score": float(doc.get("score", 0.0)),
-                        "snippet": doc.get("content", ""),
-                        "metadata": doc.get("metadata", {})
+                        "name": "Document sans titre (erreur)",
+                        "page": 1,
+                        "score": 0.0,
+                        "snippet": "Erreur lors de la récupération du contenu",
+                        "metadata": {}
                     })
 
             # Sauvegarde de l'interaction
@@ -254,20 +283,30 @@ class GenericProcessor(BaseProcessor):
             # Préparation des documents référencés
             referenced_docs = []
             for doc in relevant_docs:
+                doc_title = "Document sans titre"  # Valeur par défaut
+                
                 if isinstance(doc, SearchResult):
-                    referenced_docs.append({
-                        "title": doc.metadata.get("title") if hasattr(doc.metadata, "get") else "Unknown Document",
-                        "metadata": doc.metadata,
-                        "score": doc.score,
-                        "content": doc.content
-                    })
+                    if hasattr(doc.metadata, "get"):
+                        doc_title = doc.metadata.get("title") or doc.metadata.get("name") or "Document sans titre"
+                    doc_metadata = doc.metadata
+                    doc_score = doc.score
+                    doc_content = doc.content or ""
                 else:
-                    referenced_docs.append({
-                        "title": doc.get("title", "Unknown Document"),
-                        "metadata": doc.get("metadata", {}),
-                        "score": doc.get("score", 0.0),
-                        "content": doc.get("content", "")
-                    })
+                    doc_title = doc.get("title") or doc.get("name") or "Document sans titre"
+                    doc_metadata = doc.get("metadata", {})
+                    doc_score = doc.get("score", 0.0)
+                    doc_content = doc.get("content", "")
+                    
+                # S'assurer que le titre n'est jamais NULL
+                if doc_title is None:
+                    doc_title = "Document sans titre"
+                    
+                referenced_docs.append({
+                    "title": doc_title,
+                    "metadata": doc_metadata,
+                    "score": doc_score,
+                    "content": doc_content
+                })
 
             async with DatabaseSession() as session:
                 # Création de l'historique
