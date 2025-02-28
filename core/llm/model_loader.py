@@ -158,14 +158,25 @@ class ModelLoader:
                 model_type=ModelType.CHAT
             )
             
-            # 6. Ajout des paramètres de performance
+            # 6. S'assurer que les paramètres de mémoire sont cohérents avec CUDA_MEMORY_FRACTION
+            memory_fraction = float(os.environ.get("CUDA_MEMORY_FRACTION", "0.90"))
+            vram_for_model = int(24 * memory_fraction)  # Pour RTX 3090 avec 24GB
+            
+            # Utiliser cette valeur explicitement pour les grands modèles
+            if "24B" in model_name or "Mixtral" in model_name:
+                cuda_params["max_memory"] = {
+                    "0": f"{vram_for_model}GiB",
+                    "cpu": "12GB"
+                }
+            
+            # 7. Ajout des paramètres de performance
             performance_params = {
                 "torch_dtype": performance_config.get("execution", {}).get("torch_dtype", torch.float16),
                 "low_cpu_mem_usage": True,
                 "device_map": cuda_params.get("device_map", "auto")
             }
             
-            # 7. Fusion de tous les paramètres dans le bon ordre
+            # 8. Fusion de tous les paramètres dans le bon ordre
             final_params = {
                 **load_params,          # Paramètres de base du modèle
                 **cuda_params,          # Paramètres CUDA
@@ -174,7 +185,7 @@ class ModelLoader:
             
             logger.debug(f"Paramètres de chargement finaux: {final_params}")
             
-            # 8. Chargement avec gestion de la précision
+            # 9. Chargement avec gestion de la précision
             with torch.amp.autocast(device_type='cuda', dtype=final_params.get('torch_dtype', torch.float16)):
                 model = AutoModelForCausalLM.from_pretrained(
                     model_config["path"],
@@ -186,18 +197,18 @@ class ModelLoader:
                     model.config.pad_token_id = model.config.eos_token_id
                     model.generation_config.pad_token_id = model.config.eos_token_id  # Important pour la génération
 
-            # 9. Configuration post-chargement
+            # 10. Configuration post-chargement
             model.eval()
             model.requires_grad_(False)
             
-            # 10. Optimisations spécifiques selon la configuration de performance
+            # 11. Optimisations spécifiques selon la configuration de performance
             if performance_config.get("optimization", {}).get("enable_jit", False):
                 model = torch.jit.optimize_for_inference(model)
                 
             if performance_config.get("optimization", {}).get("memory_efficient_attention", True):
                 model.config.use_cache = False
 
-            # 11. Création du LoadedModel avec toutes les métadonnées
+            # 12. Création du LoadedModel avec toutes les métadonnées
             loaded_model = LoadedModel(
                 model=model,
                 tokenizer=tokenizer,

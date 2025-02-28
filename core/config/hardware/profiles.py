@@ -7,10 +7,10 @@ AMD_RTX3090_CONFIG = {
     "gpu": {
         "vram_total": "24GB",
         "vram_allocation": {
-            "model": "20GB",       # Modèle principal
-            "embeddings": "2GB",    # Modèles d'embedding
-            "cache": "1GB",         # Cache GPU
-            "reserve": "1GB"        # Marge de sécurité
+            "model": "21.5GB",       # Modèle principal
+            "embeddings": "1.5GB",    # Modèles d'embedding
+            "cache": "0.5GB",         # Cache GPU
+            "reserve": "0.5GB"        # Marge de sécurité
         },
         "cuda_config": {
             "max_split_size_mb": 4096,
@@ -22,8 +22,8 @@ AMD_RTX3090_CONFIG = {
     "cpu": {
         "ram_total": "25GB",
         "ram_allocation": {
-            "application": "16GB",
-            "model_offload": "6GB",
+            "application": "15GB",
+            "model_offload": "7GB",
             "reserve": "3GB"
         },
         "thread_config": {
