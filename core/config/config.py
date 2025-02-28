@@ -17,7 +17,9 @@ from .search import SearchConfig
 from .document import DocumentConfig
 from .chat import ChatConfig
 
-load_dotenv()
+# Chemin absolu vers le fichier .env
+env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 class Settings(BaseSettings):
     """Configuration unifiée de l'application."""
