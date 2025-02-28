@@ -12,6 +12,10 @@ class LoggerManager:
     async def initialize(self):
         """Initialise le système de logs."""
         if not self.initialized:
+            # Désactiver les logs verbeux d'Elasticsearch
+            logging.getLogger('elastic_transport.transport').setLevel(logging.WARNING)
+            logging.getLogger('elasticsearch').setLevel(logging.WARNING)
+            
             logging.basicConfig(
                 level=logging.INFO,
                 format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
