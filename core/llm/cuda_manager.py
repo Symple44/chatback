@@ -163,7 +163,8 @@ class CUDAManager:
                     torch._dynamo.config.automatic_dynamic_shapes = True
 
             # Configuration des threads CPU selon SYSTEM_CONFIG
-            for env_var, thread_count in SYSTEM_CONFIG["thread_config"].items():
+            thread_config = settings.hardware.thread_config
+            for env_var, thread_count in thread_config.items():
                 os.environ[env_var] = str(thread_count)
             torch.set_num_threads(settings.hardware.thread_config.get("mkl_num_threads", 16))
 
