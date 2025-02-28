@@ -131,7 +131,7 @@ class ComponentManager:
                 self._components["model_loader"] = model_loader
 
                 # Model Manager
-                model_manager = ModelManager(self.cuda.cuda_manager, self.tokenizer_manager)
+                model_manager = ModelManager(self.cuda_manager, self.tokenizer_manager)
                 await model_manager.initialize()
                 self._components["model_manager"] = model_manager
 
