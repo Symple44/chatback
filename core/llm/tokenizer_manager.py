@@ -75,44 +75,40 @@ class TokenizerManager:
                 "trust_remote_code": config.trust_remote_code
             }
             
-            # Configuration spécifique selon le type de modèle
-            if "mt5" in model_path.lower():
-                # Pour MT5, utilisation explicite du slow tokenizer
-                # pour éviter les problèmes de byte fallback
-                tokenizer_kwargs.update({
-                    "model_max_length": config.max_length,
-                    "use_fast": False  # Force l'utilisation du slow tokenizer
-                })
+            # Suppression des messages informatifs et d'avertissement
+            import warnings
+            with warnings.catch_warnings():
+                # Supprimer les avertissements pour les tokenizers T5/MT5
+                warnings.filterwarnings("ignore", message=".*byte fallback option.*", category=UserWarning)
+                warnings.filterwarnings("ignore", message=".*default legacy behaviour.*", category=UserWarning)
                 
-                # Suppression ciblée des avertissements pour MT5
-                import warnings
-                with warnings.catch_warnings():
-                    # Filtre précis pour ne supprimer que l'avertissement spécifique
-                    warnings.filterwarnings(
-                        "ignore", 
-                        message=".*byte fallback option.*", 
-                        category=UserWarning
-                    )
+                # Configuration spécifique selon le type de modèle
+                if "mt5" in model_path.lower():
+                    # Pour MT5, utilisation explicite du slow tokenizer
+                    tokenizer_kwargs.update({
+                        "model_max_length": config.max_length,
+                        "use_fast": False,  # Force l'utilisation du slow tokenizer
+                        "legacy": True      # Explicitement préciser le comportement legacy
+                    })
                     tokenizer = AutoTokenizer.from_pretrained(
                         model_path,
                         **tokenizer_kwargs
                     )
-                    logger.debug(f"MT5 tokenizer initialisé avec paramètres: {tokenizer_kwargs}")
                     return tokenizer
-            elif "t5" in model_path.lower():
-                tokenizer_kwargs.update({
-                    "legacy": False,
-                    "model_max_length": config.max_length,
-                    "use_fast": True
-                })
-            else:
-                # Pour les autres modèles, utilisation de la configuration standard
-                tokenizer_kwargs["use_fast"] = config.use_fast
-            
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_path,
-                **tokenizer_kwargs
-            )
+                elif "t5" in model_path.lower():
+                    tokenizer_kwargs.update({
+                        "model_max_length": config.max_length,
+                        "use_fast": True,   # Utilisation du fast tokenizer
+                        "legacy": True      # Explicitement préciser le comportement legacy pour éviter le message
+                    })
+                else:
+                    # Pour les autres modèles, utilisation de la configuration standard
+                    tokenizer_kwargs["use_fast"] = config.use_fast
+                
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_path,
+                    **tokenizer_kwargs
+                )
 
             # Configuration spécifique post-chargement
             if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
