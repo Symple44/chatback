@@ -24,23 +24,60 @@ class ElasticsearchClient:
 
     def _initialize_client(self) -> AsyncElasticsearch:
         """Initialise le client avec SSL."""
-        ssl_context = {
-            'verify_certs': bool(settings.document.ELASTICSEARCH_CA_CERT),
-            'ca_certs': settings.document.ELASTICSEARCH_CA_CERT,
-            'client_cert': settings.document.ELASTICSEARCH_CLIENT_CERT,
-            'client_key': settings.document.ELASTICSEARCH_CLIENT_KEY
-        }
-
-        return AsyncElasticsearch(
-            hosts=[settings.document.ELASTICSEARCH_HOST],
-            basic_auth=(settings.document.ELASTICSEARCH_USER, settings.document.ELASTICSEARCH_PASSWORD),
-            **ssl_context,
-            retry_on_timeout=True,
-            max_retries=3,
-            timeout=30,
-            sniff_on_start=False,
-            sniff_on_node_failure=False
-        )
+        # Vérifier que l'hôte est défini
+        es_host = settings.document.ELASTICSEARCH_HOST
+        if not es_host:
+            logger.error("ELASTICSEARCH_HOST est vide - impossible de créer le client Elasticsearch")
+            raise ValueError("L'URL Elasticsearch n'est pas configurée dans le fichier .env")
+        
+        logger.info(f"Initialisation du client Elasticsearch avec hôte: {es_host}")
+        
+        # Vérifier les certificats SSL
+        ssl_config = {}
+        ca_cert = settings.document.ELASTICSEARCH_CA_CERT
+        client_cert = settings.document.ELASTICSEARCH_CLIENT_CERT  
+        client_key = settings.document.ELASTICSEARCH_CLIENT_KEY
+        
+        # Vérifier si les certificats existent
+        if ca_cert and os.path.exists(ca_cert):
+            logger.info(f"Utilisation du certificat CA: {ca_cert}")
+            ssl_config['verify_certs'] = settings.document.ELASTICSEARCH_VERIFY_CERTS
+            ssl_config['ca_certs'] = ca_cert
+            
+            if client_cert and client_key and os.path.exists(client_cert) and os.path.exists(client_key):
+                logger.info("Utilisation des certificats client")
+                ssl_config['client_cert'] = client_cert
+                ssl_config['client_key'] = client_key
+        else:
+            if ca_cert:
+                logger.warning(f"Certificat CA non trouvé: {ca_cert} - SSL désactivé")
+            ssl_config['verify_certs'] = False
+        
+        # Authentification
+        auth_config = {}
+        es_user = settings.document.ELASTICSEARCH_USER
+        es_password = settings.document.ELASTICSEARCH_PASSWORD
+        
+        if es_user and es_password:
+            auth_config['basic_auth'] = (es_user, es_password)
+            logger.info(f"Authentification configurée pour l'utilisateur: {es_user}")
+        
+        try:
+            # Création du client avec gestion d'erreurs
+            logger.info(f"Création du client Elasticsearch avec URL: {es_host}")
+            return AsyncElasticsearch(
+                hosts=[es_host],
+                **auth_config,
+                **ssl_config,
+                retry_on_timeout=True,
+                max_retries=3,
+                timeout=30,
+                sniff_on_start=False,
+                sniff_on_node_failure=False
+            )
+        except Exception as e:
+            logger.error(f"Erreur lors de la création du client Elasticsearch: {str(e)}")
+            raise ValueError(f"Impossible de créer le client Elasticsearch: {str(e)}")
 
     async def initialize(self):
         """Initialize le client et configure les indices."""
@@ -68,7 +105,10 @@ class ElasticsearchClient:
     async def check_connection(self) -> bool:
         """Vérifie la connexion à Elasticsearch."""
         try:
-            return await self.es.ping()
+            logger.info("Vérification de la connexion Elasticsearch...")
+            result = await self.es.ping()
+            logger.info(f"Résultat ping Elasticsearch: {result}")
+            return result
         except Exception as e:
             logger.error(f"Erreur connexion ES: {e}")
             return False
