@@ -17,10 +17,17 @@ class SearchManager:
     def __init__(self, components):
         """Initialise le gestionnaire de recherche."""
         self.components = components
-        self.config = settings.search.get_strategy_config
+        self.es_client = components.es_client
+        self.embedding_manager = components.embedding_manager
+        self.model = components.model
+        self.strategies = {}
+        
+        # Utilisation correcte de get_strategy_config qui est une méthode, pas un dictionnaire
+        self.config = settings.search  # Accès à l'objet de configuration complet
+        self.current_params = self.config.get_strategy_config("rag")["search_params"].copy()
+        
         self.enabled = True
         self.current_method = SearchMethod.RAG
-        self.current_params = self.config["rag"]["search_params"].copy()  # Paramètres par défaut
         self.metadata_filter = None
         self.cache = {}
         self.cache_ttl = settings.search.SEARCH_CACHE_TTL
@@ -35,14 +42,13 @@ class SearchManager:
         self.current_method = method
         
         # Récupérer d'abord les paramètres par défaut de la config
-        base_params = self.config.get(
-            method.value, 
-            self.config["rag"]
+        base_params = self.config.get_strategy_config(
+            method.value
         )["search_params"].copy()
         
         # Les paramètres utilisateur écrasent les paramètres par défaut
         self.current_params = {
-            **base_params,  # Paramètres de base depuis SEARCH_STRATEGIES_CONFIG
+            **base_params,  # Paramètres de base depuis la configuration
             **{k: v for k, v in search_params.items() if v is not None}  # Ne prendre que les valeurs non nulles
         }
         
@@ -60,7 +66,7 @@ class SearchManager:
         method: SearchMethod
     ) -> Dict[str, Any]:
         validated = {}
-        default_config = self.config.get(method.value, self.config["rag"])["search_params"]
+        default_config = self.config.get_strategy_config(method.value)["search_params"]
         
         # Ne permettre que les paramètres connus
         allowed_params = set(default_config.keys())
