@@ -72,43 +72,65 @@ class TokenizerManager:
                 "revision": settings.models.MODEL_REVISION,
                 "padding_side": config.padding_side,
                 "truncation_side": config.truncation_side,
-                "use_fast": config.use_fast,
                 "trust_remote_code": config.trust_remote_code
             }
             
             # Configuration spécifique selon le type de modèle
-            if "t5" in model_path.lower():
-                tokenizer_kwargs.update({
-                    "legacy": False,
-                    "model_max_length": config.max_length,
-                    "use_fast": True  # Force l'utilisation du fast tokenizer
-                })
-            elif "mt5" in model_path.lower():
-                # Configuration spécifique pour MT5
+            if "mt5" in model_path.lower():
+                # Pour MT5, utilisation explicite du slow tokenizer
+                # pour éviter les problèmes de byte fallback
                 tokenizer_kwargs.update({
                     "model_max_length": config.max_length,
-                    "use_fast": False  # Utilise le slow tokenizer pour éviter les warnings
+                    "use_fast": False  # Force l'utilisation du slow tokenizer
                 })
                 
-                # Suppression des avertissements pour MT5
+                # Suppression ciblée des avertissements pour MT5
                 import warnings
                 with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=UserWarning, 
-                                        message=".*byte fallback.*")
+                    # Filtre précis pour ne supprimer que l'avertissement spécifique
+                    warnings.filterwarnings(
+                        "ignore", 
+                        message=".*byte fallback option.*", 
+                        category=UserWarning
+                    )
                     tokenizer = AutoTokenizer.from_pretrained(
                         model_path,
                         **tokenizer_kwargs
                     )
+                    logger.debug(f"MT5 tokenizer initialisé avec paramètres: {tokenizer_kwargs}")
                     return tokenizer
+            elif "t5" in model_path.lower():
+                tokenizer_kwargs.update({
+                    "legacy": False,
+                    "model_max_length": config.max_length,
+                    "use_fast": True
+                })
+            else:
+                # Pour les autres modèles, utilisation de la configuration standard
+                tokenizer_kwargs["use_fast"] = config.use_fast
             
             tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
                 **tokenizer_kwargs
             )
 
-            # Configuration post-chargement inchangée...
-            
+            # Configuration spécifique post-chargement
+            if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
+                tokenizer.pad_token = tokenizer.eos_token
+                special_tokens = {
+                    "bos_token": "<s>",
+                    "eos_token": "</s>",
+                    "pad_token": "</s>",
+                    "unk_token": "<unk>",
+                }
+                tokenizer.add_special_tokens(special_tokens)
+
+                # Définir explicitement le pad_token_id et eos_token_id
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+
             return tokenizer
+
         except Exception as e:
             logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
             raise
