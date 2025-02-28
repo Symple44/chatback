@@ -152,9 +152,9 @@ class GenericProcessor(BaseProcessor):
                         # Si c'est un dictionnaire
                         doc_references.append(DocumentReference(
                             title=doc.get("title") or doc.get("name") or \
-                                  doc.get("metadata", {}).get("title") or \
-                                  doc.get("metadata", {}).get("name") or \
-                                  f"Document {idx + 1}",
+                                doc.get("metadata", {}).get("title") or \
+                                doc.get("metadata", {}).get("name") or \
+                                f"Document {idx + 1}",
                             page=int(doc.get("metadata", {}).get("page", 1)),
                             score=float(doc.get("score", 0.0)),
                             content=doc.get("content") or "Pas de contenu disponible",
@@ -330,8 +330,14 @@ class GenericProcessor(BaseProcessor):
         if not docs:
             return 0.0
         try:
-            # Convertir explicitement tous les scores en float
-            scores = [float(doc.get("score", 0.0)) for doc in docs]
+            # Vérifier le type des documents et extraire les scores en conséquence
+            scores = []
+            for doc in docs:
+                if hasattr(doc, 'score'):  # Si c'est un SearchResult
+                    scores.append(float(doc.score))
+                elif isinstance(doc, dict) and 'score' in doc:  # Si c'est un dictionnaire
+                    scores.append(float(doc['score']))
+            
             return sum(scores) / len(scores) if scores else 0.0
         except (ValueError, TypeError) as e:
             logger.error(f"Erreur conversion scores: {e}")
