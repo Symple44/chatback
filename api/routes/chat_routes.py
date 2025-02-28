@@ -29,7 +29,6 @@ from main import CustomJSONResponse
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
-from core.config.search import SEARCH_STRATEGIES_CONFIG
 from core.chat.processor_factory import ProcessorFactory
 from core.search.strategies import SearchMethod
 from core.streaming.stream_manager import StreamManager
@@ -312,7 +311,7 @@ async def test_search_configuration(
         
 async def validate_search_config(config: SearchConfig) -> None:
     """Valide la configuration de recherche."""
-    base_config = SEARCH_STRATEGIES_CONFIG.get(config.method.value)
+    base_config = settings.search.get_strategy_config(config.method.value)
     if not base_config:
         raise SearchValidationError(
             field="method",
@@ -434,8 +433,8 @@ async def get_search_configuration() -> Dict[str, Any]:
                     "semantic": "Recherche purement sémantique",
                     "disabled": "Recherche désactivée"
                 }.get(method.value, ""),
-                "config": SEARCH_STRATEGIES_CONFIG.get(method.value, {}),
-                "default_params": SEARCH_STRATEGIES_CONFIG.get(method.value, {}).get("search_params", {})
+                "config": settings.search.get_strategy_config(method.value),
+                "default_params": settings.search.get_strategy_config(method.value)["search_params"]
             }
             for method in SearchMethod
             if method != SearchMethod.DISABLED
@@ -476,7 +475,7 @@ async def get_search_methods():
     Retourne la liste simplifiée des méthodes de recherche disponibles.
     """
     methods_info = {
-        method.value: SEARCH_STRATEGIES_CONFIG.get(method.value, {}).get("search_params", {})
+        method.value: settings.search.get_strategy_config(method.value)["search_params"]
         for method in SearchMethod
         if method != SearchMethod.DISABLED
     }
