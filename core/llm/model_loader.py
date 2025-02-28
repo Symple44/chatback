@@ -166,7 +166,7 @@ class ModelLoader:
             # Utiliser cette valeur explicitement pour les grands modèles
             if "24B" in model_name or "Mixtral" in model_name:
                 cuda_params["max_memory"] = {
-                    "0": f"{vram_for_model}GiB",
+                    0: f"{vram_for_model}GiB",
                     "cpu": "12GB"
                 }
             
