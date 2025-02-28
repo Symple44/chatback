@@ -176,9 +176,23 @@ class TokenizerManager:
         tokenizer_type: TokenizerType,
         config: TokenizerConfig,
         force_reload: bool = False
-    ) -> PreTrainedTokenizer:
+    ) -> Optional[PreTrainedTokenizer]:
         """Charge ou recharge un tokenizer."""
         try:
+            tokenizer_key = f"{tokenizer_type.value}_{model_name}"
+            
+            # Si le tokenizer existe déjà et qu'on ne force pas le rechargement
+            if not force_reload and tokenizer_key in self.tokenizers:
+                return self.tokenizers[tokenizer_key]
+
+            # Cas spécial pour les modèles SentenceTransformers - ils gèrent leur propre tokenization
+            if tokenizer_type == TokenizerType.EMBEDDING and "sentence-transformers" in model_name:
+                logger.info(f"Modèle SentenceTransformers détecté: {model_name}, pas de tokenizer HF à charger")
+                self.tokenizers[tokenizer_key] = None
+                self.configs[tokenizer_key] = config
+                self.current_models[tokenizer_type] = model_name
+                return None
+
             # Récupération de la configuration du modèle
             model_configs = {
                 TokenizerType.CHAT: CHAT_MODELS,
@@ -189,12 +203,6 @@ class TokenizerManager:
             model_config = model_configs[tokenizer_type].get(model_name)
             if not model_config:
                 raise ValueError(f"Configuration non trouvée pour {model_name}")
-
-            tokenizer_key = f"{tokenizer_type.value}_{model_name}"
-            
-            # Si le tokenizer existe déjà et qu'on ne force pas le rechargement
-            if not force_reload and tokenizer_key in self.tokenizers:
-                return self.tokenizers[tokenizer_key]
 
             # Initialisation du nouveau tokenizer
             tokenizer = await self._initialize_tokenizer(
