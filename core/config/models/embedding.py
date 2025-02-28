@@ -3,7 +3,7 @@ from typing import Dict, Any
 
 # Configuration des modèles d'embedding
 EMBEDDING_MODELS = {
-    "paraphrase-multilingual-mpnet-base-v2": {
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": {
         "display_name": "Paraphrase Multilingual MPNet Base v2",
         "path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         "type": "embedding",
