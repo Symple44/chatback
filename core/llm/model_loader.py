@@ -15,6 +15,7 @@ import logging
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
+import os
 
 from core.config.models import (
     CHAT_MODELS,
