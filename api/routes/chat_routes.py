@@ -474,19 +474,22 @@ async def get_search_methods():
     """
     Retourne la liste simplifiée des méthodes de recherche disponibles.
     """
+    # Correction : get_all_search_configs est une méthode, donc il faut l'appeler avec ()
+    all_configs = settings.search.get_all_search_configs()
+    
     methods_info = {
         method.value: settings.search.get_strategy_config(method.value)["search_params"]
         for method in SearchMethod
         if method != SearchMethod.DISABLED
     }
-
+    
     return {
         "methods": [method.value for method in SearchMethod if method != SearchMethod.DISABLED],
         "default": SearchMethod.RAG.value,
         "configurations": methods_info,
         "defaults": {
             method: config.get("search_params", {})
-            for method, config in SEARCH_STRATEGIES_CONFIG.items()
+            for method, config in all_configs.items()
         }
     }
 
