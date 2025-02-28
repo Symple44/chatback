@@ -217,7 +217,7 @@ class GoogleDriveManager:
         Liste tous les dossiers dans un dossier parent.
         """
         try:
-            logger.info(f"Listage des dossiers{'dans '+parent_folder_id if parent_folder_id else ' racine'}")
+            logger.info(f"Listage des dossiers {'dans '+parent_folder_id if parent_folder_id else ' racine'}")
             query = []
             
             if parent_folder_id:
