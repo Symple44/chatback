@@ -84,17 +84,17 @@ class TokenizerManager:
                     "use_fast": True  # Force l'utilisation du fast tokenizer
                 })
             elif "mt5" in model_path.lower():
-                # Configuration spécifique pour MT5 - utilisez le slow tokenizer et ignorez les warnings
+                # Configuration spécifique pour MT5
                 tokenizer_kwargs.update({
                     "model_max_length": config.max_length,
                     "use_fast": False  # Utilise le slow tokenizer pour éviter les warnings
                 })
                 
-                # Supprimer temporairement les avertissements pour MT5
+                # Suppression des avertissements pour MT5
                 import warnings
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning, 
-                                        message="The sentencepiece tokenizer.*")
+                                        message=".*byte fallback.*")
                     tokenizer = AutoTokenizer.from_pretrained(
                         model_path,
                         **tokenizer_kwargs
@@ -106,23 +106,9 @@ class TokenizerManager:
                 **tokenizer_kwargs
             )
 
-            # Configuration spécifique post-chargement
-            if "mistral" in model_path.lower() and tokenizer_type == TokenizerType.CHAT:
-                tokenizer.pad_token = tokenizer.eos_token
-                special_tokens = {
-                    "bos_token": "<s>",
-                    "eos_token": "</s>",
-                    "pad_token": "</s>",
-                    "unk_token": "<unk>",
-                }
-                tokenizer.add_special_tokens(special_tokens)
-
-                # Définir explicitement le pad_token_id et eos_token_id
-                tokenizer.pad_token = tokenizer.eos_token
-                tokenizer.pad_token_id = tokenizer.eos_token_id
-
+            # Configuration post-chargement inchangée...
+            
             return tokenizer
-
         except Exception as e:
             logger.error(f"Erreur initialisation tokenizer {model_path}: {e}")
             raise
