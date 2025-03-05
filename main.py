@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import uuid
 import json
 import shutil
+import torch
 from typing import Dict, Optional, List
 from pathlib import Path
 
@@ -480,14 +481,26 @@ async def shutdown():
         sys.exit(0)
 
 def signal_handler(signum, frame):
-    """Gère les signaux d'interruption avec un mode de nettoyage sécurisé."""
+    """Gère les signaux d'interruption avec une meilleure gestion des tâches."""
     logger.info(f"Signal {signum} reçu, arrêt en cours...")
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(safe_shutdown())
+            # Création de la tâche sans sys.exit() direct
+            shutdown_task = loop.create_task(components.cleanup())
+            
+            # Ajouter un callback pour sortir proprement quand la tâche est terminée
+            def exit_after_cleanup(_):
+                try:
+                    # Sortie différée pour permettre aux tâches de se terminer
+                    loop.call_later(0.5, sys.exit, 0)
+                except:
+                    pass
+                
+            shutdown_task.add_done_callback(exit_after_cleanup)
         else:
-            loop.run_until_complete(safe_shutdown())
+            loop.run_until_complete(components.cleanup())
+            sys.exit(0)
     except Exception as e:
         logger.error(f"Erreur dans le gestionnaire de signal: {e}")
         sys.exit(1)
