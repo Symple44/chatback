@@ -11,6 +11,7 @@ from .user_routes import router as user_router
 from .health_routes import router as health_router
 from .history_routes import router as history_router
 from .model_routes import router as model_router
+from .pdf_routes import router as pdf_router
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
@@ -39,6 +40,10 @@ tags_metadata = [
     {
         "name": "history",
         "description": "Accès à l'historique des conversations",
+    },
+    {
+        "name": "pdf",
+        "description": "Traitement des PDF",
     },
     {
         "name": "health",
@@ -83,6 +88,10 @@ router.include_router(
     history_router,
     #prefix="/history",
     tags=["history"]
+)
+router.include_router(
+    chat_router,
+    tags=["pdf"]
 )
 
 
