@@ -230,29 +230,24 @@ class ComponentManager:
         """Nettoie proprement toutes les ressources."""
         try:
             logger.info("Début du nettoyage des composants...")
-            cleanup_tasks = []
-
-            # Nettoyage des composants avec gestion des erreurs individuelles
-            for name, component in self._components.items():
-                try:
-                    if hasattr(component, 'cleanup'):
-                        task = asyncio.create_task(component.cleanup())
-                        cleanup_tasks.append(task)
-                        logger.info(f"Tâche de nettoyage créée pour {name}")
-                except Exception as e:
-                    logger.error(f"Erreur lors de la création de la tâche de nettoyage pour {name}: {e}")
-
-            # Attendre la fin de tous les nettoyages avec timeout
-            if cleanup_tasks:
-                done, pending = await asyncio.wait(cleanup_tasks, timeout=30)
-                
-                # Annuler les tâches qui n'ont pas terminé
-                for task in pending:
-                    task.cancel()
+            
+            # Ordre explicite de nettoyage - du plus haut niveau au plus bas niveau
+            cleanup_order = [
+                "search_manager", "doc_extractor", "pdf_processor",
+                "model", "summarizer", "embedding_manager", "model_manager", 
+                "model_loader", "tokenizer_manager", "cuda_manager",
+                "auth_manager", "es_client", "cache", "db", "session_manager"
+            ]
+            
+            # Nettoyer les composants dans l'ordre spécifié
+            for name in cleanup_order:
+                if name in self._components and hasattr(self._components[name], 'cleanup'):
                     try:
-                        await task
-                    except asyncio.CancelledError:
-                        logger.warning(f"Une tâche de nettoyage a été annulée après timeout")
+                        component = self._components[name]
+                        await component.cleanup()
+                        logger.info(f"Composant {name} nettoyé avec succès")
+                    except Exception as e:
+                        logger.error(f"Erreur lors du nettoyage de {name}: {e}")
 
             # Nettoyage des répertoires temporaires
             temp_dirs = ["temp", "offload_folder", "cache"]
@@ -485,17 +480,51 @@ async def shutdown():
         sys.exit(0)
 
 def signal_handler(signum, frame):
-    """Gère les signaux d'interruption."""
+    """Gère les signaux d'interruption avec un mode de nettoyage sécurisé."""
     logger.info(f"Signal {signum} reçu, arrêt en cours...")
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(shutdown())
+            loop.create_task(safe_shutdown())
         else:
-            loop.run_until_complete(shutdown())
+            loop.run_until_complete(safe_shutdown())
     except Exception as e:
         logger.error(f"Erreur dans le gestionnaire de signal: {e}")
         sys.exit(1)
+
+async def safe_shutdown():
+    """Version sécurisée de l'arrêt en cas de problème critique."""
+    try:
+        logger.info("Début de l'arrêt de l'application...")
+        
+        # Désactiver CUDA d'abord pour éviter les erreurs
+        if torch.cuda.is_available():
+            try:
+                # Forcer la libération de la mémoire CUDA
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            except:
+                logger.warning("Impossible de vider correctement la mémoire CUDA")
+        
+        # Nettoyage minimal des composants essentiels
+        if hasattr(components, '_components'):
+            for name in ['model', 'cuda_manager']:
+                if name in components._components and hasattr(components._components[name], 'cleanup'):
+                    try:
+                        await components._components[name].cleanup()
+                    except Exception as e:
+                        logger.warning(f"Erreur nettoyage sécurisé {name}: {e}")
+        
+        # Attente courte
+        await asyncio.sleep(1)
+        
+        logger.info("Application arrêtée en mode sécurisé")
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de l'arrêt sécurisé: {e}")
+    finally:
+        # Force l'arrêt
+        sys.exit(0)
 
 if __name__ == "__main__":
     try:

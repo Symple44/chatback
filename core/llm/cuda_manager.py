@@ -300,39 +300,36 @@ class CUDAManager:
         try:
             logger.info("Début du nettoyage des ressources CUDA...")
             
-            # 1. Libérer toutes les allocations
+            # 1. Réinitialiser d'abord les allocations
             for priority in ModelPriority:
                 self.current_allocations[priority] = 0
             
-            # 2. Nettoyage mémoire CUDA si disponible
+            # 2. Attendre que toutes les opérations en cours soient terminées
             if torch.cuda.is_available():
                 try:
-                    # Synchronisation des opérations en cours
+                    # Synchroniser pour s'assurer que toutes les opérations sont terminées
                     torch.cuda.synchronize()
                     
-                    # Nettoyage du cache CUDA
-                    torch.cuda.empty_cache()
+                    # Libérer la mémoire avec une protection contre les erreurs
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception as cuda_error:
+                        logger.warning(f"Avertissement lors du nettoyage du cache CUDA: {cuda_error}")
                     
-                    # Forcer la collection des objets Python
+                    # Collecter les objets Python
                     gc.collect()
                     
-                    # Attendre que toutes les opérations soient terminées
-                    torch.cuda.synchronize()
+                    # Attendre à nouveau pour s'assurer que tout est terminé
+                    try:
+                        torch.cuda.synchronize()
+                    except Exception as sync_error:
+                        logger.warning(f"Avertissement lors de la synchronisation CUDA finale: {sync_error}")
                     
-                    logger.info(f"Mémoire CUDA libérée: {torch.cuda.memory_allocated()/1024**2:.2f}MB allouée, {torch.cuda.memory_reserved()/1024**2:.2f}MB réservée")
+                    logger.info(f"Mémoire CUDA libérée: {torch.cuda.memory_allocated()/1024**2:.2f}MB allouée")
                 except Exception as cuda_error:
-                    logger.error(f"Erreur nettoyage mémoire CUDA: {cuda_error}")
+                    logger.warning(f"Avertissement nettoyage CUDA: {cuda_error}")
             
-            # 3. Réinitialisation des configurations
-            if hasattr(torch.backends, 'cudnn'):
-                torch.backends.cudnn.enabled = False
-                torch.backends.cudnn.benchmark = False
-                
-            # 4. Nettoyage de la RAM si nécessaire
-            if psutil.virtual_memory().percent > 90:
-                gc.collect()
-                
-            # 5. Réinitialisation des états
+            # 3. Réinitialiser l'état
             self._initialized = False
             self.memory_stats.clear()
             
@@ -340,9 +337,7 @@ class CUDAManager:
             
         except Exception as e:
             logger.error(f"Erreur nettoyage ressources CUDA: {e}")
-            # Même en cas d'erreur, on tente de réinitialiser les états
-            self._initialized = False
-            self.current_allocations = {p: 0 for p in ModelPriority}
+            # Ne pas propager l'exception pour éviter d'interrompre le nettoyage des autres composants
             
     def _log_system_info(self):
         """Log les informations système détaillées."""

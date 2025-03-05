@@ -475,7 +475,7 @@ class ModelLoader:
             logger.error(f"Erreur nettoyage type {model_type}: {e}")
 
     async def _unload_model(self, model_key: str) -> None:
-        """Décharge un modèle de la mémoire."""
+        """Décharge un modèle de la mémoire avec plus de sécurité."""
         try:
             if model_key not in self.loaded_models:
                 return
@@ -484,23 +484,24 @@ class ModelLoader:
             
             if model and hasattr(model, 'model'):
                 try:
-                    # Forcer le transfert sur CPU avant de supprimer
-                    if hasattr(model.model, 'cpu'):
-                        model.model = model.model.cpu()
-                    # Forcer le garbage collection
-                    model.model = None
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                    # Désactiver le gradient d'abord
+                    if hasattr(model.model, 'requires_grad_'):
+                        model.model.requires_grad_(False)
                     
+                    # Forcer le transfert sur CPU avant de supprimer, avec protection contre les erreurs
+                    if hasattr(model.model, 'cpu'):
+                        try:
+                            model.model = model.model.cpu()
+                        except Exception as cpu_error:
+                            logger.warning(f"Avertissement lors du transfert CPU de {model_key}: {cpu_error}")
+                    
+                    # Libérer explicitement le modèle
+                    model.model = None
+                    
+                    # Forcer le garbage collector
+                    gc.collect()
                 except Exception as e:
-                    logger.warning(f"Erreur nettoyage modèle {model_key}: {e}")
-
-            if torch.cuda.is_available():
-                try:
-                    torch.cuda.synchronize()
-                    torch.cuda.empty_cache()
-                except Exception as e:
-                    logger.warning(f"Erreur nettoyage cache CUDA: {e}")
+                    logger.warning(f"Avertissement nettoyage modèle {model_key}: {e}")
 
             # Libérer le verrou associé
             if model_key in self._model_locks:
@@ -510,6 +511,7 @@ class ModelLoader:
             
         except Exception as e:
             logger.error(f"Erreur déchargement modèle {model_key}: {e}")
+            # Ne pas propager l'exception
 
     def _apply_quantization(self, model: PreTrainedModel, quantization: str) -> PreTrainedModel:
         """Applique la quantization à un modèle."""
@@ -526,21 +528,24 @@ class ModelLoader:
         try:
             logger.info("Début du nettoyage des modèles...")
             
-            # Décharger tous les modèles
-            for model_key in list(self.loaded_models.keys()):
-                await self._unload_model(model_key)
-                
+            # Copier la liste des clés pour éviter de modifier pendant l'itération
+            model_keys = list(self.loaded_models.keys())
+            
+            # Décharger les modèles dans l'ordre inverse de chargement
+            for model_key in reversed(model_keys):
+                try:
+                    await self._unload_model(model_key)
+                except Exception as e:
+                    logger.warning(f"Erreur nettoyage modèle {model_key}: {e}")
+            
             # Nettoyage final
             self.loaded_models.clear()
             self._model_locks.clear()
             
-            # Forcer le garbage collector
+            # Ne pas appeler torch.cuda.empty_cache() ici, laisser le CUDA manager s'en occuper
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
                 
             logger.info("Nettoyage des modèles terminé")
             
         except Exception as e:
             logger.error(f"Erreur nettoyage ModelLoader: {e}")
-            raise
