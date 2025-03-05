@@ -90,7 +90,7 @@ router.include_router(
     tags=["history"]
 )
 router.include_router(
-    chat_router,
+    pdf_router,
     tags=["pdf"]
 )
 
