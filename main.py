@@ -167,6 +167,13 @@ class ComponentManager:
                 self._components["pdf_processor"] = PDFProcessor(es_client)
                 logger.info("Processeurs de documents initialisés")
                 
+                # Initialisation du détecteur de tableaux IA
+                if settings.document.ENABLE_AI_TABLE_DETECTION:
+                    from core.document_processing.table_detection import TableDetectionModel
+                    table_detector = TableDetectionModel(cuda_manager=self.cuda_manager)
+                    await table_detector.initialize()
+                    self._components["table_detector"] = table_detector
+                    logger.info("Détecteur de tableaux par IA initialisé")
                 
                 # Google Drive (optionnel)
                 if settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH:
@@ -234,7 +241,7 @@ class ComponentManager:
             
             # Ordre explicite de nettoyage - du plus haut niveau au plus bas niveau
             cleanup_order = [
-                "search_manager", "doc_extractor", "pdf_processor",
+                "search_manager", "doc_extractor", "pdf_processor", "table_detector",
                 "model", "summarizer", "embedding_manager", "model_manager", 
                 "model_loader", "tokenizer_manager", "cuda_manager",
                 "auth_manager", "es_client", "cache", "db", "session_manager"

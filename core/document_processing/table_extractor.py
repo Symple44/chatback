@@ -52,6 +52,50 @@ class TableExtractor:
             logger.error(f"Erreur initialisation Tesseract OCR: {e}")
             logger.warning("La fonctionnalité OCR pour PDF scannés pourrait ne pas fonctionner correctement")
         
+    async def _detect_table_regions_with_model(self, img: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """
+        Détecte les régions de tableau en utilisant le modèle de deep learning.
+        
+        Args:
+            img: Image au format numpy array
+            
+        Returns:
+            Liste de coordonnées (x, y, w, h) des régions de tableau
+        """
+        try:
+            # Si le détecteur n'est pas encore initialisé
+            if not hasattr(self, 'table_detector') or self.table_detector is None:
+                from core.document_processing.table_detection import TableDetectionModel
+                self.table_detector = TableDetectionModel()
+                await self.table_detector.initialize()
+                logger.info("Détecteur de tableaux par IA initialisé")
+            
+            # Détection des tableaux avec le modèle
+            detections = await self.table_detector.detect_tables(img)
+            
+            # Conversion au format de coordonnées attendu
+            table_regions = []
+            for detection in detections:
+                x, y = detection["x"], detection["y"]
+                w, h = detection["width"], detection["height"]
+                
+                # Ajouter une marge pour s'assurer de capturer tout le tableau
+                margin = 10
+                x = max(0, x - margin)
+                y = max(0, y - margin)
+                w = min(img.shape[1] - x, w + 2 * margin)
+                h = min(img.shape[0] - y, h + 2 * margin)
+                
+                table_regions.append((x, y, w, h))
+                
+            logger.info(f"Détection de tableaux par IA: {len(table_regions)} tableaux détectés")
+            return table_regions
+            
+        except Exception as e:
+            logger.error(f"Erreur détection des tableaux par IA: {e}")
+            # En cas d'échec, on revient à la méthode traditionnelle
+            return await self._detect_table_regions(img)
+    
     async def extract_tables(
         self, 
         file_path: Union[str, Path, BytesIO], 
@@ -118,10 +162,48 @@ class TableExtractor:
                 
                 # Extraction des tableaux selon la méthode choisie
                 loop = asyncio.get_event_loop()
-                if extraction_method == "ocr":
-                    # Pour les PDF scannés, on utilise l'OCR
-                    tables = await self._extract_with_ocr(file_path, pages, ocr_config)
-                    metrics.increment_counter("ocr_table_extractions")
+                # Si OCR est activé et aucun tableau n'est trouvé, tenter une approche drastique
+                if extraction_method == "ocr" and not tables_list:
+                    logger.info("Aucun tableau détecté avec la méthode standard, tentative avec force_grid=True")
+                    
+                    for img_idx, img in enumerate(images):
+                        page_num = image_to_page.get(img_idx, img_idx + 1)
+                        
+                        # Convertir l'image PIL en format numpy pour OpenCV
+                        img_np = np.array(img)
+                        
+                        # Méthode drastique: considérer toute la page comme un tableau potentiel
+                        processed_img = await self._preprocess_image(
+                            img_np, 
+                            ocr_config.get("enhance_image", True),
+                            ocr_config.get("deskew", True),
+                            ocr_config.get("preprocess_type", "thresh")
+                        )
+                        
+                        # Extraire les dimensions pour créer une région qui couvre la page entière avec des marges
+                        height, width = processed_img.shape[:2]
+                        margin_x = width // 10
+                        margin_y = height // 10
+                        table_region = (margin_x, margin_y, width - 2*margin_x, height - 2*margin_y)
+                        
+                        # Extraire la région et appliquer OCR avec force_grid=True
+                        table_img = processed_img[table_region[1]:table_region[1]+table_region[3], 
+                                                table_region[0]:table_region[0]+table_region[2]]
+                        
+                        # Tenter l'OCR avec force_grid=True pour extraire un tableau même sans lignes visibles
+                        df = await self._ocr_table_to_dataframe(
+                            table_img,
+                            lang=ocr_config.get("lang", self.tesseract_lang),
+                            psm=ocr_config.get("psm", 6),
+                            force_grid=True
+                        )
+                        
+                        if df is not None and not df.empty and len(df.columns) > 1:
+                            df.insert(0, "_page", page_num)
+                            df.insert(1, "_table", 1)
+                            tables_list.append(df)
+                            logger.info(f"Tableau extrait avec méthode de secours pour la page {page_num}")
+                            break  # Un seul tableau est suffisant dans ce cas
                 elif extraction_method == "tabula":
                     tables = await loop.run_in_executor(
                         self.executor, 
@@ -329,17 +411,51 @@ class TableExtractor:
                         df = await self._ocr_table_to_dataframe(
                             table_img,
                             lang=ocr_config.get("lang", self.tesseract_lang),
-                            psm=ocr_config.get("psm", 6)
+                            psm=ocr_config.get("psm", 6),
+                            force_grid=ocr_config.get("force_grid", False)
                         )
                         
                         # Ajouter à la liste si le DataFrame n'est pas vide
                         if df is not None and not df.empty and len(df.columns) > 1:
+                            # Ajouter des colonnes d'information
                             df.insert(0, "_page", page_num)
                             df.insert(1, "_table", i + 1)
                             tables_list.append(df)
                             
                     except Exception as e:
                         logger.error(f"Erreur extraction tableau {i+1} sur page {page_num}: {e}")
+                
+                # Si aucun tableau n'est détecté sur cette page et que force_grid est activé,
+                # essayer une extraction en mode grille forcée
+                if len(table_regions) == 0 and ocr_config.get("force_grid", False):
+                    try:
+                        # Utiliser une région qui couvre la majeure partie de l'image
+                        height, width = processed_img.shape[:2]
+                        margin_x = width // 10
+                        margin_y = height // 10
+                        
+                        # Définir une région qui évite les marges
+                        x, y = margin_x, margin_y
+                        w, h = width - 2 * margin_x, height - 2 * margin_y
+                        
+                        # Extraire la région centrale
+                        table_img = processed_img[y:y+h, x:x+w]
+                        
+                        # Tenter l'extraction en mode force_grid
+                        df = await self._ocr_table_to_dataframe(
+                            table_img,
+                            lang=ocr_config.get("lang", self.tesseract_lang),
+                            psm=ocr_config.get("psm", 6),
+                            force_grid=True
+                        )
+                        
+                        if df is not None and not df.empty and len(df.columns) > 1:
+                            df.insert(0, "_page", page_num)
+                            df.insert(1, "_table", 1)
+                            tables_list.append(df)
+                            logger.info(f"Tableau extrait avec mode grille forcée sur page {page_num}")
+                    except Exception as e:
+                        logger.error(f"Erreur extraction forcée sur page {page_num}: {e}")
             
             logger.info(f"OCR terminé: {len(tables_list)} tableaux extraits")
             return tables_list
