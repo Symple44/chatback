@@ -31,6 +31,7 @@ async def extract_tables_from_pdf(
     ocr_language: str = Form("fra+eng"),
     ocr_enhance_image: bool = Form(True),
     ocr_deskew: bool = Form(True),
+    force_grid: bool = Form(False),
     components=Depends(get_components)
 ):
     """
@@ -110,16 +111,21 @@ async def extract_tables_from_pdf(
                 "enhance_image": ocr_enhance_image,
                 "deskew": ocr_deskew,
                 "preprocess_type": "thresh",
-                "psm": 6  # Mode de segmentation de page pour Tesseract
+                 "force_grid": force_grid
             }
             
-        # Extraire les tableaux
         tables = await components.table_extractor.extract_tables(
             file_obj,
             pages=page_list or "all",
             extraction_method=extraction_method,
             output_format=output_format,
-            ocr_config=ocr_config
+            ocr_config={
+                "lang": ocr_language,
+                "enhance_image": ocr_enhance_image,
+                "deskew": ocr_deskew,
+                "preprocess_type": "thresh",
+                "force_grid": force_grid  # Nouveau paramètre
+            }
         )
         
         # Si demandé, extraire aussi les images des tableaux
@@ -176,6 +182,7 @@ async def extract_tables_ocr(
     enhance_image: bool = Form(True),
     deskew: bool = Form(True),
     output_format: str = Form("json"),
+    force_grid: bool = Form(False),
     components=Depends(get_components)
 ):
     """
@@ -219,7 +226,7 @@ async def extract_tables_ocr(
             "enhance_image": enhance_image,
             "deskew": deskew,
             "preprocess_type": "thresh",
-            "psm": 6
+            "force_grid": force_grid
         }
         
         # Extraire les tableaux avec OCR

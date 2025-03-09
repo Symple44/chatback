@@ -520,7 +520,8 @@ class TableExtractor:
     
     async def _detect_table_regions_alternate(self, img: np.ndarray) -> List[Tuple[int, int, int, int]]:
         """
-        Méthode alternative de détection des tableaux basée sur les blocs de texte.
+        Méthode alternative améliorée de détection des tableaux basée sur le contenu structuré.
+        Particulièrement utile pour les tableaux avec des lignes fines ou des bordures peu visibles.
         
         Args:
             img: Image prétraitée
@@ -528,65 +529,288 @@ class TableExtractor:
         Returns:
             Liste de coordonnées (x, y, w, h) des régions de tableau
         """
-        # Appliquer un filtre de dilatation pour connecter les caractères en lignes
-        kernel = np.ones((5, 20), np.uint8)
-        dilated = cv2.dilate(img, kernel, iterations=1)
-        
-        # Trouver les contours des blocs de texte
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filtrer les contours trop petits
-        min_area = 0.001 * img.shape[0] * img.shape[1]  # 0.1% de l'image
-        text_blocks = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) > min_area]
-        
-        # S'il y a moins de 2 blocs, considérer toute l'image comme un tableau
-        if len(text_blocks) < 2:
-            return [(0, 0, img.shape[1], img.shape[0])]
-        
-        # Regrouper les blocs qui sont alignés horizontalement (potentielles lignes d'un tableau)
-        text_blocks.sort(key=lambda b: b[1])  # Trier par coordonnée y
-        
-        # Détecter les lignes de texte en recherchant les blocs alignés horizontalement
-        y_tolerance = 20  # Tolérance en pixels pour considérer les blocs sur la même ligne
-        lines = []
-        current_line = [text_blocks[0]]
-        
-        for block in text_blocks[1:]:
-            y = block[1]
-            prev_y = current_line[-1][1]
+        try:
+            # Détection basée sur la reconnaissance des lignes horizontales et verticales
+            # avec plusieurs seuils pour augmenter la sensibilité
             
-            if abs(y - prev_y) <= y_tolerance:
-                # Même ligne
-                current_line.append(block)
-            else:
-                # Nouvelle ligne
-                if len(current_line) >= 2:  # Au moins 2 blocs dans la ligne
-                    lines.append(current_line)
-                current_line = [block]
-        
-        # Ajouter la dernière ligne si elle contient au moins 2 blocs
-        if len(current_line) >= 2:
-            lines.append(current_line)
-        
-        # S'il y a au moins 2 lignes, on a probablement un tableau
-        if len(lines) >= 2:
-            # Déterminer les limites du tableau
-            min_x = min([min([b[0] for b in line]) for line in lines])
-            min_y = min([min([b[1] for b in line]) for line in lines])
-            max_x = max([max([b[0] + b[2] for b in line]) for line in lines])
-            max_y = max([max([b[1] + b[3] for b in line]) for line in lines])
+            height, width = img.shape[:2]
             
-            # Ajouter une marge
-            margin = 20
-            min_x = max(0, min_x - margin)
-            min_y = max(0, min_y - margin)
-            max_x = min(img.shape[1], max_x + margin)
-            max_y = min(img.shape[0], max_y + margin)
+            # 1. Détection traditionnelle des lignes avec morphologie
+            kernels_h = [np.ones((1, length), np.uint8) for length in [30, 40, 50]]
+            kernels_v = [np.ones((length, 1), np.uint8) for length in [30, 40, 50]]
             
-            return [(min_x, min_y, max_x - min_x, max_y - min_y)]
-        
-        # Si aucun tableau n'est détecté, retourner vide
-        return []
+            # Essayer différents kernels pour augmenter la sensibilité
+            horizontal_regions = []
+            vertical_regions = []
+            
+            for kernel_h in kernels_h:
+                horizontal = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel_h)
+                horizontal_regions.append(horizontal)
+                
+            for kernel_v in kernels_v:
+                vertical = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel_v)
+                vertical_regions.append(vertical)
+            
+            # Combiner les différentes détections
+            horizontal_combined = np.zeros_like(img)
+            for h_region in horizontal_regions:
+                horizontal_combined = np.maximum(horizontal_combined, h_region)
+                
+            vertical_combined = np.zeros_like(img)
+            for v_region in vertical_regions:
+                vertical_combined = np.maximum(vertical_combined, v_region)
+            
+            # Combiner les lignes horizontales et verticales
+            table_regions = cv2.add(horizontal_combined, vertical_combined)
+            
+            # 2. Si la détection traditionnelle ne fonctionne pas, essayer une approche basée sur le texte
+            contours, _ = cv2.findContours(table_regions, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_table_area = 0.03 * width * height  # Au moins 3% de l'image
+            
+            valid_table_regions = []
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area > min_table_area:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    valid_table_regions.append((x, y, w, h))
+            
+            # 3. Si aucune région n'est trouvée, essayer l'approche basée sur les blocs de texte
+            if not valid_table_regions:
+                # Dilater l'image pour connecter les caractères proches
+                kernel = np.ones((5, 20), np.uint8)  # Kernel plus grand pour mieux capturer les lignes de texte
+                dilated = cv2.dilate(img, kernel, iterations=2)
+                
+                # Trouver les contours des blocs de texte
+                contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Filtrer les contours trop petits
+                text_blocks = []
+                min_block_area = 0.0005 * width * height  # 0.05% de l'image
+                
+                for contour in contours:
+                    area = cv2.contourArea(contour)
+                    if area > min_block_area:
+                        x, y, w, h = cv2.boundingRect(contour)
+                        text_blocks.append((x, y, w, h))
+                
+                # Trier les blocs par position verticale (y)
+                text_blocks.sort(key=lambda b: b[1])
+                
+                # Grouper les blocs en lignes (possibles lignes d'un tableau)
+                rows = []
+                current_row = [text_blocks[0]] if text_blocks else []
+                
+                for block in text_blocks[1:]:
+                    _, prev_y, _, prev_h = current_row[-1] if current_row else (0, 0, 0, 0)
+                    _, curr_y, _, _ = block
+                    
+                    # Si ce bloc est proche verticalement du précédent, on le considère sur la même ligne
+                    if abs(curr_y - prev_y) < 20:  # 20 pixels de tolérance
+                        current_row.append(block)
+                    else:
+                        # Nouvelle ligne
+                        if current_row:
+                            rows.append(current_row)
+                        current_row = [block]
+                
+                # Ajouter la dernière ligne si elle existe
+                if current_row:
+                    rows.append(current_row)
+                
+                # Considérer comme tableau si on a au moins 3 lignes avec au moins 2 blocs chacune
+                structured_rows = [row for row in rows if len(row) >= 2]
+                
+                if len(structured_rows) >= 3:
+                    # Déterminer les limites du tableau
+                    min_x = min([min([block[0] for block in row]) for row in structured_rows])
+                    min_y = min([min([block[1] for block in row]) for row in structured_rows])
+                    max_x = max([max([block[0] + block[2] for block in row]) for row in structured_rows])
+                    max_y = max([max([block[1] + block[3] for block in row]) for row in structured_rows])
+                    
+                    # Ajouter une marge
+                    margin = 20
+                    min_x = max(0, min_x - margin)
+                    min_y = max(0, min_y - margin)
+                    max_x = min(width, max_x + margin)
+                    max_y = min(height, max_y + margin)
+                    
+                    valid_table_regions.append((min_x, min_y, max_x - min_x, max_y - min_y))
+            
+            # 4. Si toujours aucune région détectée, utiliser l'heuristique des zones horizontales alignées
+            if not valid_table_regions:
+                # Essayer de détecter des lignes horizontales de façon plus agressive
+                more_aggressive_kernel = np.ones((1, 100), np.uint8)
+                horizontal_aggressive = cv2.morphologyEx(img, cv2.MORPH_OPEN, more_aggressive_kernel)
+                
+                # Trouver les contours des lignes horizontales
+                contours, _ = cv2.findContours(horizontal_aggressive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Si au moins 3 lignes horizontales sont trouvées, c'est probablement un tableau
+                if len(contours) >= 3:
+                    # Trier les contours par position y
+                    contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
+                    
+                    # Obtenir les rectangles englobants
+                    bounding_rects = [cv2.boundingRect(c) for c in contours]
+                    
+                    # Vérifier l'alignement horizontal (même largeur approximative)
+                    widths = [rect[2] for rect in bounding_rects]
+                    avg_width = sum(widths) / len(widths)
+                    aligned_rects = [rect for rect in bounding_rects if abs(rect[2] - avg_width) / avg_width < 0.3]
+                    
+                    if len(aligned_rects) >= 3:
+                        # Déterminer les limites du tableau
+                        min_x = min(rect[0] for rect in aligned_rects)
+                        min_y = min(rect[1] for rect in aligned_rects)
+                        max_x = max(rect[0] + rect[2] for rect in aligned_rects)
+                        max_y = max(rect[1] + rect[3] for rect in aligned_rects)
+                        
+                        # Ajouter une marge
+                        margin = 20
+                        min_x = max(0, min_x - margin)
+                        min_y = max(0, min_y - margin)
+                        max_x = min(width, max_x + margin)
+                        max_y = min(height, max_y + margin)
+                        
+                        valid_table_regions.append((min_x, min_y, max_x - min_x, max_y - min_y))
+            
+            # 5. Dernier recours: Si toujours rien n'est détecté et si le document a une structure tabulaire
+            # (détectée par la présence de texte aligné), considérer une grande partie de la page
+            if not valid_table_regions:
+                # Appliquer OCR pour trouver les lignes de texte
+                from pytesseract import Output
+                import pytesseract
+                
+                # Convertir en image PIL
+                pil_img = Image.fromarray(cv2.bitwise_not(img))  # Inverser pour OCR
+                
+                # Obtenir les informations de ligne et de mot
+                ocr_data = pytesseract.image_to_data(pil_img, output_type=Output.DICT, config='--psm 6')
+                
+                # Créer des boîtes autour des lignes de texte
+                n_boxes = len(ocr_data['text'])
+                line_boxes = {}
+                
+                for i in range(n_boxes):
+                    if int(ocr_data['conf'][i]) > 0:  # Ignorer les résultats de faible confiance
+                        x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
+                        line_num = ocr_data['line_num'][i]
+                        
+                        if line_num not in line_boxes:
+                            line_boxes[line_num] = [x, y, w, h]
+                        else:
+                            # Étendre la boîte existante
+                            curr_x, curr_y, curr_w, curr_h = line_boxes[line_num]
+                            new_x = min(curr_x, x)
+                            new_y = min(curr_y, y)
+                            new_w = max(curr_x + curr_w, x + w) - new_x
+                            new_h = max(curr_y + curr_h, y + h) - new_y
+                            line_boxes[line_num] = [new_x, new_y, new_w, new_h]
+                
+                # Vérifier si les lignes sont alignées (possible structure de tableau)
+                if len(line_boxes) >= 3:
+                    line_values = list(line_boxes.values())
+                    left_positions = [box[0] for box in line_values]
+                    widths = [box[2] for box in line_values]
+                    
+                    # Calculer la variance des positions de gauche et des largeurs
+                    left_variance = np.var(left_positions) / (np.mean(left_positions) + 1e-5)
+                    width_variance = np.var(widths) / (np.mean(widths) + 1e-5)
+                    
+                    # Si les lignes sont bien alignées, c'est potentiellement un tableau
+                    if left_variance < 0.1 and width_variance < 0.3:
+                        min_x = min(box[0] for box in line_values)
+                        min_y = min(box[1] for box in line_values)
+                        max_x = max(box[0] + box[2] for box in line_values)
+                        max_y = max(box[1] + box[3] for box in line_values)
+                        
+                        # Ajouter une marge
+                        margin_h = 30
+                        margin_v = 50  # Marge verticale plus grande pour inclure les en-têtes
+                        min_x = max(0, min_x - margin_h)
+                        min_y = max(0, min_y - margin_v)
+                        max_x = min(width, max_x + margin_h)
+                        max_y = min(height, max_y + margin_v)
+                        
+                        valid_table_regions.append((min_x, min_y, max_x - min_x, max_y - min_y))
+            
+            # 6. Si après toutes ces tentatives on ne trouve rien, tenter une approche drastique
+            # basée sur l'analyse globale de la structure du document
+            if not valid_table_regions:
+                # Recherche de pattern répétitif de type tableau: lignes horizontales régulièrement espacées
+                # et texte organisé en colonnes
+                
+                # Projection horizontale pour détecter les rangées
+                h_projection = np.sum(img, axis=1)
+                h_projection = h_projection / np.max(h_projection)  # Normaliser
+                
+                # Trouver les pics (possibles rangées de tableau)
+                from scipy.signal import find_peaks
+                peaks, _ = find_peaks(1 - h_projection, height=0.5, distance=20)
+                
+                # Si on a plusieurs pics régulièrement espacés, c'est peut-être un tableau
+                if len(peaks) >= 4:  # Au moins 4 lignes horizontales
+                    spacing = np.diff(peaks)
+                    avg_spacing = np.mean(spacing)
+                    regular_spacing = np.all(np.abs(spacing - avg_spacing) < 0.3 * avg_spacing)
+                    
+                    if regular_spacing:
+                        # Projection verticale pour détecter les colonnes
+                        v_projection = np.sum(img, axis=0)
+                        v_projection = v_projection / np.max(v_projection)  # Normaliser
+                        
+                        v_peaks, _ = find_peaks(1 - v_projection, height=0.5, distance=20)
+                        
+                        # Si on a plusieurs pics verticaux, c'est presque certainement un tableau
+                        if len(v_peaks) >= 3:  # Au moins 3 colonnes/lignes verticales
+                            min_y = max(0, peaks[0] - avg_spacing/2)
+                            max_y = min(height, peaks[-1] + avg_spacing/2)
+                            min_x = max(0, v_peaks[0] - 20)
+                            max_x = min(width, v_peaks[-1] + 20)
+                            
+                            valid_table_regions.append((int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y)))
+            
+            # 7. Dernier recours absolu: si nous savons que c'est un document professionnel
+            # avec une forte probabilité de contenir un tableau au centre, utiliser une heuristique hardcodée
+            if not valid_table_regions:
+                # Vérifier s'il y a une zone dense de pixels noirs au centre du document
+                # qui pourrait être un tableau
+                center_region = img[height//3:2*height//3, width//4:3*width//4]
+                center_density = np.sum(center_region) / (center_region.size)
+                
+                # Si la densité est suffisamment élevée (beaucoup de pixels noirs), considérer comme un tableau
+                if center_density > 10:  # Valeur arbitraire à ajuster
+                    # Utiliser la région centrale avec une marge
+                    table_x = width//4 - 50
+                    table_y = height//3 - 50
+                    table_w = width//2 + 100
+                    table_h = height//3 + 100
+                    
+                    valid_table_regions.append((
+                        max(0, table_x),
+                        max(0, table_y),
+                        min(width - table_x, table_w),
+                        min(height - table_y, table_h)
+                    ))
+            
+            # Enfin, si vraiment rien n'est détecté, considérer toute la page comme un tableau
+            if not valid_table_regions:
+                # Exclure les marges (10% de chaque côté)
+                margin_x = width // 10
+                margin_y = height // 10
+                valid_table_regions.append((
+                    margin_x,
+                    margin_y,
+                    width - 2 * margin_x,
+                    height - 2 * margin_y
+                ))
+                
+            return valid_table_regions
+            
+        except Exception as e:
+            logger.error(f"Erreur détection alternative des tableaux: {e}", exc_info=True)
+            # En cas d'échec, retourner un rectangle qui couvre la majorité de la page
+            return [(width//10, height//10, width*8//10, height*8//10)]
     
     async def _enhance_table_image(self, img: np.ndarray) -> np.ndarray:
         """
@@ -610,95 +834,334 @@ class TableExtractor:
         self, 
         img: np.ndarray, 
         lang: str = "fra+eng",
-        psm: int = 6
+        psm: int = 6,
+        force_grid: bool = False
     ) -> Optional[pd.DataFrame]:
         """
         Applique l'OCR à l'image d'un tableau et convertit le résultat en DataFrame.
+        Version améliorée pour mieux gérer les tableaux avec bordures fines ou manuscrits.
         
         Args:
             img: Image du tableau
             lang: Langues pour Tesseract (fra+eng par défaut)
             psm: Mode de segmentation de page Tesseract
+            force_grid: Force la création d'une grille même si le tableau n'est pas bien délimité
             
         Returns:
             DataFrame contenant les données du tableau
         """
         try:
+            from pytesseract import Output
+            import pytesseract
+            from PIL import Image
+            import pandas as pd
+            import numpy as np
+            
             # Sauvegarder l'image temporairement
             temp_img_path = os.path.join(self.temp_dir, f"table_{uuid.uuid4()}.png")
             cv2.imwrite(temp_img_path, img)
             
-            # Configuration OCR
+            # Configuration OCR - ajouter l'option de tableau pour améliorer la détection
             custom_config = f'--oem 3 --psm {psm} -l {lang}'
             
-            # Utiliser le mode TSV de Tesseract pour obtenir un tableau
-            loop = asyncio.get_event_loop()
-            tsv_output = await loop.run_in_executor(
-                self.executor,
-                lambda: pytesseract.image_to_data(
-                    Image.open(temp_img_path),
-                    config=custom_config,
-                    output_type=pytesseract.Output.DATAFRAME
-                )
-            )
+            # Inverser l'image pour l'OCR (texte noir sur fond blanc)
+            pil_img = Image.open(temp_img_path)
             
-            # Nettoyer
+            # 1. D'abord, essayer de détecter directement la structure du tableau
+            try:
+                # Obtenir les données avec des informations de position et de structure
+                loop = asyncio.get_event_loop()
+                ocr_data = await loop.run_in_executor(
+                    self.executor,
+                    lambda: pytesseract.image_to_data(
+                        pil_img,
+                        config=custom_config,
+                        output_type=Output.DICT
+                    )
+                )
+                
+                # Si aucun texte n'est reconnu, retourner None
+                if not ocr_data['text'] or all(txt == '' for txt in ocr_data['text']):
+                    # Essayer avec une autre méthode
+                    pass
+                else:
+                    # Analyser les résultats OCR pour détecter la structure du tableau
+                    
+                    # Regrouper par ligne (par block_num ou line_num)
+                    grouped_by_line = {}
+                    for i in range(len(ocr_data['text'])):
+                        if int(ocr_data['conf'][i]) <= 0:  # Ignorer les résultats de faible confiance
+                            continue
+                            
+                        line_num = ocr_data['line_num'][i]
+                        if line_num not in grouped_by_line:
+                            grouped_by_line[line_num] = []
+                            
+                        grouped_by_line[line_num].append({
+                            'text': ocr_data['text'][i],
+                            'left': ocr_data['left'][i],
+                            'width': ocr_data['width'][i],
+                            'center_x': ocr_data['left'][i] + ocr_data['width'][i] // 2,
+                            'conf': ocr_data['conf'][i]
+                        })
+                    
+                    # Trier les lignes par position verticale (top)
+                    line_nums = sorted(grouped_by_line.keys(), key=lambda k: ocr_data['top'][ocr_data['line_num'].index(k)])
+                    
+                    # Ignorer les lignes sans texte significatif
+                    valid_lines = [ln for ln in line_nums if any(word['text'].strip() for word in grouped_by_line[ln])]
+                    
+                    if not valid_lines or len(valid_lines) < 2:
+                        # Pas assez de lignes valides, essayer une autre approche
+                        pass
+                    else:
+                        # Détecter les colonnes en analysant les positions horizontales
+                        # Pour chaque ligne, trier les mots par position
+                        for line_num in valid_lines:
+                            grouped_by_line[line_num] = sorted(grouped_by_line[line_num], key=lambda w: w['left'])
+                        
+                        # Trouver le nombre maximal de mots dans une ligne pour estimer le nombre de colonnes
+                        max_words = max(len(grouped_by_line[ln]) for ln in valid_lines)
+                        
+                        if max_words < 2:
+                            # Pas assez de colonnes, essayer une autre approche
+                            pass
+                        else:
+                            # Déduire les positions des colonnes à partir des mots
+                            # Pour chaque ligne, créer une liste de centres de mot
+                            all_centers = []
+                            for ln in valid_lines:
+                                centers = [word['center_x'] for word in grouped_by_line[ln]]
+                                all_centers.extend(centers)
+                            
+                            # Effectuer un clustering pour trouver les centres des colonnes
+                            from sklearn.cluster import KMeans
+                            
+                            # Estimer le nombre de colonnes
+                            n_columns = min(max_words, 10)  # Limiter à 10 colonnes maximum
+                            
+                            if len(all_centers) < n_columns:
+                                # Pas assez de données pour le clustering
+                                n_columns = len(all_centers)
+                            
+                            if n_columns < 2:
+                                # Pas assez de colonnes, essayer une autre approche
+                                pass
+                            else:
+                                centers_array = np.array(all_centers).reshape(-1, 1)
+                                kmeans = KMeans(n_clusters=n_columns, random_state=0).fit(centers_array)
+                                column_centers = sorted(kmeans.cluster_centers_.flatten())
+                                
+                                # Créer un DataFrame à partir des données
+                                table_data = []
+                                
+                                for ln in valid_lines:
+                                    row_data = [''] * n_columns
+                                    for word in grouped_by_line[ln]:
+                                        # Déterminer à quelle colonne appartient ce mot
+                                        distances = [abs(word['center_x'] - center) for center in column_centers]
+                                        col_idx = distances.index(min(distances))
+                                        
+                                        # Ajouter le texte à la colonne appropriée
+                                        if row_data[col_idx]:
+                                            row_data[col_idx] += ' ' + word['text'].strip()
+                                        else:
+                                            row_data[col_idx] = word['text'].strip()
+                                    
+                                    table_data.append(row_data)
+                                
+                                # Créer le DataFrame
+                                df = pd.DataFrame(table_data)
+                                
+                                # Utiliser la première ligne comme en-tête si approprié
+                                if len(df) > 1 and self._is_header_row(df.iloc[0]):
+                                    df.columns = df.iloc[0]
+                                    df = df.iloc[1:].reset_index(drop=True)
+                                
+                                # Nettoyer le DataFrame
+                                df = df.apply(lambda x: x.str.strip() if x.dtype == object else x)
+                                
+                                # Vérifier si le DataFrame est valide (plus d'une colonne et au moins une ligne)
+                                if df.shape[1] >= 2 and df.shape[0] >= 1:
+                                    return df
+            except Exception as e:
+                logger.debug(f"Première méthode OCR échouée: {e}")
+                # Continuer avec les méthodes alternatives
+            
+            # 2. Si la première méthode échoue, essayer avec une détection plus aggressive de la structure
+            try:
+                # Appliquer une segmentation structurée
+                custom_config_structured = f'--oem 3 --psm 6 -l {lang}'
+                
+                # Utiliser TSV pour capturer la structure
+                loop = asyncio.get_event_loop()
+                tsv_output = await loop.run_in_executor(
+                    self.executor,
+                    lambda: pytesseract.image_to_string(
+                        pil_img,
+                        config=custom_config_structured + ' tsv',
+                        output_type=pytesseract.Output.DATAFRAME
+                    )
+                )
+                
+                # Si des données sont détectées
+                if not tsv_output.empty:
+                    # Filtrer et nettoyer
+                    text_data = tsv_output[tsv_output['conf'] > 0]
+                    
+                    if text_data.empty:
+                        # Aucun texte valide détecté
+                        pass
+                    else:
+                        # Regrouper par position verticale pour former des lignes
+                        text_data['line_group'] = text_data['top'] // 15  # Regrouper par blocs de 15 pixels
+                        
+                        # Créer une liste pour stocker les lignes du tableau
+                        table_rows = []
+                        
+                        # Pour chaque groupe de ligne
+                        for line_num, group in text_data.groupby('line_group'):
+                            # Trier les éléments par position horizontale
+                            sorted_group = group.sort_values('left')
+                            
+                            # Extraire le texte de chaque élément
+                            row_texts = sorted_group['text'].tolist()
+                            
+                            # Ignorer les lignes vides
+                            if not any(text.strip() for text in row_texts):
+                                continue
+                                
+                            # Ajouter cette ligne à notre tableau
+                            table_rows.append(row_texts)
+                        
+                        # Si des lignes ont été extraites
+                        if table_rows:
+                            # Déterminer le nombre maximum de colonnes
+                            max_cols = max(len(row) for row in table_rows)
+                            
+                            # Normaliser les lignes
+                            normalized_rows = []
+                            for row in table_rows:
+                                # Étendre la ligne avec des valeurs vides si nécessaire
+                                normalized_row = row + [''] * (max_cols - len(row))
+                                normalized_rows.append(normalized_row)
+                            
+                            # Créer un DataFrame
+                            df = pd.DataFrame(normalized_rows)
+                            
+                            # Utiliser la première ligne comme en-tête si approprié
+                            if len(df) > 1 and self._is_header_row(df.iloc[0]):
+                                df.columns = df.iloc[0]
+                                df = df.iloc[1:].reset_index(drop=True)
+                            
+                            # Nettoyer le DataFrame
+                            df = df.apply(lambda x: x.str.strip() if x.dtype == object else x)
+                            
+                            # Vérifier que le DataFrame a au moins 2 colonnes et une ligne
+                            if df.shape[1] >= 2 and df.shape[0] >= 1:
+                                return df
+            except Exception as e:
+                logger.debug(f"Deuxième méthode OCR échouée: {e}")
+                # Continuer avec la méthode suivante
+            
+            # 3. Si les méthodes précédentes échouent, essayer une approche basée sur une grille régulière
+            if force_grid:
+                try:
+                    # Obtenir le texte brut
+                    loop = asyncio.get_event_loop()
+                    text = await loop.run_in_executor(
+                        self.executor,
+                        lambda: pytesseract.image_to_string(
+                            pil_img,
+                            config=custom_config
+                        )
+                    )
+                    
+                    # Diviser en lignes
+                    lines = [line.strip() for line in text.split('\n') if line.strip()]
+                    
+                    if not lines or len(lines) < 2:
+                        # Pas assez de texte détecté
+                        return None
+                    
+                    # Essayer de détecter un séparateur de colonne commun (espace ou tabulation)
+                    # en analysant les occurrences de caractères d'espacement
+                    potential_separators = ['\t', ' | ', ' + ', '  ', ' ']
+                    separator = None
+                    
+                    for sep in potential_separators:
+                        if all(sep in line for line in lines[:min(5, len(lines))]):
+                            separator = sep
+                            break
+                    
+                    if separator:
+                        # Diviser chaque ligne selon le séparateur
+                        table_data = [line.split(separator) for line in lines]
+                        
+                        # Déterminer le nombre maximum de colonnes
+                        max_cols = max(len(row) for row in table_data)
+                        
+                        # Normaliser pour que toutes les lignes aient le même nombre de colonnes
+                        for i in range(len(table_data)):
+                            if len(table_data[i]) < max_cols:
+                                table_data[i].extend([''] * (max_cols - len(table_data[i])))
+                        
+                        # Créer le DataFrame
+                        df = pd.DataFrame(table_data)
+                        
+                        # Utiliser la première ligne comme en-tête si approprié
+                        if len(df) > 1 and self._is_header_row(df.iloc[0]):
+                            df.columns = df.iloc[0]
+                            df = df.iloc[1:].reset_index(drop=True)
+                        
+                        # Nettoyer les données
+                        df = df.apply(lambda x: x.str.strip() if x.dtype == object else x)
+                        
+                        return df
+                    else:
+                        # Si aucun séparateur commun n'est trouvé, essayer de diviser en colonnes fixes
+                        # basées sur la distribution du texte
+                        
+                        # Trouver la ligne la plus longue
+                        max_line_length = max(len(line) for line in lines)
+                        
+                        # Diviser en colonnes régulières (estimation naïve)
+                        n_columns = max(2, min(10, max_line_length // 10))  # Entre 2 et 10 colonnes
+                        column_width = max_line_length // n_columns
+                        
+                        table_data = []
+                        for line in lines:
+                            row = []
+                            for i in range(n_columns):
+                                start = i * column_width
+                                end = (i + 1) * column_width if i < n_columns - 1 else len(line)
+                                cell = line[start:end].strip() if start < len(line) else ""
+                                row.append(cell)
+                            table_data.append(row)
+                        
+                        # Créer le DataFrame
+                        df = pd.DataFrame(table_data)
+                        
+                        # Utiliser la première ligne comme en-tête si approprié
+                        if len(df) > 1 and self._is_header_row(df.iloc[0]):
+                            df.columns = df.iloc[0]
+                            df = df.iloc[1:].reset_index(drop=True)
+                        
+                        # Nettoyer les données
+                        df = df.apply(lambda x: x.str.strip() if x.dtype == object else x)
+                        
+                        return df
+                except Exception as e:
+                    logger.error(f"Troisième méthode OCR échouée: {e}")
+                    # Continuer avec la prochaine tentative ou retourner None
+            
+            # Nettoyer le fichier temporaire
             if os.path.exists(temp_img_path):
                 os.unlink(temp_img_path)
-            
-            # Filtrer les résultats pour n'inclure que le texte reconnu
-            tsv_output = tsv_output[tsv_output['conf'] > 0]
-            
-            # Si aucun texte n'est reconnu, retourner None
-            if tsv_output.empty:
-                return None
-            
-            # Traiter les résultats pour reconstruire le tableau
-            # Regrouper par ligne (déterminer les lignes du tableau)
-            tsv_output['line_num'] = tsv_output['top'] // 10  # Regrouper les éléments à peu près à la même hauteur
-            
-            # Reconstruire les lignes et colonnes
-            table_data = []
-            for line_num, line_group in tsv_output.groupby('line_num'):
-                # Trier les éléments de gauche à droite
-                line_group = line_group.sort_values('left')
                 
-                # Créer une liste pour cette ligne
-                row_data = []
-                for _, word_data in line_group.iterrows():
-                    if str(word_data['text']).strip():  # Ignorer les valeurs vides
-                        row_data.append(str(word_data['text']))
+            # Si toutes les méthodes ont échoué, retourner None
+            return None
                 
-                if row_data:  # Si la ligne contient du texte
-                    table_data.append(row_data)
-            
-            # Si aucune donnée n'est extraite, retourner None
-            if not table_data:
-                return None
-            
-            # Déterminer le nombre maximum de colonnes
-            max_cols = max(len(row) for row in table_data)
-            
-            # Normaliser les lignes pour qu'elles aient toutes le même nombre de colonnes
-            normalized_data = []
-            for row in table_data:
-                # Étendre la ligne avec des valeurs vides si nécessaire
-                normalized_row = row + [''] * (max_cols - len(row))
-                normalized_data.append(normalized_row)
-            
-            # Créer un DataFrame
-            df = pd.DataFrame(normalized_data)
-            
-            # Utiliser la première ligne comme en-tête si elle semble être un en-tête
-            if len(df) > 1 and self._is_header_row(df.iloc[0]):
-                df.columns = df.iloc[0]
-                df = df.iloc[1:].reset_index(drop=True)
-            
-            # Nettoyer les données
-            df = df.apply(lambda x: x.str.strip() if x.dtype == object else x)
-            
-            return df
-            
         except Exception as e:
             logger.error(f"Erreur OCR tableau: {e}")
             return None
