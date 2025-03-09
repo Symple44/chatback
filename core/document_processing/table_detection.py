@@ -8,11 +8,16 @@ import numpy as np
 import cv2
 from transformers import DetrImageProcessor, DetrForObjectDetection
 from PIL import Image
+import logging
 
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
 from core.llm.cuda_manager import ModelPriority
+
+# Réduire le niveau de log pour masquer les avertissements non critiques
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("PIL").setLevel(logging.WARNING)
 
 logger = get_logger("table_detection")
 
@@ -26,7 +31,7 @@ class TableDetectionModel:
         Args:
             cuda_manager: Gestionnaire CUDA pour l'allocation mémoire (optionnel)
         """
-        self.model_name = "microsoft/table-transformer-detection"
+        self.model_name = settings.document.TABLE_DETECTION_MODEL
         self.processor = None
         self.model = None
         self.cuda_manager = cuda_manager
@@ -35,8 +40,8 @@ class TableDetectionModel:
         self.id2label = None
         
         # Configurations
-        self.threshold = float(os.environ.get("TABLE_DETECTION_THRESHOLD", "0.7"))
-        self.max_tables = int(os.environ.get("TABLE_DETECTION_MAX_TABLES", "10"))
+        self.threshold = settings.document.TABLE_DETECTION_THRESHOLD
+        self.max_tables = settings.document.TABLE_DETECTION_MAX_TABLES
         
         # Dossier pour les modèles
         self.models_dir = Path(settings.MODELS_DIR) / "table_detection"
@@ -57,17 +62,25 @@ class TableDetectionModel:
                     logger.warning("Mémoire insuffisante pour le GPU, utilisation du CPU")
                     self.device = torch.device("cpu")
             
-            # Chargement du processeur d'image et du modèle
-            # Utilisation de with torch.amp.autocast pour optimiser la précision/performance
+            # Chargement du processeur d'image avec configuration mise à jour
+            # Pour éviter l'avertissement "max_size" déprécié
             with torch.amp.autocast(device_type='cuda', enabled=torch.cuda.is_available()):
-                self.processor = DetrImageProcessor.from_pretrained(self.model_name)
+                self.processor = DetrImageProcessor.from_pretrained(
+                    self.model_name,
+                    size={"longest_edge": 800},  # Remplace max_size
+                    do_resize=True,
+                    do_normalize=True
+                )
                 
-                # Configuration de chargement adaptée à votre infrastructure
+                # Configuration de chargement adaptée
                 load_params = {
                     "device_map": "auto" if self.device.type == "cuda" else "cpu",
                     "torch_dtype": torch.float16 if self.device.type == "cuda" else torch.float32,
                     "local_files_only": False,
-                    "cache_dir": str(self.models_dir)
+                    "cache_dir": str(self.models_dir),
+                    # Forcer le chargement en DETR pour éviter l'avertissement de type
+                    "_from_model_config": True,
+                    "low_cpu_mem_usage": True
                 }
                 
                 self.model = DetrForObjectDetection.from_pretrained(
@@ -75,8 +88,9 @@ class TableDetectionModel:
                     **load_params
                 )
                 
-                # Mise en mode évaluation
+                # Mise en mode évaluation et désactivation du calcul de gradient
                 self.model.eval()
+                self.model.requires_grad_(False)
                 
                 # Récupération du mapping d'étiquettes
                 self.id2label = self.model.config.id2label
@@ -122,11 +136,19 @@ class TableDetectionModel:
                     pil_image = image  # Supposons que c'est déjà une PIL Image
                 
                 # Préparation de l'image pour le modèle
-                inputs = self.processor(images=pil_image, return_tensors="pt")
+                # Utilisation du size avec longest_edge au lieu de max_size
+                inputs = self.processor(
+                    images=pil_image, 
+                    return_tensors="pt",
+                    size={"longest_edge": 800},  # Correction de la dépréciation
+                    do_resize=True,
+                    do_normalize=True
+                )
+                
                 if self.device.type == "cuda":
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 
-                # Inférence
+                # Inférence avec torch.no_grad() pour économiser de la mémoire
                 with torch.no_grad():
                     outputs = self.model(**inputs)
                 
@@ -150,14 +172,19 @@ class TableDetectionModel:
                     width = x2 - x
                     height = y2 - y
                     
-                    detections.append({
-                        "x": int(x),
-                        "y": int(y),
-                        "width": int(width),
-                        "height": int(height),
-                        "label": self.id2label[label.item()],
-                        "score": float(score)
-                    })
+                    # Vérifier si le label est 'table'
+                    label_name = self.id2label.get(label.item(), "unknown")
+                    
+                    # Ne conserver que les détections de type table
+                    if label_name.lower() == 'table':
+                        detections.append({
+                            "x": int(x),
+                            "y": int(y),
+                            "width": int(width),
+                            "height": int(height),
+                            "label": label_name,
+                            "score": float(score)
+                        })
                 
                 # Trier par score et limiter le nombre
                 detections = sorted(detections, key=lambda x: x["score"], reverse=True)
@@ -177,6 +204,8 @@ class TableDetectionModel:
         """Nettoie les ressources."""
         try:
             if self.model is not None:
+                # Procédure de nettoyage explicite pour libérer la mémoire
+                self.model = self.model.to("cpu") if torch.cuda.is_available() else self.model
                 self.model = None
             
             if self.processor is not None:
@@ -186,7 +215,11 @@ class TableDetectionModel:
             if self.cuda_manager and self.device.type == "cuda":
                 self.cuda_manager.release_memory(ModelPriority.LOW)
                 
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            # Forcer la libération de la mémoire CUDA
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
             self._initialized = False
             
             logger.info("Ressources du modèle de détection nettoyées")

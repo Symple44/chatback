@@ -51,7 +51,89 @@ class TableExtractor:
         except Exception as e:
             logger.error(f"Erreur initialisation Tesseract OCR: {e}")
             logger.warning("La fonctionnalité OCR pour PDF scannés pourrait ne pas fonctionner correctement")
+    
+    async def _hybrid_table_detection(self, img: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """
+        Méthode hybride qui combine la détection par IA et les méthodes traditionnelles.
         
+        Cette approche est plus robuste car elle utilise des méthodes complémentaires
+        et fusionne les résultats.
+        
+        Args:
+            img: Image au format numpy array
+            
+        Returns:
+            Liste de coordonnées (x, y, w, h) des régions de tableau
+        """
+        try:
+            # Détection par IA
+            ai_regions = []
+            try:
+                if not hasattr(self, 'table_detector') or self.table_detector is None:
+                    from core.document_processing.table_detection import TableDetectionModel
+                    self.table_detector = TableDetectionModel()
+                    await self.table_detector.initialize()
+                    
+                ai_detections = await self.table_detector.detect_tables(img)
+                ai_regions = [(detection["x"], detection["y"], detection["width"], detection["height"]) 
+                            for detection in ai_detections]
+                logger.info(f"Détection par IA: {len(ai_regions)} tableaux détectés")
+            except Exception as e:
+                logger.warning(f"Échec de la détection par IA: {e}")
+            
+            # Détection traditionnelle
+            traditional_regions = []
+            try:
+                traditional_regions = await self._detect_table_regions(img)
+                logger.info(f"Détection traditionnelle: {len(traditional_regions)} tableaux détectés")
+            except Exception as e:
+                logger.warning(f"Échec de la détection traditionnelle: {e}")
+            
+            # Combiner les résultats en évitant les duplications
+            combined_regions = []
+            
+            # Ajouter d'abord les régions détectées par IA
+            combined_regions.extend(ai_regions)
+            
+            # Ajouter les régions traditionnelles qui ne chevauchent pas trop les régions IA
+            for trad_region in traditional_regions:
+                tx, ty, tw, th = trad_region
+                is_duplicate = False
+                
+                for ai_region in ai_regions:
+                    ax, ay, aw, ah = ai_region
+                    
+                    # Calculer le chevauchement
+                    x_overlap = max(0, min(tx + tw, ax + aw) - max(tx, ax))
+                    y_overlap = max(0, min(ty + th, ay + ah) - max(ty, ay))
+                    overlap_area = x_overlap * y_overlap
+                    
+                    # Si le chevauchement est significatif, considérer comme doublon
+                    trad_area = tw * th
+                    ai_area = aw * ah
+                    smaller_area = min(trad_area, ai_area)
+                    
+                    if overlap_area > 0.5 * smaller_area:
+                        is_duplicate = True
+                        break
+                
+                # Si ce n'est pas un doublon, l'ajouter
+                if not is_duplicate:
+                    combined_regions.append(trad_region)
+            
+            logger.info(f"Détection hybride: {len(combined_regions)} tableaux uniques détectés")
+            
+            # Si aucun tableau n'est détecté, essayer une méthode alternative
+            if not combined_regions:
+                return await self._detect_table_regions_alternate(img)
+                
+            return combined_regions
+            
+        except Exception as e:
+            logger.error(f"Erreur détection hybride des tableaux: {e}")
+            # En cas d'échec total, revenir à la méthode traditionnelle de secours
+            return await self._detect_table_regions_alternate(img)
+    
     async def _detect_table_regions_with_model(self, img: np.ndarray) -> List[Tuple[int, int, int, int]]:
         """
         Détecte les régions de tableau en utilisant le modèle de deep learning.
