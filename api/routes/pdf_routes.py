@@ -244,12 +244,13 @@ async def extract_tables_auto(
                 "force_grid": force_grid
             }
         
-        # Utiliser la méthode automatique d'extraction
-        tables = await components.table_extractor.extract_tables_auto(
+        # Extraire les tableaux avec la méthode automatique
+        tables = await components.table_extractor.extract_tables(
             file_obj,
+            pages=pages,
+            extraction_method="auto",
             output_format=output_format,
-            max_pages=None if pages == "all" else len(pages.split(",")),
-            ocr_config=ocr_config,
+            ocr_config=ocr_config
         )
         
         # Si demandé, extraire aussi les images des tableaux
@@ -320,12 +321,15 @@ async def extract_tables_auto(
         
         # Enregistrer les métriques
         metrics.finish_request_tracking(extraction_id)
-        metrics.track_search_operation(
-            method="auto",
-            success=len(tables) > 0,
-            processing_time=processing_time,
-            results_count=len(tables)
-        )
+        try:
+            metrics.track_search_operation(
+                method="auto",
+                success=len(tables) > 0,
+                processing_time=processing_time,
+                results_count=len(tables)
+            )
+        except Exception as e:
+            logger.error(f"Erreur tracking métriques: {e}")
         
         return response
         
@@ -720,15 +724,16 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
         
         start_time = datetime.utcnow()
         
-        # Extraire les tableaux avec la méthode auto
+        # Utiliser la méthode automatique d'extraction
         with open(file_path, 'rb') as f:
             file_obj = io.BytesIO(f.read())
         
-        # Utiliser la méthode automatique d'extraction
-        tables = await extractor.extract_tables_auto(
+        # Extraire les tableaux avec la méthode extract_tables et mode "auto"
+        tables = await extractor.extract_tables(
             file_obj,
+            pages=params.get("pages", "all"),
+            extraction_method="auto",
             output_format=params.get("output_format", "json"),
-            max_pages=None if params.get("pages", "all") == "all" else len(params.get("pages", "all").split(",")),
             ocr_config=ocr_config
         )
         
