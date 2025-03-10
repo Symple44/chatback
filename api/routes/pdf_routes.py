@@ -112,18 +112,21 @@ router = APIRouter(prefix="/pdf", tags=["pdf"])
 @router.post("/extract-tables-auto", response_model=Union[TableExtractionResponse, Dict[str, Any]])
 async def extract_tables_auto(
     file: UploadFile = File(...),
-    output_format: str = Form("json"),
-    pages: str = Form("all"),
-    ocr_enabled: bool = Form(False),
-    ocr_language: str = Form("fra+eng"),
-    ocr_enhance_image: bool = Form(True),
-    ocr_deskew: bool = Form(True),
-    include_images: bool = Form(False),
-    analyze: bool = Form(False),
-    search_query: Optional[str] = Form(None),
-    force_grid: bool = Form(False),
-    export_format: Optional[str] = Form(None),
-    background_processing: bool = Form(False),
+    # Format de sortie pour les données dans la réponse JSON
+    output_format: str = Form("json", description="Format des données dans la réponse JSON (json, pandas, csv, html)"),
+    pages: str = Form("all", description="Pages à analyser (all, 1,3,5-7, etc.)"),
+    ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
+    ocr_language: str = Form("fra+eng", description="Langues pour l'OCR (fra+eng, eng, etc.)"),
+    ocr_enhance_image: bool = Form(True, description="Améliorer l'image avant OCR"),
+    ocr_deskew: bool = Form(True, description="Redresser l'image avant OCR"),
+    include_images: bool = Form(False, description="Inclure les images des tableaux extraits"),
+    analyze: bool = Form(False, description="Effectuer une analyse des tableaux"),
+    search_query: Optional[str] = Form(None, description="Texte à rechercher dans les tableaux"),
+    force_grid: bool = Form(False, description="Forcer l'approche grille pour l'OCR"),
+    # Format d'export pour le téléchargement
+    download_format: Optional[str] = Form(None, description="Format à télécharger (csv, excel, json, html)"),
+    background_processing: bool = Form(False, description="Traiter en arrière-plan (pour les grands PDF)"),
+    auto_ocr: bool = Form(True, description="Activer automatiquement l'OCR si nécessaire"),
     components=Depends(get_components)
 ):
     """
@@ -134,7 +137,7 @@ async def extract_tables_auto(
     
     Args:
         file: Fichier PDF à traiter
-        output_format: Format de sortie ("json", "csv", "html", "excel", "pandas")
+        output_format: Format des données dans la réponse JSON ("json", "csv", "html", "pandas")
         pages: Pages à analyser ("all" ou numéros séparés par des virgules comme "1,3,5-7")
         ocr_enabled: Force l'OCR même pour les PDFs textuels
         ocr_language: Langues pour l'OCR (ex: "fra+eng" pour français et anglais)
@@ -144,19 +147,20 @@ async def extract_tables_auto(
         analyze: Effectue une analyse détaillée des tableaux extraits
         search_query: Recherche du texte dans les tableaux
         force_grid: Force l'extraction basée sur une grille pour l'OCR
-        export_format: Format d'export optionnel (génère un fichier à télécharger)
+        download_format: Format d'export pour le téléchargement (remplace export_format)
         background_processing: Traitement en arrière-plan pour les PDF volumineux
+        auto_ocr: Activer automatiquement l'OCR si aucun tableau n'est trouvé avec les méthodes textuelles
         
     Returns:
         Tableaux extraits avec analyse ou résultats de recherche optionnels
     """
-    # Mesure des performances
-    extraction_id = str(uuid.uuid4())
-    metrics.start_request_tracking(extraction_id)
-    metrics.increment_counter("pdf_table_extractions")
-    start_time = datetime.utcnow()
-    
     try:
+        # Mesure des performances
+        extraction_id = str(uuid.uuid4())
+        metrics.start_request_tracking(extraction_id)
+        metrics.increment_counter("pdf_table_extractions")
+        start_time = datetime.utcnow()
+        
         # Vérification du fichier
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(
@@ -184,13 +188,15 @@ async def extract_tables_auto(
                 detail=f"Format de sortie invalide. Formats supportés: {', '.join(valid_formats)}"
             )
         
-        # Validation du format d'export
-        valid_export_formats = [None, "csv", "excel", "json", "html"]
-        if export_format not in valid_export_formats:
+        # Validation du format de téléchargement
+        valid_download_formats = [None, "csv", "excel", "json", "html"]
+        if download_format not in valid_download_formats:
             raise HTTPException(
                 status_code=400,
-                detail=f"Format d'export invalide. Formats supportés: {', '.join([f for f in valid_export_formats if f])}"
+                detail=f"Format de téléchargement invalide. Formats supportés: {', '.join([f for f in valid_download_formats if f])}"
             )
+        
+        # Ensuite, utilisez download_format au lieu de export_format dans le reste du code
         
         # Vérification et traitement d'une demande de traitement en arrière-plan
         if background_processing and file_size > 5 * 1024 * 1024:  # > 5 Mo
@@ -220,7 +226,8 @@ async def extract_tables_auto(
                     "include_images": include_images,
                     "analyze": analyze,
                     "search_query": search_query,
-                    "force_grid": force_grid
+                    "force_grid": force_grid,
+                    "auto_ocr": auto_ocr
                 }
             )
             
@@ -282,6 +289,28 @@ async def extract_tables_auto(
                 "psm": 6,
                 "force_grid": force_grid
             }
+            
+        # Détection si le PDF est scanné
+        is_scanned = False
+        if auto_ocr and not ocr_enabled:
+            is_scanned, confidence = await components.table_extractor._is_scanned_pdf(file_obj, pages)
+            logger.info(f"Détection automatique du type de PDF: {'scanné' if is_scanned else 'textuel'} (confiance: {confidence:.2f})")
+            
+            # Activer automatiquement l'OCR si le PDF est scanné
+            if is_scanned and confidence > 0.7:
+                ocr_enabled = True
+                ocr_config = {
+                    "lang": ocr_language,
+                    "enhance_image": ocr_enhance_image,
+                    "deskew": ocr_deskew,
+                    "preprocess_type": "thresh",
+                    "psm": 6,
+                    "force_grid": force_grid
+                }
+                logger.info("OCR activé automatiquement pour PDF scanné")
+                
+        # Remise du curseur au début du fichier si nécessaire
+        file_obj.seek(0)
         
         # Extraire les tableaux avec la méthode automatique
         tables = await components.table_extractor.extract_tables(
@@ -291,6 +320,27 @@ async def extract_tables_auto(
             output_format=output_format,
             ocr_config=ocr_config
         )
+        
+        # Essayer avec OCR si aucun tableau trouvé et auto_ocr activé
+        if not tables and auto_ocr and not ocr_enabled:
+            logger.info("Aucun tableau trouvé, nouvel essai avec OCR")
+            ocr_config = {
+                "lang": ocr_language,
+                "enhance_image": ocr_enhance_image,
+                "deskew": ocr_deskew,
+                "preprocess_type": "thresh",
+                "psm": 6,
+                "force_grid": force_grid
+            }
+            file_obj.seek(0)
+            tables = await components.table_extractor.extract_tables(
+                file_obj,
+                pages=pages,
+                extraction_method="ocr",
+                output_format=output_format,
+                ocr_config=ocr_config
+            )
+            ocr_enabled = True
         
         # Si demandé, extraire aussi les images des tableaux
         table_images = []
@@ -318,9 +368,9 @@ async def extract_tables_auto(
                 # Pour les formats autres que pandas, convertir d'abord
                 analysis_results = {"error": "L'analyse détaillée nécessite output_format='pandas'"}
         
-        # Si export_format est spécifié, générer le fichier d'export
-        if export_format and tables:
-            export_result = await export_tables(tables, export_format, file.filename)
+        # Si download_format est spécifié, générer le fichier à télécharger
+        if download_format and tables:
+            export_result = await export_tables(tables, download_format, file.filename)
             if export_result.get("download_url"):
                 return StreamingResponse(
                     io.BytesIO(export_result["content"]),
@@ -354,6 +404,10 @@ async def extract_tables_auto(
             status="completed",
             message="Extraction réussie"
         )
+        
+        # Message informatif si PDF scanné mais OCR non activé initialement
+        if is_scanned and not tables and not ocr_enabled:
+            response.message = "Aucun tableau trouvé. Ce document semble être scanné, l'activation de l'OCR pourrait donner de meilleurs résultats."
         
         # Mettre en cache si possible
         if cache_key and hasattr(components, 'cache_manager'):
@@ -610,15 +664,29 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
     """
     try:
         import pandas as pd
+        import numpy as np
         from io import BytesIO
         
         # Créer le répertoire d'export s'il n'existe pas
         export_dir = os.path.join("temp", "pdf_exports")
         os.makedirs(export_dir, exist_ok=True)
-
-         # Vérifier le format
-        if format not in ["csv", "excel", "json", "html"]:
-            raise ValueError(f"Format non supporté: {format}")
+        
+        # Fonction pour convertir les objets non-JSON-sérialisables
+        def json_serializable(obj):
+            if isinstance(obj, (pd.Series, pd.Index)):
+                return obj.tolist()
+            elif isinstance(obj, pd.DataFrame):
+                return obj.to_dict(orient="records")
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif pd.isna(obj):
+                return None
+            else:
+                return str(obj)
         
         if format == "excel":
             output = BytesIO()
@@ -632,6 +700,9 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
                         df = table_data["data"]
                     else:
                         df = pd.DataFrame(table_data["data"])
+                    
+                    # Remplacer les NaN par None pour éviter les problèmes d'exportation
+                    df = df.replace({np.nan: None})
                     
                     sheet_name = f"Table_{i+1}"
                     if len(sheet_name) > 31:  # Excel limite le nom des feuilles à 31 caractères
@@ -679,6 +750,9 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
                     else:
                         df = pd.DataFrame(table_data["data"])
                     
+                    # Remplacer les NaN par None
+                    df = df.replace({np.nan: None})
+                    
                     # Créer un CSV en mémoire
                     csv_buffer = BytesIO()
                     df.to_csv(csv_buffer, index=False)
@@ -709,22 +783,32 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
                 if "data" not in table_data:
                     continue
                     
+                # Préparation des données pour la sérialisation JSON
+                table_result = {
+                    "table_id": i + 1,
+                    "page": table_data.get("page", i + 1),
+                }
+                
                 # Convertir en DataFrame si nécessaire
                 if isinstance(table_data["data"], pd.DataFrame):
                     df = table_data["data"]
-                    table_json = df.replace({pd.NA: None}).to_dict(orient="records")
+                    # Convertir le DataFrame en dictionnaire en remplaçant NaN par None
+                    records = df.replace({np.nan: None}).to_dict(orient="records")
+                    table_result["rows"] = len(records)
+                    table_result["columns"] = len(df.columns)
+                    table_result["data"] = records
                 else:
-                    table_json = table_data["data"]
+                    # Déjà sous forme de liste ou dictionnaire
+                    data = table_data["data"]
+                    table_result["rows"] = len(data) if isinstance(data, list) else 0
+                    table_result["columns"] = len(data[0]) if isinstance(data, list) and len(data) > 0 else 0
+                    table_result["data"] = data
                 
-                result.append({
-                    "table_id": i + 1,
-                    "page": table_data.get("page", i + 1),
-                    "rows": len(table_json) if isinstance(table_json, list) else 0,
-                    "columns": len(table_json[0]) if isinstance(table_json, list) and len(table_json) > 0 else 0,
-                    "data": table_json
-                })
+                result.append(table_result)
             
-            json_str = json.dumps(result, indent=2)
+            # Utiliser json.dumps avec un convertisseur personnalisé
+            import json
+            json_str = json.dumps(result, default=json_serializable, indent=2)
             output.write(json_str.encode('utf-8'))
             output.seek(0)
             export_filename = f"{os.path.splitext(filename)[0]}_tables.json"
@@ -765,9 +849,12 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
                 # Convertir en DataFrame si nécessaire
                 if isinstance(table_data["data"], pd.DataFrame):
                     df = table_data["data"]
+                    # Remplacer les NaN par des chaînes vides pour l'affichage HTML
+                    df = df.fillna("")
                     table_html = df.to_html(index=False, classes='data-table', border=1)
                 else:
                     df = pd.DataFrame(table_data["data"])
+                    df = df.fillna("")
                     table_html = df.to_html(index=False, classes='data-table', border=1)
                 
                 html_content += f"<h2>Tableau {i+1} (Page {table_data.get('page', 'N/A')})</h2>{table_html}"
@@ -791,15 +878,8 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
         else:
             raise ValueError(f"Format non supporté: {format}")
     
-    except ValueError as e:
-        # Remonter l'erreur de format
-        logger.error(f"Erreur format d'export invalide: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Format d'export invalide: {str(e)}"
-        )
     except Exception as e:
-        logger.error(f"Erreur export: {e}")
+        logger.error(f"Erreur export: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Erreur lors de l'export: {str(e)}"
