@@ -1496,28 +1496,44 @@ class TableExtractor:
         for i, table in enumerate(tables):
             table_data = {"table_id": i+1, "rows": len(table), "columns": len(table.columns)}
             
-            if output_format == "pandas":
-                table_data["data"] = table
-            elif output_format == "csv":
-                table_data["data"] = table.to_csv(index=False)
-            elif output_format == "json":
-                # Gérer les types non sérialisables
-                table_data["data"] = json.loads(
-                    table.replace({np.nan: None}).to_json(orient="records")
-                )
-            elif output_format == "html":
-                table_data["data"] = table.to_html(index=False, na_rep="")
-            elif output_format == "excel":
-                buffer = BytesIO()
-                table.to_excel(buffer, index=False)
-                buffer.seek(0)
-                table_data["data"] = base64.b64encode(buffer.read()).decode("utf-8")
-                table_data["format"] = "base64"
-                buffer.close()
-            else:
-                table_data["data"] = table.to_dict(orient="records")
-            
-            result.append(table_data)
+            try:
+                # Vérifier et corriger les colonnes dupliquées
+                if output_format in ["json", "dict"] and not table.columns.is_unique:
+                    # Renommer les colonnes dupliquées
+                    table = table.copy()
+                    table.columns = [f"{col}_{j}" if j > 0 else col 
+                                    for j, col in enumerate(pd.Series(table.columns).groupby(table.columns).cumcount())]
+                    logger.info(f"Correction des colonnes dupliquées dans le tableau {i+1}")
+                
+                if output_format == "pandas":
+                    table_data["data"] = table
+                elif output_format == "csv":
+                    table_data["data"] = table.to_csv(index=False)
+                elif output_format == "json":
+                    # Gérer les types non sérialisables
+                    table_data["data"] = json.loads(
+                        table.replace({np.nan: None}).to_json(orient="records")
+                    )
+                elif output_format == "html":
+                    table_data["data"] = table.to_html(index=False, na_rep="")
+                elif output_format == "excel":
+                    buffer = BytesIO()
+                    table.to_excel(buffer, index=False)
+                    buffer.seek(0)
+                    table_data["data"] = base64.b64encode(buffer.read()).decode("utf-8")
+                    table_data["format"] = "base64"
+                    buffer.close()
+                else:
+                    table_data["data"] = table.to_dict(orient="records")
+                
+                result.append(table_data)
+                
+            except Exception as e:
+                logger.error(f"Erreur conversion tableau {i+1}: {e}")
+                # Ajouter une structure vide mais valide pour ne pas casser le flux
+                table_data["data"] = [] if output_format in ["json", "dict"] else ""
+                table_data["error"] = str(e)
+                result.append(table_data)
         
         return result
     
