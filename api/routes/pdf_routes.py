@@ -2,6 +2,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from typing import List, Optional, Dict, Any, Union
+from pydantic import BaseModel, Field
 import io
 from datetime import datetime
 import uuid
@@ -12,11 +13,88 @@ import json
 import asyncio
 
 from ..dependencies import get_components
-from ..models.responses import ErrorResponse, TableExtractionResponse
+from ..models.responses import ErrorResponse
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
-from core.utils.pdf_table_utils import save_tables_to_file, analyze_tables
+
+# Modèles de données pour les réponses
+class TableData(BaseModel):
+    table_id: int = Field(..., description="Identifiant unique du tableau")
+    page: Optional[int] = Field(None, description="Numéro de page du tableau")
+    rows: int = Field(..., description="Nombre de lignes")
+    columns: int = Field(..., description="Nombre de colonnes")
+    data: Any = Field(..., description="Contenu du tableau dans le format spécifié")
+    extraction_method: Optional[str] = Field(None, description="Méthode utilisée pour extraire ce tableau")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Score de confiance de l'extraction")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Métadonnées supplémentaires")
+
+class ImageData(BaseModel):
+    data: str = Field(..., description="Image encodée en base64")
+    mime_type: str = Field(..., description="Type MIME de l'image")
+    width: Optional[int] = Field(None, description="Largeur de l'image")
+    height: Optional[int] = Field(None, description="Hauteur de l'image")
+    page: Optional[int] = Field(None, description="Numéro de page")
+    table_id: Optional[int] = Field(None, description="ID du tableau associé")
+
+class SearchMatch(BaseModel):
+    row: int = Field(..., description="Numéro de ligne")
+    column: str = Field(..., description="Nom de colonne")
+    value: str = Field(..., description="Valeur correspondante")
+
+class SearchTableResult(BaseModel):
+    table_id: int = Field(..., description="ID du tableau")
+    page: Optional[int] = Field(None, description="Numéro de page")
+    matches_count: int = Field(..., description="Nombre de correspondances")
+    matches: List[SearchMatch] = Field(..., description="Détails des correspondances")
+
+class SearchResult(BaseModel):
+    query: str = Field(..., description="Requête de recherche")
+    total_matches: int = Field(..., description="Nombre total de correspondances")
+    matching_tables: int = Field(..., description="Nombre de tableaux contenant des correspondances")
+    results: List[SearchTableResult] = Field(..., description="Résultats par tableau")
+
+class TableExtractionResponse(BaseModel):
+    extraction_id: str = Field(..., description="Identifiant unique de l'extraction")
+    filename: str = Field(..., description="Nom du fichier traité")
+    file_size: int = Field(..., description="Taille du fichier en octets")
+    tables_count: int = Field(..., description="Nombre de tableaux extraits")
+    processing_time: float = Field(..., description="Temps de traitement en secondes")
+    tables: List[Dict[str, Any]] = Field(default=[], description="Tableaux extraits")
+    extraction_method_used: str = Field(..., description="Méthode d'extraction utilisée")
+    ocr_used: bool = Field(default=False, description="OCR utilisé pour l'extraction")
+    images: Optional[List[Dict[str, Any]]] = Field(None, description="Images des tableaux extraits")
+    search_results: Optional[SearchResult] = Field(None, description="Résultats de recherche")
+    analysis: Optional[Dict[str, Any]] = Field(None, description="Analyse des tableaux")
+    status: Optional[str] = Field(None, description="Statut de l'extraction")
+    message: Optional[str] = Field(None, description="Message d'information")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "extraction_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                "filename": "document.pdf",
+                "file_size": 1256437,
+                "tables_count": 3,
+                "processing_time": 2.45,
+                "tables": [
+                    {
+                        "table_id": 1,
+                        "page": 1,
+                        "rows": 5,
+                        "columns": 3,
+                        "data": [
+                            {"col1": "val1", "col2": "val2", "col3": "val3"},
+                            {"col1": "val4", "col2": "val5", "col3": "val6"}
+                        ],
+                        "extraction_method": "auto",
+                        "confidence": 0.95
+                    }
+                ],
+                "extraction_method_used": "auto",
+                "ocr_used": false
+            }
+        }
 
 logger = get_logger("pdf_routes")
 router = APIRouter(prefix="/pdf", tags=["pdf"])
@@ -194,7 +272,7 @@ async def extract_tables_auto(
         analysis_results = None
         if analyze and tables:
             if output_format == "pandas":
-                analysis_results = analyze_tables([table["data"] for table in tables if "data" in table])
+                analysis_results = analyze_pandas_tables([table["data"] for table in tables if "data" in table])
             else:
                 # Pour les formats autres que pandas, convertir d'abord
                 analysis_results = {"error": "L'analyse détaillée nécessite output_format='pandas'"}
@@ -526,6 +604,92 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
             status_code=500,
             detail=f"Erreur lors de l'export: {str(e)}"
         )
+
+# Fonction d'analyse de tableaux pandas
+def analyze_pandas_tables(tables: List[Any]) -> Dict[str, Any]:
+    """
+    Analyse une liste de tables pandas pour produire des statistiques.
+    
+    Args:
+        tables: Liste de DataFrames pandas
+        
+    Returns:
+        Dictionnaire contenant des statistiques et métriques sur les tableaux
+    """
+    try:
+        import pandas as pd
+        import numpy as np
+        
+        if not tables or len(tables) == 0:
+            return {"error": "Aucun tableau à analyser"}
+        
+        result = {
+            "table_count": len(tables),
+            "tables": []
+        }
+        
+        total_rows = 0
+        total_cols = 0
+        total_cells = 0
+        non_null_cells = 0
+        
+        for i, df in enumerate(tables):
+            if not isinstance(df, pd.DataFrame):
+                continue
+                
+            # Statistiques par tableau
+            rows = len(df)
+            cols = len(df.columns)
+            cells = rows * cols
+            non_null = df.count().sum()
+            null_percentage = ((cells - non_null) / cells * 100) if cells > 0 else 0
+            
+            # Types de données
+            dtypes = df.dtypes.astype(str).to_dict()
+            numeric_cols = len(df.select_dtypes(include=[np.number]).columns)
+            
+            # Statistiques numériques de base
+            numeric_stats = {}
+            for col in df.select_dtypes(include=[np.number]).columns:
+                numeric_stats[str(col)] = {
+                    "min": float(df[col].min()) if not pd.isna(df[col].min()) else None,
+                    "max": float(df[col].max()) if not pd.isna(df[col].max()) else None,
+                    "mean": float(df[col].mean()) if not pd.isna(df[col].mean()) else None,
+                    "median": float(df[col].median()) if not pd.isna(df[col].median()) else None
+                }
+            
+            # Ajouter aux totaux
+            total_rows += rows
+            total_cols += cols
+            total_cells += cells
+            non_null_cells += non_null
+            
+            # Résultats pour ce tableau
+            table_result = {
+                "table_id": i + 1,
+                "rows": rows,
+                "columns": cols,
+                "column_names": list(df.columns),
+                "null_percentage": round(null_percentage, 2),
+                "dtypes": {str(k): v for k, v in dtypes.items()},
+                "numeric_columns_count": numeric_cols,
+                "numeric_stats": numeric_stats
+            }
+            
+            result["tables"].append(table_result)
+        
+        # Statistiques globales
+        result["total_rows"] = total_rows
+        result["total_columns"] = total_cols
+        result["average_row_count"] = round(total_rows / len(tables), 2) if len(tables) > 0 else 0
+        result["total_cells"] = total_cells
+        result["null_percentage"] = round(((total_cells - non_null_cells) / total_cells * 100), 2) if total_cells > 0 else 0
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Erreur analyse tableaux: {e}")
+        return {"error": str(e)}
 
 async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[str, Any]):
     """
