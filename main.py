@@ -28,7 +28,9 @@ from core.utils.system_optimizer import SystemOptimizer
 from core.database.manager import DatabaseManager
 from core.database.base import get_session_manager
 from core.database.session_manager import SessionManager
-from core.cache import RedisCache
+
+# Importation de la nouvelle structure de cache
+from core.cache import redis_cache, cache_manager, MemoryCache, FileCache, CacheManager
 from core.vectorstore import ElasticsearchClient
 from core.llm.auth_manager import HuggingFaceAuthManager
 from core.llm.model_manager import ModelManager
@@ -97,11 +99,26 @@ class ComponentManager:
                 self._components["session_manager"] = SessionManager(settings.db.get_database_url())
                 logger.info("Session manager initialisé")
 
-                # Cache Redis
-                cache = RedisCache()
-                await cache.initialize()
-                self._components["cache"] = cache
+                # Cache Redis - Utilisation de la nouvelle structure
+                await redis_cache.initialize()
+                self._components["redis_cache"] = redis_cache
                 logger.info("Cache Redis initialisé")
+                
+                # Cache Manager multi-niveaux - Nouveau
+                await cache_manager.initialize()
+                self._components["cache_manager"] = cache_manager
+                logger.info("Cache Manager multi-niveaux initialisé")
+                
+                # Caches spécialisés pour différents usages
+                pdf_cache = CacheManager(redis_cache=redis_cache, namespace="pdf_extraction")
+                await pdf_cache.initialize()
+                self._components["pdf_cache"] = pdf_cache
+                logger.info("Cache PDF initialisé")
+                
+                models_cache = CacheManager(redis_cache=redis_cache, namespace="models")
+                await models_cache.initialize()
+                self._components["models_cache"] = models_cache
+                logger.info("Cache modèles initialisé")
 
                 # Elasticsearch
                 es_client = ElasticsearchClient()
@@ -159,7 +176,7 @@ class ComponentManager:
 
                 # SearchManager
                 search_manager = SearchManager(self)
-                self._components["search_manager"] = search_manager  # 
+                self._components["search_manager"] = search_manager
                 logger.info("Search Manager initialisé")
 
                 # Document Processing
@@ -243,8 +260,9 @@ class ComponentManager:
             cleanup_order = [
                 "search_manager", "doc_extractor", "pdf_processor", "table_detector",
                 "model", "summarizer", "embedding_manager", "model_manager", 
-                "model_loader", "tokenizer_manager", "cuda_manager",
-                "auth_manager", "es_client", "cache", "db", "session_manager"
+                "model_loader", "tokenizer_manager", "cuda_manager", "auth_manager", 
+                "es_client", "pdf_cache", "models_cache", "cache_manager", "redis_cache", 
+                "db", "session_manager"
             ]
             
             # Nettoyer les composants dans l'ordre spécifié
