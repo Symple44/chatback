@@ -11,6 +11,7 @@ import os
 import shutil
 import json
 import asyncio
+import traceback
 
 from ..dependencies import get_components
 from ..models.responses import ErrorResponse
@@ -66,7 +67,7 @@ class TableExtractionResponse(BaseModel):
     images: Optional[List[Dict[str, Any]]] = Field(None, description="Images des tableaux extraits")
     search_results: Optional[SearchResult] = Field(None, description="Résultats de recherche")
     analysis: Optional[Dict[str, Any]] = Field(None, description="Analyse des tableaux")
-    status: Optional[str] = Field(None, description="Statut de l'extraction")
+    status: str = Field(default="completed", description="Statut de l'extraction")
     message: Optional[str] = Field(None, description="Message d'information")
 
     model_config = {
@@ -92,15 +93,23 @@ class TableExtractionResponse(BaseModel):
                     }
                 ],
                 "extraction_method_used": "auto",
-                "ocr_used": False
+                "ocr_used": False,
+                "status": "completed"
             }
         }
     }
 
+class TaskStatus(BaseModel):
+    task_id: str = Field(..., description="Identifiant de la tâche")
+    status: str = Field(..., description="Statut de la tâche (processing, completed, error)")
+    message: str = Field(..., description="Message informatif")
+    results: Optional[Dict[str, Any]] = Field(None, description="Résultats de la tâche si terminée")
+    progress: Optional[float] = Field(None, description="Pourcentage de progression (0-100)")
+
 logger = get_logger("pdf_routes")
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
-@router.post("/extract-tables-auto", response_model=TableExtractionResponse)
+@router.post("/extract-tables-auto", response_model=Union[TableExtractionResponse, Dict[str, Any]])
 async def extract_tables_auto(
     file: UploadFile = File(...),
     output_format: str = Form("json"),
@@ -141,13 +150,13 @@ async def extract_tables_auto(
     Returns:
         Tableaux extraits avec analyse ou résultats de recherche optionnels
     """
+    # Mesure des performances
+    extraction_id = str(uuid.uuid4())
+    metrics.start_request_tracking(extraction_id)
+    metrics.increment_counter("pdf_table_extractions")
+    start_time = datetime.utcnow()
+    
     try:
-        # Mesure des performances
-        extraction_id = str(uuid.uuid4())
-        metrics.start_request_tracking(extraction_id)
-        metrics.increment_counter("pdf_table_extractions")
-        start_time = datetime.utcnow()
-        
         # Vérification du fichier
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(
@@ -167,8 +176,16 @@ async def extract_tables_auto(
                 detail=f"Fichier trop volumineux. Taille maximum: 50 Mo"
             )
         
+        # Vérification des paramètres
+        valid_formats = ["json", "csv", "html", "excel", "pandas"]
+        if output_format not in valid_formats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Format de sortie invalide. Formats supportés: {', '.join(valid_formats)}"
+            )
+        
         # Vérification et traitement d'une demande de traitement en arrière-plan
-        if background_processing and file_size > 10 * 1024 * 1024:  # > 10 Mo
+        if background_processing and file_size > 5 * 1024 * 1024:  # > 5 Mo
             # Enregistrer le fichier temporaire et démarrer le traitement en arrière-plan
             task_id = str(uuid.uuid4())
             temp_dir = os.path.join("temp", "pdf_tasks")
@@ -184,6 +201,7 @@ async def extract_tables_auto(
                 process_pdf_in_background,
                 task_id=task_id,
                 file_path=temp_path,
+                original_filename=file.filename,
                 params={
                     "output_format": output_format,
                     "pages": pages,
@@ -203,14 +221,17 @@ async def extract_tables_auto(
                     "task_id": task_id,
                     "status": "processing",
                     "message": "Traitement démarré en arrière-plan, veuillez vérifier le statut ultérieurement",
-                    "check_status_url": f"/api/pdf/task-status/{task_id}"
+                    "check_status_url": f"/api/pdf/task-status/{task_id}",
+                    "extraction_id": extraction_id,
+                    "filename": file.filename,
+                    "file_size": file_size
                 },
                 background=background_tasks
             )
         
         # Vérification du cache
         cache_key = None
-        if hasattr(components, 'cache'):
+        if hasattr(components, 'cache_manager'):
             import hashlib
             # Créer une clé unique basée sur le contenu du fichier et les paramètres
             params_str = f"{pages}:{ocr_enabled}:{ocr_language}:{output_format}:{force_grid}"
@@ -218,7 +239,7 @@ async def extract_tables_auto(
             cache_key = f"pdf:tables:{file_hash}:{params_str}"
             
             # Vérifier si les résultats sont en cache
-            cached_results = await components.cache.get(cache_key)
+            cached_results = await components.cache_manager.get(cache_key)
             if cached_results:
                 logger.info(f"Résultats d'extraction trouvés en cache: {file.filename}")
                 metrics.track_cache_operation(hit=True)
@@ -230,7 +251,16 @@ async def extract_tables_auto(
         # Initialiser l'extracteur de tableaux s'il n'est pas déjà présent
         if not hasattr(components, 'table_extractor'):
             from core.document_processing.table_extractor import TableExtractor
-            components._components["table_extractor"] = TableExtractor()
+            
+            # Vérifier si le détecteur de tableaux est disponible
+            table_detector = None
+            if hasattr(components, 'table_detector'):
+                table_detector = components.table_detector
+            
+            components._components["table_extractor"] = TableExtractor(
+                cache_enabled=True,
+                table_detector=table_detector
+            )
             logger.info("Extracteur de tableaux initialisé")
         
         # Configuration OCR si activée
@@ -241,6 +271,7 @@ async def extract_tables_auto(
                 "enhance_image": ocr_enhance_image,
                 "deskew": ocr_deskew,
                 "preprocess_type": "thresh",
+                "psm": 6,
                 "force_grid": force_grid
             }
         
@@ -292,44 +323,43 @@ async def extract_tables_auto(
         # Calcul du temps de traitement
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
+        # Extraction de la méthode utilisée
+        extraction_method_used = "auto"
+        for table in tables:
+            if table.get("extraction_method"):
+                extraction_method_used = table.get("extraction_method")
+                break
+        
         # Préparation de la réponse
-        response = {
-            "extraction_id": extraction_id,
-            "filename": file.filename,
-            "file_size": file_size,
-            "tables_count": len(tables),
-            "processing_time": processing_time,
-            "tables": tables,
-            "extraction_method_used": "auto",
-            "ocr_used": ocr_enabled
-        }
-        
-        # Ajouter les résultats supplémentaires si disponibles
-        if include_images:
-            response["images"] = table_images
-        
-        if search_results:
-            response["search_results"] = search_results
-        
-        if analysis_results:
-            response["analysis"] = analysis_results
+        response = TableExtractionResponse(
+            extraction_id=extraction_id,
+            filename=file.filename,
+            file_size=file_size,
+            tables_count=len(tables),
+            processing_time=processing_time,
+            tables=tables,
+            extraction_method_used=extraction_method_used,
+            ocr_used=ocr_enabled,
+            images=table_images if include_images else None,
+            search_results=search_results,
+            analysis=analysis_results,
+            status="completed",
+            message="Extraction réussie"
+        )
         
         # Mettre en cache si possible
-        if cache_key and hasattr(components, 'cache'):
+        if cache_key and hasattr(components, 'cache_manager'):
             # Stocker en cache pendant 1 heure (3600 secondes)
-            await components.cache.set(cache_key, json.dumps(response), 3600)
+            await components.cache_manager.set(cache_key, json.dumps(response.model_dump()), 3600)
         
         # Enregistrer les métriques
         metrics.finish_request_tracking(extraction_id)
-        try:
-            metrics.track_search_operation(
-                method="auto",
-                success=len(tables) > 0,
-                processing_time=processing_time,
-                results_count=len(tables)
-            )
-        except Exception as e:
-            logger.error(f"Erreur tracking métriques: {e}")
+        metrics.track_search_operation(
+            method=extraction_method_used,
+            success=len(tables) > 0,
+            processing_time=processing_time,
+            results_count=len(tables)
+        )
         
         return response
         
@@ -337,17 +367,32 @@ async def extract_tables_auto(
         metrics.increment_counter("pdf_extraction_errors")
         raise
     except Exception as e:
-        logger.error(f"Erreur extraction tableaux: {e}", exc_info=True)
+        # Enregistrer l'erreur complète
+        logger.error(f"Erreur extraction tableaux: {str(e)}", exc_info=True)
         metrics.increment_counter("pdf_extraction_errors")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de l'extraction des tableaux: {str(e)}"
+        
+        # Calculer le temps de traitement même en cas d'erreur
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        metrics.finish_request_tracking(extraction_id)
+        
+        # Retourner une réponse d'erreur structurée
+        return TableExtractionResponse(
+            extraction_id=extraction_id,
+            filename=file.filename if file else "unknown",
+            file_size=file_size if 'file_size' in locals() else 0,
+            tables_count=0,
+            processing_time=processing_time,
+            tables=[],
+            extraction_method_used="auto",
+            ocr_used=ocr_enabled,
+            status="error",
+            message=f"Erreur lors de l'extraction des tableaux: {str(e)}"
         )
     finally:
         # Nettoyage
         await file.close()
 
-@router.get("/task-status/{task_id}")
+@router.get("/task-status/{task_id}", response_model=TaskStatus)
 async def get_task_status(task_id: str):
     """
     Vérifie le statut d'une tâche d'extraction en arrière-plan.
@@ -360,24 +405,46 @@ async def get_task_status(task_id: str):
     """
     try:
         result_path = os.path.join("temp", "pdf_tasks", f"{task_id}_result.json")
+        progress_path = os.path.join("temp", "pdf_tasks", f"{task_id}_progress.json")
+        
+        # Vérifier si la tâche est terminée
         if os.path.exists(result_path):
             with open(result_path, "r") as f:
                 result = json.load(f)
-            return result
+            return TaskStatus(
+                task_id=task_id,
+                status=result.get("status", "completed"),
+                message=result.get("message", "Traitement terminé"),
+                results=result,
+                progress=100.0
+            )
+        
+        # Vérifier la progression si disponible
+        if os.path.exists(progress_path):
+            with open(progress_path, "r") as f:
+                progress_data = json.load(f)
+            return TaskStatus(
+                task_id=task_id,
+                status="processing",
+                message=progress_data.get("message", "Traitement en cours"),
+                progress=progress_data.get("progress", 0.0)
+            )
         
         # Vérifier si la tâche est en cours
         if os.path.exists(os.path.join("temp", "pdf_tasks", f"{task_id}.pdf")):
-            return {
-                "task_id": task_id,
-                "status": "processing",
-                "message": "Traitement en cours"
-            }
+            return TaskStatus(
+                task_id=task_id,
+                status="processing",
+                message="Traitement en cours",
+                progress=0.0
+            )
         
-        return {
-            "task_id": task_id,
-            "status": "not_found",
-            "message": "Tâche non trouvée"
-        }
+        return TaskStatus(
+            task_id=task_id,
+            status="not_found",
+            message="Tâche non trouvée",
+            progress=None
+        )
     except Exception as e:
         logger.error(f"Erreur vérification statut tâche: {e}")
         raise HTTPException(
@@ -385,9 +452,59 @@ async def get_task_status(task_id: str):
             detail=f"Erreur lors de la vérification du statut: {str(e)}"
         )
 
+@router.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Télécharge un fichier généré.
+    
+    Args:
+        filename: Nom du fichier à télécharger
+        
+    Returns:
+        Fichier à télécharger
+    """
+    try:
+        file_path = os.path.join("temp", "pdf_exports", filename)
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fichier non trouvé: {filename}"
+            )
+        
+        # Déterminer le type MIME
+        media_type = "application/octet-stream"
+        if filename.endswith(".xlsx"):
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        elif filename.endswith(".csv"):
+            media_type = "text/csv"
+        elif filename.endswith(".json"):
+            media_type = "application/json"
+        elif filename.endswith(".html"):
+            media_type = "text/html"
+        elif filename.endswith(".zip"):
+            media_type = "application/zip"
+        
+        # Lire le fichier et le retourner
+        with open(file_path, "rb") as f:
+            content = f.read()
+        
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur téléchargement fichier: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors du téléchargement: {str(e)}"
+        )
+
 # Fonctions auxiliaires
 
-async def search_in_tables(tables, query: str) -> Dict[str, Any]:
+async def search_in_tables(tables: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
     """
     Recherche un texte dans les tableaux.
     
@@ -445,14 +562,14 @@ async def search_in_tables(tables, query: str) -> Dict[str, Any]:
             })
             total_matches += len(matches)
     
-    return {
-        "query": query,
-        "total_matches": total_matches,
-        "matching_tables": len(results),
-        "results": results
-    }
+    return SearchResult(
+        query=query,
+        total_matches=total_matches,
+        matching_tables=len(results),
+        results=results
+    ).model_dump()
 
-async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
+async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str) -> Dict[str, Any]:
     """
     Exporte les tableaux dans un format spécifique.
     
@@ -467,6 +584,10 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
     try:
         import pandas as pd
         from io import BytesIO
+        
+        # Créer le répertoire d'export s'il n'existe pas
+        export_dir = os.path.join("temp", "pdf_exports")
+        os.makedirs(export_dir, exist_ok=True)
         
         if format == "excel":
             output = BytesIO()
@@ -500,6 +621,11 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
             
             output.seek(0)
             export_filename = f"{os.path.splitext(filename)[0]}_tables.xlsx"
+            export_path = os.path.join(export_dir, export_filename)
+            
+            # Sauvegarder le fichier
+            with open(export_path, "wb") as f:
+                f.write(output.getvalue())
             
             return {
                 "content": output.getvalue(),
@@ -532,6 +658,11 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
             
             output.seek(0)
             export_filename = f"{os.path.splitext(filename)[0]}_tables.zip"
+            export_path = os.path.join(export_dir, export_filename)
+            
+            # Sauvegarder le fichier
+            with open(export_path, "wb") as f:
+                f.write(output.getvalue())
             
             return {
                 "content": output.getvalue(),
@@ -550,20 +681,27 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
                 # Convertir en DataFrame si nécessaire
                 if isinstance(table_data["data"], pd.DataFrame):
                     df = table_data["data"]
-                    table_json = json.loads(df.replace({pd.NA: None}).to_json(orient="records"))
+                    table_json = df.replace({pd.NA: None}).to_dict(orient="records")
                 else:
                     table_json = table_data["data"]
                 
                 result.append({
                     "table_id": i + 1,
-                    "rows": len(table_json),
-                    "columns": len(table_json[0]) if table_json and len(table_json) > 0 else 0,
+                    "page": table_data.get("page", i + 1),
+                    "rows": len(table_json) if isinstance(table_json, list) else 0,
+                    "columns": len(table_json[0]) if isinstance(table_json, list) and len(table_json) > 0 else 0,
                     "data": table_json
                 })
             
-            output.write(json.dumps(result, indent=2).encode('utf-8'))
+            json_str = json.dumps(result, indent=2)
+            output.write(json_str.encode('utf-8'))
             output.seek(0)
             export_filename = f"{os.path.splitext(filename)[0]}_tables.json"
+            export_path = os.path.join(export_dir, export_filename)
+            
+            # Sauvegarder le fichier
+            with open(export_path, "wb") as f:
+                f.write(output.getvalue())
             
             return {
                 "content": output.getvalue(),
@@ -573,7 +711,21 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
             }
         elif format == "html":
             output = BytesIO()
-            html_content = "<html><head><style>table {border-collapse: collapse; width: 100%;} th, td {border: 1px solid #ddd; padding: 8px;}</style></head><body>"
+            html_content = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tables Export</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        h2 { color: #333; }
+    </style>
+</head>
+<body>
+"""
             
             for i, table_data in enumerate(tables):
                 if "data" not in table_data:
@@ -582,17 +734,22 @@ async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
                 # Convertir en DataFrame si nécessaire
                 if isinstance(table_data["data"], pd.DataFrame):
                     df = table_data["data"]
-                    table_html = df.to_html(index=False)
+                    table_html = df.to_html(index=False, classes='data-table', border=1)
                 else:
                     df = pd.DataFrame(table_data["data"])
-                    table_html = df.to_html(index=False)
+                    table_html = df.to_html(index=False, classes='data-table', border=1)
                 
-                html_content += f"<h2>Tableau {i+1}</h2>{table_html}"
+                html_content += f"<h2>Tableau {i+1} (Page {table_data.get('page', 'N/A')})</h2>{table_html}"
             
             html_content += "</body></html>"
             output.write(html_content.encode('utf-8'))
             output.seek(0)
             export_filename = f"{os.path.splitext(filename)[0]}_tables.html"
+            export_path = os.path.join(export_dir, export_filename)
+            
+            # Sauvegarder le fichier
+            with open(export_path, "wb") as f:
+                f.write(output.getvalue())
             
             return {
                 "content": output.getvalue(),
@@ -651,11 +808,13 @@ def analyze_pandas_tables(tables: List[Any]) -> Dict[str, Any]:
             
             # Types de données
             dtypes = df.dtypes.astype(str).to_dict()
-            numeric_cols = len(df.select_dtypes(include=[np.number]).columns)
+            
+            # Détection de colonnes numériques
+            numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
             
             # Statistiques numériques de base
             numeric_stats = {}
-            for col in df.select_dtypes(include=[np.number]).columns:
+            for col in numeric_cols:
                 numeric_stats[str(col)] = {
                     "min": float(df[col].min()) if not pd.isna(df[col].min()) else None,
                     "max": float(df[col].max()) if not pd.isna(df[col].max()) else None,
@@ -677,7 +836,8 @@ def analyze_pandas_tables(tables: List[Any]) -> Dict[str, Any]:
                 "column_names": list(df.columns),
                 "null_percentage": round(null_percentage, 2),
                 "dtypes": {str(k): v for k, v in dtypes.items()},
-                "numeric_columns_count": numeric_cols,
+                "numeric_columns": numeric_cols,
+                "numeric_columns_count": len(numeric_cols),
                 "numeric_stats": numeric_stats
             }
             
@@ -696,20 +856,52 @@ def analyze_pandas_tables(tables: List[Any]) -> Dict[str, Any]:
         logger.error(f"Erreur analyse tableaux: {e}")
         return {"error": str(e)}
 
-async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[str, Any]):
+async def process_pdf_in_background(
+    task_id: str, 
+    file_path: str, 
+    original_filename: str,
+    params: Dict[str, Any]
+):
     """
     Traite un PDF en arrière-plan.
     
     Args:
         task_id: ID de la tâche
         file_path: Chemin du fichier PDF
+        original_filename: Nom original du fichier
         params: Paramètres d'extraction
     """
     try:
         from core.document_processing.table_extractor import TableExtractor
+        from core.document_processing.table_detection import TableDetectionModel
+        
+        # Créer le fichier de progression
+        progress_path = os.path.join("temp", "pdf_tasks", f"{task_id}_progress.json")
+        
+        # Fonction pour mettre à jour la progression
+        def update_progress(percent, message):
+            with open(progress_path, "w") as f:
+                json.dump({
+                    "progress": percent,
+                    "message": message
+                }, f)
+        
+        # Mettre à jour l'état initial
+        update_progress(0, "Initialisation de l'extraction")
+        
+        # Créer un détecteur de tableaux si possible
+        table_detector = None
+        try:
+            table_detector = TableDetectionModel()
+            await table_detector.initialize()
+        except Exception as e:
+            logger.warning(f"Impossible d'initialiser le détecteur de tableaux: {e}")
         
         # Créer un nouvel extracteur pour cette tâche
-        extractor = TableExtractor()
+        extractor = TableExtractor(table_detector=table_detector)
+        
+        # Mise à jour de la progression
+        update_progress(10, "Préparation du traitement")
         
         # Configuration OCR si activée
         ocr_config = None
@@ -719,16 +911,21 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
                 "enhance_image": params.get("ocr_enhance_image", True),
                 "deskew": params.get("ocr_deskew", True),
                 "preprocess_type": "thresh",
+                "psm": 6,
                 "force_grid": params.get("force_grid", False)
             }
         
         start_time = datetime.utcnow()
         
-        # Utiliser la méthode automatique d'extraction
+        # Mise à jour de la progression
+        update_progress(20, "Extraction des tableaux")
+        
+        # Extraire les tableaux avec la méthode automatique
         with open(file_path, 'rb') as f:
+            file_size = os.path.getsize(file_path)
             file_obj = io.BytesIO(f.read())
         
-        # Extraire les tableaux avec la méthode extract_tables et mode "auto"
+        # Extraction des tableaux
         tables = await extractor.extract_tables(
             file_obj,
             pages=params.get("pages", "all"),
@@ -737,38 +934,83 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
             ocr_config=ocr_config
         )
         
+        # Mise à jour de la progression
+        update_progress(70, "Préparation des résultats")
+        
         # Si demandé, extraire aussi les images des tableaux
         table_images = []
-        if params.get("include_images"):
+        if params.get("include_images") and tables:
+            update_progress(75, "Extraction des images")
             file_obj.seek(0)
             table_images = await extractor.get_tables_as_images(
                 file_obj,
                 pages=params.get("pages", "all")
             )
         
+        # Si search_query est spécifié, filtrer les tableaux
+        search_results = None
+        if params.get("search_query") and tables:
+            update_progress(85, "Recherche dans les tableaux")
+            search_results = await search_in_tables(tables, params["search_query"])
+        
+        # Si analyze est True, effectuer une analyse détaillée
+        analysis_results = None
+        if params.get("analyze") and tables:
+            update_progress(90, "Analyse des tableaux")
+            if params.get("output_format") == "pandas":
+                analysis_results = analyze_pandas_tables([table["data"] for table in tables if "data" in table])
+            else:
+                analysis_results = {"error": "L'analyse détaillée nécessite output_format='pandas'"}
+        
         # Calcul du temps de traitement
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
+        # Mise à jour de la progression finale
+        update_progress(95, "Finalisation des résultats")
+        
+        # Extraction de la méthode utilisée
+        extraction_method_used = "auto"
+        for table in tables:
+            if table.get("extraction_method"):
+                extraction_method_used = table.get("extraction_method")
+                break
+        
         # Préparation du résultat
         result = {
-            "task_id": task_id,
-            "status": "completed",
+            "extraction_id": task_id,
+            "filename": original_filename,
+            "file_size": file_size,
             "tables_count": len(tables),
             "processing_time": processing_time,
             "tables": tables,
-            "extraction_method_used": "auto",
-            "ocr_used": params.get("ocr_enabled", False)
+            "extraction_method_used": extraction_method_used,
+            "ocr_used": params.get("ocr_enabled", False),
+            "status": "completed",
+            "message": "Extraction réussie"
         }
         
         if params.get("include_images"):
             result["images"] = table_images
         
+        if search_results:
+            result["search_results"] = search_results
+        
+        if analysis_results:
+            result["analysis"] = analysis_results
+        
         # Sauvegarder le résultat
         with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
             json.dump(result, f)
         
+        # Mise à jour finale
+        update_progress(100, "Traitement terminé")
+        
         # Nettoyer le fichier PDF temporaire
         os.remove(file_path)
+        
+        # Nettoyer le détecteur de tableaux si créé
+        if table_detector:
+            await table_detector.cleanup()
         
     except Exception as e:
         logger.error(f"Erreur traitement en arrière-plan: {e}", exc_info=True)
@@ -777,7 +1019,9 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
             json.dump({
                 "task_id": task_id,
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "message": f"Erreur lors du traitement: {str(e)}"
             }, f)
         
         # Nettoyer le fichier PDF temporaire
