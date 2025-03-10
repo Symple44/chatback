@@ -20,6 +20,96 @@ from core.config.config import settings
 logger = get_logger("pdf_routes")
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
+@router.post("/extract-tables-auto", response_model=Dict[str, Any])
+async def extract_tables_auto(
+    file: UploadFile = File(...),
+    output_format: str = Form("json"),
+    max_pages: Optional[int] = Form(None),
+    components=Depends(get_components)
+):
+    """
+    Extrait automatiquement les tableaux d'un fichier PDF avec détection intelligente.
+    
+    Cette route simplifiée détecte automatiquement le type de PDF (basé sur du texte ou scanné),
+    identifie la meilleure méthode d'extraction et retourne les tableaux sans configuration manuelle.
+    
+    Args:
+        file: Fichier PDF à traiter
+        output_format: Format de sortie ("json", "csv", "html", "excel")
+        max_pages: Nombre maximum de pages à traiter (facultatif)
+        
+    Returns:
+        Tableaux extraits dans le format demandé
+    """
+    try:
+        metrics.increment_counter("pdf_table_extractions_auto")
+        start_time = datetime.utcnow()
+        
+        # Vérification du fichier
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400, 
+                detail="Le fichier doit être au format PDF"
+            )
+            
+        # Lecture du fichier en mémoire
+        contents = await file.read()
+        file_obj = io.BytesIO(contents)
+        file_size = len(contents)
+        
+        # Log pour debugging
+        logger.info(f"Fichier reçu: {file.filename}, taille: {file_size / 1024:.2f} Ko")
+        
+        # Vérification de la taille du fichier
+        max_size = 50 * 1024 * 1024  # 50 Mo
+        if file_size > max_size:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Fichier trop volumineux. Taille maximum: 50 Mo"
+            )
+            
+        # Initialiser l'extracteur de tableaux s'il n'est pas déjà présent
+        if not hasattr(components, 'table_extractor'):
+            from core.document_processing.table_extractor import TableExtractor
+            components._components["table_extractor"] = TableExtractor()
+            logger.info("Extracteur de tableaux initialisé")
+        
+        # Extraire les tableaux avec la méthode automatique
+        tables = await components.table_extractor.extract_tables_auto(
+            file_obj,
+            output_format=output_format,
+            max_pages=max_pages
+        )
+        
+        # Calcul du temps de traitement
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        logger.info(f"Extraction automatique terminée en {processing_time:.2f}s: {len(tables)} tableaux trouvés")
+        
+        # Préparation de la réponse
+        response = {
+            "filename": file.filename,
+            "file_size": file_size,
+            "tables_count": len(tables),
+            "processing_time": processing_time,
+            "tables": tables,
+            "output_format": output_format
+        }
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur extraction tableaux automatique: {e}", exc_info=True)
+        metrics.increment_counter("pdf_extraction_auto_errors")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de l'extraction automatique des tableaux: {str(e)}"
+        )
+    finally:
+        # Nettoyage
+        await file.close()
+
 @router.post("/extract-tables", response_model=Dict[str, Any])
 async def extract_tables_from_pdf(
     file: UploadFile = File(...),
@@ -119,13 +209,7 @@ async def extract_tables_from_pdf(
             pages=page_list or "all",
             extraction_method=extraction_method,
             output_format=output_format,
-            ocr_config={
-                "lang": ocr_language,
-                "enhance_image": ocr_enhance_image,
-                "deskew": ocr_deskew,
-                "preprocess_type": "thresh",
-                "force_grid": force_grid  # Nouveau paramètre
-            }
+            ocr_config=ocr_config
         )
         
         # Si demandé, extraire aussi les images des tableaux
@@ -942,350 +1026,3 @@ async def _analyze_table(table):
     except Exception as e:
         logger.error(f"Erreur analyse statistique: {e}")
         return {"error": str(e)}
-    
-@router.post("/extract-tables-ai", response_model=Dict[str, Any])
-async def extract_tables_with_ai(
-    file: UploadFile = File(...),
-    pages: str = Form("all"),
-    threshold: float = Form(0.7),
-    output_format: str = Form("json"),
-    include_images: bool = Form(False),
-    components=Depends(get_components)
-):
-    """
-    Extrait les tableaux d'un fichier PDF en utilisant un modèle IA de détection.
-    
-    Args:
-        file: Fichier PDF à traiter
-        pages: Pages à analyser ("all" ou liste de numéros séparés par des virgules)
-        threshold: Seuil de confiance pour la détection des tableaux (0-1)
-        output_format: Format de sortie ("json", "csv", "html", "excel")
-        include_images: Si True, inclut les images des tableaux
-        
-    Returns:
-        Liste des tableaux extraits avec le modèle d'IA
-    """
-    try:
-        metrics.increment_counter("pdf_ai_table_extractions")
-        start_time = datetime.utcnow()
-        
-        # Vérification du fichier
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=400, 
-                detail="Le fichier doit être au format PDF"
-            )
-            
-        # Lecture du fichier en mémoire
-        contents = await file.read()
-        file_obj = io.BytesIO(contents)
-        file_size = len(contents)
-        
-        # Log pour debugging
-        logger.info(f"Fichier reçu pour extraction IA: {file.filename}, taille: {file_size / 1024:.2f} Ko")
-        
-        # Vérification de la taille du fichier
-        max_size = 50 * 1024 * 1024  # 50 Mo
-        if file_size > max_size:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Fichier trop volumineux. Taille maximum: 50 Mo"
-            )
-            
-        # Parse les pages
-        page_list = None
-        if pages != "all":
-            try:
-                # Gestion des formats comme "1,3,5-7"
-                page_parts = []
-                for part in pages.split(','):
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        page_parts.extend(range(start, end + 1))
-                    else:
-                        page_parts.append(int(part))
-                page_list = page_parts
-            except ValueError:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Format de pages invalide. Utilisez 'all' ou des numéros séparés par des virgules (ex: '1,3,5-7')"
-                )
-                
-        # Initialiser l'extracteur de tableaux s'il n'est pas déjà présent
-        if not hasattr(components, 'table_extractor'):
-            from core.document_processing.table_extractor import TableExtractor
-            components._components["table_extractor"] = TableExtractor()
-            logger.info("Extracteur de tableaux initialisé")
-        
-        # S'assurer que le détecteur IA est disponible
-        if not hasattr(components.table_extractor, 'table_detector'):
-            from core.document_processing.table_detection import TableDetectionModel
-            components.table_extractor.table_detector = TableDetectionModel()
-            await components.table_extractor.table_detector.initialize()
-            logger.info("Détecteur de tableaux par IA initialisé")
-            
-        # Modification du TableExtractor pour utiliser la méthode IA
-        original_detect_method = components.table_extractor._detect_table_regions
-        components.table_extractor._detect_table_regions = components.table_extractor._detect_table_regions_with_model
-        
-        try:
-            # Extraction des tableaux avec la méthode IA
-            tables = await components.table_extractor.extract_tables(
-                file_obj,
-                pages=page_list or "all",
-                extraction_method="auto",  # La méthode IA est maintenant utilisée par défaut
-                output_format=output_format,
-                ocr_config={
-                    "lang": "fra+eng",
-                    "enhance_image": True,
-                    "deskew": True,
-                    "preprocess_type": "thresh",
-                    "threshold": threshold  # On utilise le seuil personnalisé pour la détection
-                }
-            )
-        finally:
-            # Restaurer la méthode originale
-            components.table_extractor._detect_table_regions = original_detect_method
-        
-        # Si demandé, extraire aussi les images des tableaux
-        table_images = []
-        if include_images:
-            # Retour au début du fichier
-            file_obj.seek(0)
-            
-            # Extraction des images
-            table_images = await components.table_extractor.get_tables_as_images(
-                file_obj,
-                pages=page_list or "all"
-            )
-            
-        # Calcul du temps de traitement
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        logger.info(f"Extraction avec IA terminée en {processing_time:.2f}s: {len(tables)} tableaux trouvés")
-        
-        # Préparation de la réponse
-        response = {
-            "filename": file.filename,
-            "file_size": file_size,
-            "tables_count": len(tables),
-            "processing_time": processing_time,
-            "tables": tables,
-            "extraction_method_used": "ai_detection",
-            "detection_threshold": threshold
-        }
-        
-        # Ajouter les images si demandé
-        if include_images:
-            response["images"] = table_images
-            
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erreur extraction tableaux avec IA: {e}", exc_info=True)
-        metrics.increment_counter("pdf_ai_extraction_errors")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de l'extraction des tableaux avec IA: {str(e)}"
-        )
-    finally:
-        # Nettoyage
-        await file.close()
-@router.post("/extract-tables-v2", response_model=Dict[str, Any])
-async def extract_tables_v2(
-    file: UploadFile = File(...),
-    pages: str = Form("all"),
-    extraction_method: str = Form("auto"),  # Options: "auto", "ai", "traditional", "hybrid", "ocr"
-    detection_threshold: float = Form(0.7),
-    output_format: str = Form("json"),
-    include_images: bool = Form(False),
-    ocr_enabled: bool = Form(False),
-    ocr_language: str = Form("fra+eng"),
-    ocr_enhance_image: bool = Form(True),
-    ocr_deskew: bool = Form(True),
-    force_grid: bool = Form(False),
-    components=Depends(get_components)
-):
-    """
-    Version améliorée de l'extraction de tableaux avec différentes méthodes de détection.
-    
-    Args:
-        file: Fichier PDF à traiter
-        pages: Pages à analyser ("all" ou liste de numéros séparés par des virgules)
-        extraction_method: Méthode d'extraction ("auto", "ai", "traditional", "hybrid", "ocr")
-        detection_threshold: Seuil de confiance pour la détection des tableaux par IA
-        output_format: Format de sortie ("json", "csv", "html", "excel")
-        include_images: Si True, inclut les images des tableaux
-        ocr_enabled: Si True, active la reconnaissance optique de caractères
-        ocr_language: Langues à utiliser pour l'OCR (ex: "fra+eng")
-        ocr_enhance_image: Si True, améliore l'image avant l'OCR
-        ocr_deskew: Si True, corrige l'inclinaison de l'image avant l'OCR
-        force_grid: Si True, force la création d'une grille pour l'OCR
-        
-    Returns:
-        Liste des tableaux extraits
-    """
-    try:
-        metrics.increment_counter("pdf_table_extractions_v2")
-        start_time = datetime.utcnow()
-        
-        # Vérification du fichier
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=400, 
-                detail="Le fichier doit être au format PDF"
-            )
-            
-        # Lecture du fichier
-        contents = await file.read()
-        file_obj = io.BytesIO(contents)
-        file_size = len(contents)
-        
-        # Log pour debugging
-        logger.info(f"Fichier reçu: {file.filename}, taille: {file_size / 1024:.2f} Ko, méthode: {extraction_method}")
-        
-        # Vérification de la taille du fichier
-        max_size = 50 * 1024 * 1024  # 50 Mo
-        if file_size > max_size:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Fichier trop volumineux. Taille maximum: 50 Mo"
-            )
-            
-        # Parse les pages
-        page_list = None
-        if pages != "all":
-            try:
-                # Gestion des formats comme "1,3,5-7"
-                page_parts = []
-                for part in pages.split(','):
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        page_parts.extend(range(start, end + 1))
-                    else:
-                        page_parts.append(int(part))
-                page_list = page_parts
-            except ValueError:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Format de pages invalide. Utilisez 'all' ou des numéros séparés par des virgules (ex: '1,3,5-7')"
-                )
-                
-        # Initialiser l'extracteur de tableaux s'il n'est pas déjà présent
-        if not hasattr(components, 'table_extractor'):
-            from core.document_processing.table_extractor import TableExtractor
-            components._components["table_extractor"] = TableExtractor()
-            logger.info("Extracteur de tableaux initialisé")
-            
-        # S'assurer que le détecteur IA est initialisé si nécessaire
-        if extraction_method in ["ai", "hybrid", "auto"] and settings.document.ENABLE_AI_TABLE_DETECTION:
-            if not hasattr(components.table_extractor, 'table_detector'):
-                from core.document_processing.table_detection import TableDetectionModel
-                components.table_extractor.table_detector = TableDetectionModel()
-                await components.table_extractor.table_detector.initialize()
-                logger.info("Détecteur de tableaux par IA initialisé")
-        
-        # Configuration de la méthode de détection
-        original_detect_method = components.table_extractor._detect_table_regions
-        
-        try:
-            # Sélection de la méthode de détection de tableaux selon le paramètre
-            if extraction_method == "ai" and settings.document.ENABLE_AI_TABLE_DETECTION:
-                components.table_extractor._detect_table_regions = components.table_extractor._detect_table_regions_with_model
-                effective_method = "ai"
-            elif extraction_method == "hybrid" and settings.document.ENABLE_AI_TABLE_DETECTION:
-                components.table_extractor._detect_table_regions = components.table_extractor._hybrid_table_detection
-                effective_method = "hybrid"
-            elif extraction_method == "traditional":
-                # Garder la méthode traditionnelle
-                effective_method = "traditional"
-            elif extraction_method == "ocr":
-                # Utiliser directement OCR
-                effective_method = "ocr"
-            else:
-                # Pour "auto" et autres valeurs, détection automatique
-                is_scanned, confidence = await components.table_extractor._is_scanned_pdf(file_obj, page_list or "all")
-                file_obj.seek(0)  # Réinitialiser la position
-                
-                if is_scanned:
-                    effective_method = "ocr"
-                elif settings.document.ENABLE_AI_TABLE_DETECTION:
-                    components.table_extractor._detect_table_regions = components.table_extractor._hybrid_table_detection
-                    effective_method = "hybrid"
-                else:
-                    effective_method = "traditional"
-                
-                logger.info(f"Détection auto: PDF scanné: {is_scanned}, méthode choisie: {effective_method}")
-                
-            # Configuration OCR
-            ocr_config = None
-            if ocr_enabled or effective_method == "ocr":
-                ocr_config = {
-                    "lang": ocr_language,
-                    "enhance_image": ocr_enhance_image,
-                    "deskew": ocr_deskew,
-                    "preprocess_type": "thresh",
-                    "force_grid": force_grid,
-                    "threshold": detection_threshold
-                }
-            
-            # Extraction des tableaux avec la méthode choisie
-            tables = await components.table_extractor.extract_tables(
-                file_obj,
-                pages=page_list or "all",
-                extraction_method=effective_method if effective_method != "traditional" else "auto",
-                output_format=output_format,
-                ocr_config=ocr_config
-            )
-            
-            # Si demandé, extraire aussi les images des tableaux
-            table_images = []
-            if include_images:
-                # Retour au début du fichier
-                file_obj.seek(0)
-                
-                # Extraction des images
-                table_images = await components.table_extractor.get_tables_as_images(
-                    file_obj,
-                    pages=page_list or "all"
-                )
-        
-        finally:
-            # Restaurer la méthode originale
-            components.table_extractor._detect_table_regions = original_detect_method
-        
-        # Calcul du temps de traitement
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        logger.info(f"Extraction terminée en {processing_time:.2f}s: {len(tables)} tableaux trouvés")
-        
-        # Préparation de la réponse
-        response = {
-            "filename": file.filename,
-            "file_size": file_size,
-            "tables_count": len(tables),
-            "processing_time": processing_time,
-            "tables": tables,
-            "extraction_method_used": effective_method,
-            "detection_threshold": detection_threshold,
-            "ocr_used": ocr_enabled or effective_method == "ocr"
-        }
-        
-        # Ajouter les images si demandé
-        if include_images:
-            response["images"] = table_images
-            
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erreur extraction tableaux: {e}", exc_info=True)
-        metrics.increment_counter("pdf_extraction_errors")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de l'extraction des tableaux: {str(e)}"
-        )
-    finally:
-        # Nettoyage
-        await file.close()
