@@ -354,12 +354,17 @@ async def extract_tables_auto(
         
         # Enregistrer les métriques
         metrics.finish_request_tracking(extraction_id)
-        metrics.track_search_operation(
-            method=extraction_method_used,
-            success=len(tables) > 0,
-            processing_time=processing_time,
-            results_count=len(tables)
-        )
+        try:
+            # S'assurer que la méthode d'extraction est une chaîne de caractères
+            method_str = str(extraction_method_used) if isinstance(extraction_method_used, (str, float, int)) else "auto"
+            metrics.track_search_operation(
+                method=method_str,
+                success=len(tables) > 0,
+                processing_time=processing_time,
+                results_count=len(tables)
+            )
+        except Exception as e:
+            logger.error(f"Erreur tracking métriques: {e}", exc_info=True)
         
         return response
         
@@ -374,6 +379,20 @@ async def extract_tables_auto(
         # Calculer le temps de traitement même en cas d'erreur
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         metrics.finish_request_tracking(extraction_id)
+        
+        # S'assurer que la méthode est une chaîne
+        extraction_method_str = "auto"
+        
+        # Tenter d'enregistrer les métriques de recherche même en cas d'erreur
+        try:
+            metrics.track_search_operation(
+                method=extraction_method_str,
+                success=False,
+                processing_time=processing_time,
+                results_count=0
+            )
+        except Exception as metric_error:
+            logger.error(f"Erreur tracking métriques: {metric_error}")
         
         # Retourner une réponse d'erreur structurée
         return TableExtractionResponse(
