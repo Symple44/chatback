@@ -69,8 +69,8 @@ class TableExtractionResponse(BaseModel):
     status: Optional[str] = Field(None, description="Statut de l'extraction")
     message: Optional[str] = Field(None, description="Message d'information")
 
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "extraction_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                 "filename": "document.pdf",
@@ -95,6 +95,7 @@ class TableExtractionResponse(BaseModel):
                 "ocr_used": False
             }
         }
+    }
 
 logger = get_logger("pdf_routes")
 router = APIRouter(prefix="/pdf", tags=["pdf"])
