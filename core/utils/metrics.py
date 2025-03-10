@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import json
+import contextlib  # Ajout de l'importation manquante en haut du fichier
 from datetime import datetime, timedelta
 from pathlib import Path
 import threading
@@ -401,6 +402,3 @@ class Metrics:
 
 # Singleton pour les métriques
 metrics = Metrics()
-
-# Contexte pour la mesure du temps
-import contextlib
