@@ -457,7 +457,7 @@ class TableExtractor:
                         image_to_page[i] = page_num
             
             # Liste pour stocker les DataFrames
-            tables_list = []
+            tables_list = []  # Initialisation correcte de tables_list
             
             # Traiter chaque image pour détecter et extraire les tableaux
             for img_idx, img in enumerate(images):
@@ -500,51 +500,20 @@ class TableExtractor:
                         # Ajouter à la liste si le DataFrame n'est pas vide
                         if df is not None and not df.empty and len(df.columns) > 1:
                             # Ajouter des colonnes d'information
+                            df = df.copy()  # Créer une copie pour éviter les avertissements SettingWithCopyWarning
                             df.insert(0, "_page", page_num)
                             df.insert(1, "_table", i + 1)
                             tables_list.append(df)
                             
                     except Exception as e:
                         logger.error(f"Erreur extraction tableau {i+1} sur page {page_num}: {e}")
-                
-                # Si aucun tableau n'est détecté sur cette page et que force_grid est activé,
-                # essayer une extraction en mode grille forcée
-                if len(table_regions) == 0 and ocr_config.get("force_grid", False):
-                    try:
-                        # Utiliser une région qui couvre la majeure partie de l'image
-                        height, width = processed_img.shape[:2]
-                        margin_x = width // 10
-                        margin_y = height // 10
-                        
-                        # Définir une région qui évite les marges
-                        x, y = margin_x, margin_y
-                        w, h = width - 2 * margin_x, height - 2 * margin_y
-                        
-                        # Extraire la région centrale
-                        table_img = processed_img[y:y+h, x:x+w]
-                        
-                        # Tenter l'extraction en mode force_grid
-                        df = await self._ocr_table_to_dataframe(
-                            table_img,
-                            lang=ocr_config.get("lang", self.tesseract_lang),
-                            psm=ocr_config.get("psm", 6),
-                            force_grid=True
-                        )
-                        
-                        if df is not None and not df.empty and len(df.columns) > 1:
-                            df.insert(0, "_page", page_num)
-                            df.insert(1, "_table", 1)
-                            tables_list.append(df)
-                            logger.info(f"Tableau extrait avec mode grille forcée sur page {page_num}")
-                    except Exception as e:
-                        logger.error(f"Erreur extraction forcée sur page {page_num}: {e}")
             
             logger.info(f"OCR terminé: {len(tables_list)} tableaux extraits")
             return tables_list
             
         except Exception as e:
             logger.error(f"Erreur extraction OCR: {e}")
-            return []
+            return []  # Retourner une liste vide en cas d'erreur
     
     async def _preprocess_image(
         self, 
