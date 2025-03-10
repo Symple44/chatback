@@ -92,7 +92,7 @@ class TableExtractionResponse(BaseModel):
                     }
                 ],
                 "extraction_method_used": "auto",
-                "ocr_used": false
+                "ocr_used": False
             }
         }
 
