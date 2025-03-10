@@ -184,6 +184,14 @@ async def extract_tables_auto(
                 detail=f"Format de sortie invalide. Formats supportés: {', '.join(valid_formats)}"
             )
         
+        # Validation du format d'export
+        valid_export_formats = [None, "csv", "excel", "json", "html"]
+        if export_format not in valid_export_formats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Format d'export invalide. Formats supportés: {', '.join([f for f in valid_export_formats if f])}"
+            )
+        
         # Vérification et traitement d'une demande de traitement en arrière-plan
         if background_processing and file_size > 5 * 1024 * 1024:  # > 5 Mo
             # Enregistrer le fichier temporaire et démarrer le traitement en arrière-plan
@@ -607,6 +615,10 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
         # Créer le répertoire d'export s'il n'existe pas
         export_dir = os.path.join("temp", "pdf_exports")
         os.makedirs(export_dir, exist_ok=True)
+
+         # Vérifier le format
+        if format not in ["csv", "excel", "json", "html"]:
+            raise ValueError(f"Format non supporté: {format}")
         
         if format == "excel":
             output = BytesIO()
@@ -779,6 +791,13 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
         else:
             raise ValueError(f"Format non supporté: {format}")
     
+    except ValueError as e:
+        # Remonter l'erreur de format
+        logger.error(f"Erreur format d'export invalide: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Format d'export invalide: {str(e)}"
+        )
     except Exception as e:
         logger.error(f"Erreur export: {e}")
         raise HTTPException(
