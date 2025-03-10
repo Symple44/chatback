@@ -21,12 +21,11 @@ from core.utils.pdf_table_utils import save_tables_to_file, analyze_tables
 logger = get_logger("pdf_routes")
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
-@router.post("/extract-tables", response_model=TableExtractionResponse)
-async def extract_tables(
+@router.post("/extract-tables-auto", response_model=TableExtractionResponse)
+async def extract_tables_auto(
     file: UploadFile = File(...),
     output_format: str = Form("json"),
     pages: str = Form("all"),
-    extraction_method: str = Form("auto"),
     ocr_enabled: bool = Form(False),
     ocr_language: str = Form("fra+eng"),
     ocr_enhance_image: bool = Form(True),
@@ -42,13 +41,13 @@ async def extract_tables(
     """
     Endpoint unifié pour extraire, analyser et rechercher des tableaux dans les PDFs.
     
-    Cette route consolidée offre toutes les fonctionnalités d'extraction de tableaux dans une API flexible.
+    Cette route utilise la détection automatique des méthodes d'extraction optimales
+    en fonction du type de PDF (scanné, texte) et de son contenu.
     
     Args:
         file: Fichier PDF à traiter
         output_format: Format de sortie ("json", "csv", "html", "excel", "pandas")
         pages: Pages à analyser ("all" ou numéros séparés par des virgules comme "1,3,5-7")
-        extraction_method: Méthode d'extraction ("auto", "tabula", "camelot", "pdfplumber", "ocr", "ai", "hybrid")
         ocr_enabled: Force l'OCR même pour les PDFs textuels
         ocr_language: Langues pour l'OCR (ex: "fra+eng" pour français et anglais)
         ocr_enhance_image: Applique l'amélioration d'image pour l'OCR
@@ -109,7 +108,6 @@ async def extract_tables(
                 params={
                     "output_format": output_format,
                     "pages": pages,
-                    "extraction_method": extraction_method,
                     "ocr_enabled": ocr_enabled,
                     "ocr_language": ocr_language,
                     "ocr_enhance_image": ocr_enhance_image,
@@ -136,7 +134,7 @@ async def extract_tables(
         if hasattr(components, 'cache'):
             import hashlib
             # Créer une clé unique basée sur le contenu du fichier et les paramètres
-            params_str = f"{pages}:{extraction_method}:{ocr_enabled}:{ocr_language}:{output_format}:{force_grid}"
+            params_str = f"{pages}:{ocr_enabled}:{ocr_language}:{output_format}:{force_grid}"
             file_hash = hashlib.md5(file_content).hexdigest()
             cache_key = f"pdf:tables:{file_hash}:{params_str}"
             
@@ -158,7 +156,7 @@ async def extract_tables(
         
         # Configuration OCR si activée
         ocr_config = None
-        if ocr_enabled or extraction_method == "ocr":
+        if ocr_enabled:
             ocr_config = {
                 "lang": ocr_language,
                 "enhance_image": ocr_enhance_image,
@@ -167,42 +165,17 @@ async def extract_tables(
                 "force_grid": force_grid
             }
         
-        # Extraire les tableaux
-        tables = await components.table_extractor.extract_tables(
+        # Utiliser la méthode automatique d'extraction
+        tables = await components.table_extractor.extract_tables_auto(
             file_obj,
-            pages=pages,
-            extraction_method=extraction_method,
             output_format=output_format,
-            ocr_config=ocr_config
+            max_pages=None if pages == "all" else len(pages.split(",")),
+            ocr_config=ocr_config,
         )
-        
-        # Si aucun tableau n'est trouvé, essayer avec des méthodes alternatives
-        if not tables:
-            if extraction_method == "auto" or extraction_method == "ocr":
-                # Essayer avec force_grid=True pour l'OCR
-                logger.info(f"Aucun tableau trouvé, essai avec force_grid=True")
-                ocr_config["force_grid"] = True
-                tables = await components.table_extractor.extract_tables(
-                    file_obj,
-                    pages=pages,
-                    extraction_method="ocr" if extraction_method == "auto" else extraction_method,
-                    output_format=output_format,
-                    ocr_config=ocr_config
-                )
-            
-            # Si toujours rien, essayer la méthode hybride
-            if not tables and hasattr(components, 'table_detector') and extraction_method == "auto":
-                logger.info(f"Aucun tableau trouvé, essai avec méthode hybride")
-                tables = await components.table_extractor.extract_tables(
-                    file_obj,
-                    pages=pages,
-                    extraction_method="hybrid",
-                    output_format=output_format
-                )
         
         # Si demandé, extraire aussi les images des tableaux
         table_images = []
-        if include_images:
+        if include_images and tables:
             # Retour au début du fichier
             file_obj.seek(0)
             
@@ -214,12 +187,12 @@ async def extract_tables(
         
         # Si search_query est spécifié, filtrer les tableaux
         search_results = None
-        if search_query and search_query.strip():
-            search_results = await _search_in_tables(tables, search_query)
+        if search_query and search_query.strip() and tables:
+            search_results = await search_in_tables(tables, search_query)
         
         # Si analyze est True, effectuer une analyse détaillée
         analysis_results = None
-        if analyze:
+        if analyze and tables:
             if output_format == "pandas":
                 analysis_results = analyze_tables([table["data"] for table in tables if "data" in table])
             else:
@@ -227,8 +200,8 @@ async def extract_tables(
                 analysis_results = {"error": "L'analyse détaillée nécessite output_format='pandas'"}
         
         # Si export_format est spécifié, générer le fichier d'export
-        if export_format:
-            export_result = await _export_tables(tables, export_format, file.filename)
+        if export_format and tables:
+            export_result = await export_tables(tables, export_format, file.filename)
             if export_result.get("download_url"):
                 return StreamingResponse(
                     io.BytesIO(export_result["content"]),
@@ -247,8 +220,8 @@ async def extract_tables(
             "tables_count": len(tables),
             "processing_time": processing_time,
             "tables": tables,
-            "extraction_method_used": extraction_method,
-            "ocr_used": ocr_enabled or extraction_method == "ocr"
+            "extraction_method_used": "auto",
+            "ocr_used": ocr_enabled
         }
         
         # Ajouter les résultats supplémentaires si disponibles
@@ -269,7 +242,7 @@ async def extract_tables(
         # Enregistrer les métriques
         metrics.finish_request_tracking(extraction_id)
         metrics.track_search_operation(
-            method=extraction_method,
+            method="auto",
             success=len(tables) > 0,
             processing_time=processing_time,
             results_count=len(tables)
@@ -329,87 +302,9 @@ async def get_task_status(task_id: str):
             detail=f"Erreur lors de la vérification du statut: {str(e)}"
         )
 
-@router.post("/detect-pdf-type")
-async def detect_pdf_type(
-    file: UploadFile = File(...),
-    components=Depends(get_components)
-):
-    """
-    Détecte si un PDF est scanné ou contient du texte sélectionnable.
-    
-    Args:
-        file: Fichier PDF à analyser
-        
-    Returns:
-        Type de PDF et informations sur sa structure
-    """
-    try:
-        # Lecture du fichier
-        contents = await file.read()
-        file_obj = io.BytesIO(contents)
-        
-        # Initialiser l'extracteur de tableaux
-        if not hasattr(components, 'table_extractor'):
-            from core.document_processing.table_extractor import TableExtractor
-            components._components["table_extractor"] = TableExtractor()
-            
-        # Détection du type de PDF
-        is_scanned, confidence = await components.table_extractor._is_scanned_pdf(file_obj, "all")
-        
-        # Analyse complémentaire des tableaux
-        file_obj.seek(0)  # Réinitialiser la position du fichier
-        
-        # Détecter les tableaux avec différentes méthodes pour évaluation
-        detection_results = {}
-        
-        # Test avec méthodes standard pour les PDF avec texte
-        if not is_scanned or confidence < 0.8:
-            camelot_score = await asyncio.to_thread(
-                components.table_extractor._test_camelot,
-                file_obj,
-                "1-3"  # Limiter à 3 pages pour l'analyse
-            )
-            detection_results["camelot"] = camelot_score
-            
-            file_obj.seek(0)
-            tabula_score = await asyncio.to_thread(
-                components.table_extractor._test_tabula,
-                file_obj,
-                "1-3"
-            )
-            detection_results["tabula"] = tabula_score
-        
-        # Déterminer la méthode d'extraction recommandée
-        recommended_method = "ocr" if is_scanned else "auto"
-        
-        # Si c'est un PDF standard mais qu'aucune méthode ne détecte de tableaux,
-        # suggérer OCR comme méthode alternative
-        if not is_scanned and all(score.get("tables", 0) == 0 for score in detection_results.values()):
-            alternate_method = "ocr"
-        else:
-            alternate_method = None
-        
-        return {
-            "filename": file.filename,
-            "is_scanned": is_scanned,
-            "confidence": round(confidence, 2),
-            "recommended_extraction_method": recommended_method,
-            "alternate_method": alternate_method,
-            "detection_results": detection_results
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur détection type PDF: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de la détection du type de PDF: {str(e)}"
-        )
-    finally:
-        await file.close()
-
 # Fonctions auxiliaires
 
-async def _search_in_tables(tables, query: str) -> Dict[str, Any]:
+async def search_in_tables(tables, query: str) -> Dict[str, Any]:
     """
     Recherche un texte dans les tableaux.
     
@@ -474,7 +369,7 @@ async def _search_in_tables(tables, query: str) -> Dict[str, Any]:
         "results": results
     }
 
-async def _export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
+async def export_tables(tables, format: str, filename: str) -> Dict[str, Any]:
     """
     Exporte les tableaux dans un format spécifique.
     
@@ -649,7 +544,7 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
         
         # Configuration OCR si activée
         ocr_config = None
-        if params.get("ocr_enabled") or params.get("extraction_method") == "ocr":
+        if params.get("ocr_enabled"):
             ocr_config = {
                 "lang": params.get("ocr_language", "fra+eng"),
                 "enhance_image": params.get("ocr_enhance_image", True),
@@ -658,17 +553,17 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
                 "force_grid": params.get("force_grid", False)
             }
         
-        # Extraire les tableaux
+        start_time = datetime.utcnow()
+        
+        # Extraire les tableaux avec la méthode auto
         with open(file_path, 'rb') as f:
             file_obj = io.BytesIO(f.read())
         
-        start_time = datetime.utcnow()
-        
-        tables = await extractor.extract_tables(
+        # Utiliser la méthode automatique d'extraction
+        tables = await extractor.extract_tables_auto(
             file_obj,
-            pages=params.get("pages", "all"),
-            extraction_method=params.get("extraction_method", "auto"),
             output_format=params.get("output_format", "json"),
+            max_pages=None if params.get("pages", "all") == "all" else len(params.get("pages", "all").split(",")),
             ocr_config=ocr_config
         )
         
@@ -691,8 +586,8 @@ async def process_pdf_in_background(task_id: str, file_path: str, params: Dict[s
             "tables_count": len(tables),
             "processing_time": processing_time,
             "tables": tables,
-            "extraction_method_used": params.get("extraction_method", "auto"),
-            "ocr_used": params.get("ocr_enabled") or params.get("extraction_method") == "ocr"
+            "extraction_method_used": "auto",
+            "ocr_used": params.get("ocr_enabled", False)
         }
         
         if params.get("include_images"):
