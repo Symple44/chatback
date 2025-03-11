@@ -192,6 +192,7 @@ class Settings(BaseSettings):
         from .models import ModelsConfig
         from .search import SearchConfig
         from .document import DocumentConfig
+        from .table_extraction import TableExtractionConfig
         from .chat import ChatConfig
         
         self.db = DatabaseConfig()
@@ -202,6 +203,7 @@ class Settings(BaseSettings):
         self.models = ModelsConfig()
         self.search = SearchConfig()
         self.document = DocumentConfig()
+        self.table_extraction = TableExtractionConfig()
         self.chat = ChatConfig()
         
         logger.info("Configurations rechargées")

@@ -185,12 +185,21 @@ class ComponentManager:
                 logger.info("Processeurs de documents initialisés")
                 
                 # Initialisation du détecteur de tableaux IA
-                if settings.document.ENABLE_AI_TABLE_DETECTION:
+                if settings.table_extraction.AI_DETECTION.ENABLED:
                     from core.document_processing.table_detection import TableDetectionModel
                     table_detector = TableDetectionModel(cuda_manager=self.cuda_manager)
                     await table_detector.initialize()
                     self._components["table_detector"] = table_detector
                     logger.info("Détecteur de tableaux par IA initialisé")
+                    
+                    # Initialisation du nouveau pipeline d'extraction de tableaux
+                    from core.document_processing.table_extraction.pipeline import TableExtractionPipeline
+                    table_extraction_pipeline = TableExtractionPipeline(
+                        cache_manager=self._components.get("cache_manager"),
+                        table_detector=table_detector
+                    )
+                    self._components["table_extraction_pipeline"] = table_extraction_pipeline
+                    logger.info("Pipeline d'extraction de tableaux initialisé")
                 
                 # Google Drive (optionnel)
                 if settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH:
@@ -258,7 +267,8 @@ class ComponentManager:
             
             # Ordre explicite de nettoyage - du plus haut niveau au plus bas niveau
             cleanup_order = [
-                "search_manager", "doc_extractor", "pdf_processor", "table_detector",
+                "search_manager", "doc_extractor", "pdf_processor",
+                "table_extraction_pipeline", "table_detector",
                 "model", "summarizer", "embedding_manager", "model_manager", 
                 "model_loader", "tokenizer_manager", "cuda_manager", "auth_manager", 
                 "es_client", "pdf_cache", "models_cache", "cache_manager", "redis_cache", 

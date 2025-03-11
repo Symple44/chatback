@@ -61,23 +61,6 @@ class DocumentConfig(BaseModel):
     ELASTICSEARCH_NUMBER_OF_REPLICAS: int = 0
     ELASTICSEARCH_REFRESH_INTERVAL: str = "30s"
 
-    
-    ENABLE_AI_TABLE_DETECTION: bool = Field(
-        default_factory=lambda: os.getenv("ENABLE_AI_TABLE_DETECTION", "true").lower() == "true"
-    )
-
-    TABLE_DETECTION_MODEL: str = Field(
-        default_factory=lambda: os.getenv("TABLE_DETECTION_MODEL", "microsoft/table-transformer-detection")
-    )
-
-    TABLE_DETECTION_THRESHOLD: float = Field(
-        default_factory=lambda: float(os.getenv("TABLE_DETECTION_THRESHOLD", "0.7"))
-    )
-
-    TABLE_DETECTION_MAX_TABLES: int = Field(
-        default_factory=lambda: int(os.getenv("TABLE_DETECTION_MAX_TABLES", "10"))
-    )
-
     @validator('ELASTICSEARCH_HOST')
     def validate_elasticsearch_host(cls, v):
         """Valide l'URL Elasticsearch."""
