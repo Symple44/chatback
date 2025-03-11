@@ -141,7 +141,7 @@ class TableValidator:
         
         for col in df_str.columns:
             for marker in error_markers:
-                error_count += df_str[col].str.contains(marker, case=False).sum()
+                error_count += df_str[col].str.contains(marker, case=False, regex=False).sum()
         
         # Vérifier les valeurs incohérentes
         for col in df.columns:
