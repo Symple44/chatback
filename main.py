@@ -185,7 +185,9 @@ class ComponentManager:
                 logger.info("Processeurs de documents initialisés")
                 
                 # Initialisation du détecteur de tableaux IA
-                if settings.table_extraction.AI_DETECTION.ENABLED:
+                if hasattr(settings, 'table_extraction') and \
+                    hasattr(settings.table_extraction, 'AI_DETECTION') and \
+                    getattr(getattr(settings.table_extraction, 'AI_DETECTION', None), 'ENABLED', False):
                     from core.document_processing.table_detection import TableDetectionModel
                     table_detector = TableDetectionModel(cuda_manager=self.cuda_manager)
                     await table_detector.initialize()
