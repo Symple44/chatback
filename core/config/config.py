@@ -112,6 +112,7 @@ class Settings(BaseSettings):
         from .search import SearchConfig
         from .document import DocumentConfig
         from .chat import ChatConfig
+        from .table_extraction import TableExtractionConfig
         
         # Créer les configurations spécialisées APRÈS l'initialisation de Pydantic
         try:
@@ -172,6 +173,11 @@ class Settings(BaseSettings):
             logger.info("Configuration du chat chargée")
         except Exception as e:
             logger.error(f"Erreur lors du chargement de la configuration Chat: {e}")
+        try:
+            self.table_extraction = TableExtractionConfig()
+            logger.info("Configuration d'extraction de tableaux chargée")
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement de la configuration TableExtraction: {e}")
         
         # Log pour le débogage
         logger.info(f"Configuration initialisée avec succès: DEBUG={self.DEBUG}, ENV={self.ENV}")
