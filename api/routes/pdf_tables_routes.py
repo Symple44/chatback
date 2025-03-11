@@ -50,18 +50,14 @@ class TaskStatus(BaseModel):
 async def extract_tables(
     file: UploadFile = File(...),
     # Paramètres d'extraction
-    strategy: str = Form(settings.table_extraction.DEFAULT_STRATEGY.value, 
-                        description="Stratégie d'extraction"),
+    strategy: str = Form(settings.table_extraction.DEFAULT_STRATEGY.value, description="Stratégie d'extraction"),
     output_format: str = Form("json", description="Format des données dans la réponse"),
     pages: str = Form("all", description="Pages à analyser"),
     # Paramètres OCR
     ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
-    ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, 
-                           description="Langues pour l'OCR"),
-    ocr_enhance_image: bool = Form(settings.table_extraction.OCR.ENHANCE_IMAGE, 
-                                  description="Améliorer l'image avant OCR"),
-    ocr_deskew: bool = Form(settings.table_extraction.OCR.DESKEW, 
-                          description="Redresser l'image avant OCR"),
+    ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
+    ocr_enhance_image: bool = Form(settings.table_extraction.OCR.ENHANCE_IMAGE, description="Améliorer l'image avant OCR"),
+    ocr_deskew: bool = Form(settings.table_extraction.OCR.DESKEW, description="Redresser l'image avant OCR"),
     # Options supplémentaires
     include_images: bool = Form(False, description="Inclure les images des tableaux extraits"),
     analyze: bool = Form(False, description="Effectuer une analyse des tableaux"),

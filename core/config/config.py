@@ -173,6 +173,7 @@ class Settings(BaseSettings):
             logger.info("Configuration du chat chargée")
         except Exception as e:
             logger.error(f"Erreur lors du chargement de la configuration Chat: {e}")
+            
         try:
             self.table_extraction = TableExtractionConfig()
             logger.info("Configuration d'extraction de tableaux chargée")
