@@ -68,7 +68,7 @@ class PDFTableStrategy(ABC):
         df = df.dropna(how='all').dropna(axis=1, how='all')
         
         # Nettoyage des valeurs
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+        df = df.apply(lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x))
         
         # Ajout de types de données appropriés où c'est possible
         for col in df.columns:
