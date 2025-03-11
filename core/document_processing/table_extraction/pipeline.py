@@ -84,7 +84,9 @@ class TableExtractionPipeline:
             "pdfplumber": PDFPlumberTableStrategy(),
             "ocr": OCRTableStrategy(self.image_processor),
             "ai": AIDetectionTableStrategy(table_detector) if table_detector and 
-                                                          settings.table_extraction.AI_DETECTION.ENABLED else None,
+                        hasattr(settings, 'table_extraction') and 
+                        hasattr(settings.table_extraction, 'AI_DETECTION') and 
+                        getattr(getattr(settings.table_extraction, 'AI_DETECTION', None), 'ENABLED', False) else None,
             "hybrid": HybridTableStrategy(table_detector) if table_detector else None
         }
         
