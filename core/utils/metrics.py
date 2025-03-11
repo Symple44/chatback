@@ -364,6 +364,21 @@ class Metrics:
                 "name": name,
                 "value": elapsed_time
             })
+            
+    def get_timer_value(self, name: str) -> float:
+        """
+        Récupère la valeur d'un timer spécifique.
+        
+        Args:
+            name: Nom du timer
+            
+        Returns:
+            Durée totale du timer en secondes ou 0.0 si le timer n'existe pas
+        """
+        with self._lock:
+            if name in self.timers:
+                return self.timers[name]["total_time"]
+            return 0.0
     
     async def get_metrics_summary(self) -> Dict[str, Any]:
         """

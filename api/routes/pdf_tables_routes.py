@@ -20,7 +20,7 @@ from core.document_processing.table_extraction.pipeline import TableExtractionPi
 from core.document_processing.table_extraction.models import ExtractionResult, TableData, ImageData, PDFType
 
 logger = get_logger("pdf_tables_routes")
-router = APIRouter(prefix="/pdf/tables", tags=["pdf-tables"])
+router = APIRouter(prefix="/pdf/tables", tags=["pdf"])
 
 # Modèles de données pour les réponses
 class TableExtractionResponse(BaseModel):
