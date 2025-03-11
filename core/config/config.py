@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     search: Optional[Any] = None
     document: Optional[Any] = None
     chat: Optional[Any] = None
+    table_extraction: Optional[Any] = None
     
     model_config = SettingsConfigDict(
         env_file = str(env_path),
@@ -173,7 +174,7 @@ class Settings(BaseSettings):
             logger.info("Configuration du chat chargée")
         except Exception as e:
             logger.error(f"Erreur lors du chargement de la configuration Chat: {e}")
-            
+
         try:
             self.table_extraction = TableExtractionConfig()
             logger.info("Configuration d'extraction de tableaux chargée")
