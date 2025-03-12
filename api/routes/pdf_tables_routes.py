@@ -56,7 +56,7 @@ async def extract_tables(
     output_format: str = Form("json", description="Format des données dans la réponse"),
     pages: str = Form("all", description="Pages à analyser"),
     # Type de document
-    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, receipt, etc.)"),
+    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, devis, receipt, etc.)"),
     # Paramètres OCR
     ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
     ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
@@ -166,7 +166,7 @@ async def extract_tables(
                 background=background_tasks
             )
         
-        # Initialisation du pipeline d'extraction si nécessaire
+        # Initialisation du pipeline et de l'InvoiceProcessor si nécessaire
         if not hasattr(components, 'table_extraction_pipeline'):
             table_detector = components.table_detector if hasattr(components, 'table_detector') else None
             cache_manager = components.cache_manager if hasattr(components, 'cache_manager') else None
@@ -174,6 +174,24 @@ async def extract_tables(
                 cache_manager=cache_manager,
                 table_detector=table_detector
             )
+        
+        if not hasattr(components, 'invoice_processor'):
+            components._components["invoice_processor"] = InvoiceProcessor()
+        
+        # Détection automatique du type de document si demandé
+        auto_detect = document_type.lower() == "auto"
+        detected_type = "generic"
+        
+        if auto_detect:
+            # Utiliser la méthode de détection intégrée à l'InvoiceProcessor
+            invoice_processor = components.invoice_processor
+            doc_types = await invoice_processor.detect_document_type(file_obj)
+            dominant_type = max(doc_types.items(), key=lambda x: x[1])
+            detected_type = dominant_type[0]
+            detected_confidence = dominant_type[1]
+            
+            logger.info(f"Type de document auto-détecté: {detected_type} (confiance: {detected_confidence:.2f})")
+            document_type = detected_type
         
         # Configuration OCR
         ocr_config = {
@@ -198,6 +216,44 @@ async def extract_tables(
             ocr_config=ocr_config,
             use_cache=use_cache
         )
+
+        # Post-traitement spécifique selon le type de document
+        structured_data = None
+        
+        if document_type.lower() in ["devis", "technical_invoice", "devis_technique"]:
+            try:
+                # Appliquer le post-traitement pour les devis techniques
+                invoice_processor = components.invoice_processor
+                structured_data = invoice_processor.process_technical_invoice(result.tables)
+                logger.info(f"Post-traitement de devis technique appliqué avec succès")
+                
+                # Ajouter des métadonnées d'extraction
+                structured_data["extraction_id"] = extraction_id
+                structured_data["extraction_method"] = result.extraction_method_used
+                structured_data["pdf_type"] = result.pdf_type
+                structured_data["ocr_used"] = result.ocr_used
+                structured_data["processing_time"] = time.time() - start_time
+                
+                # Si auto-détection, ajouter l'information
+                if auto_detect:
+                    structured_data["auto_detected"] = True
+                    structured_data["detection_confidence"] = detected_confidence
+                
+                return structured_data
+                
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de devis technique: {e}")
+                structured_data = {"error": str(e)}
+                
+        elif document_type.lower() == "invoice":
+            try:
+                # Appliquer le post-traitement pour les factures
+                invoice_processor = components.invoice_processor
+                structured_data = invoice_processor.process(result.tables)
+                logger.info(f"Post-traitement de facture appliqué avec succès")
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de facture: {e}")
+                structured_data = {"error": str(e)}
         
         # Si download_format est spécifié, générer le fichier à télécharger
         if download_format and result.tables:
@@ -436,6 +492,29 @@ async def process_pdf_in_background(
         # Mettre à jour l'état initial
         update_progress(0, "Initialisation de l'extraction")
         
+        # Vérifier si c'est un devis technique
+        document_type = params.get("document_type", "generic").lower()
+        
+        # Initialisation de l'InvoiceProcessor si nécessaire
+        if not hasattr(components, 'invoice_processor'):
+            components._components["invoice_processor"] = InvoiceProcessor()
+        
+        # Détection automatique du type de document si demandé
+        auto_detect = document_type.lower() == "auto"
+        detected_type = "generic"
+        
+        if auto_detect:
+            # Utiliser la méthode de détection intégrée à l'InvoiceProcessor
+            update_progress(10, "Détection du type de document")
+            invoice_processor = components.invoice_processor
+            doc_types = await invoice_processor.detect_document_type(file_path)
+            dominant_type = max(doc_types.items(), key=lambda x: x[1])
+            detected_type = dominant_type[0]
+            detected_confidence = dominant_type[1]
+            
+            logger.info(f"Type de document auto-détecté: {detected_type} (confiance: {detected_confidence:.2f})")
+            document_type = detected_type
+            
         # S'assurer que le pipeline d'extraction est disponible
         if not hasattr(components, 'table_extraction_pipeline'):
             table_detector = components.table_detector if hasattr(components, 'table_detector') else None
@@ -445,74 +524,58 @@ async def process_pdf_in_background(
                 table_detector=table_detector
             )
         
-        # Mise à jour de la progression
-        update_progress(10, "Préparation du traitement")
-        
-        # Configuration OCR
-        ocr_config = params.get("ocr_config", {})
-        
-        # Extraction des tableaux
-        update_progress(20, "Extraction des tableaux")
-        
+        # Code existant pour l'extraction...
         pipeline = components.table_extraction_pipeline
         result = await pipeline.extract_tables(
             file_obj=file_path,
             pages=params.get("pages", "all"),
             strategy=params.get("strategy", "auto"),
             output_format=params.get("output_format", "json"),
-            ocr_config=ocr_config,
+            ocr_config=params.get("ocr_config"),
             use_cache=params.get("use_cache", True)
         )
         
-        # Mise à jour de la progression
-        update_progress(70, "Traitement des résultats")
-        
-        # Si demandé, extraire aussi les images des tableaux
-        if params.get("include_images") and result.tables_count > 0:
-            update_progress(75, "Extraction des images")
-            images = await pipeline.get_tables_as_images(file_path, params.get("pages", "all"))
-            result.images = images
-        
-        # Si search_query est spécifié, rechercher dans les tableaux
-        if params.get("search_query") and result.tables_count > 0:
-            update_progress(85, "Recherche dans les tableaux")
-            search_results = await search_in_tables(result.tables, params["search_query"])
-            result.search_results = search_results
-        
-        # Si analyze est True, effectuer une analyse détaillée
-        if params.get("analyze") and result.tables_count > 0:
-            update_progress(90, "Analyse des tableaux")
-            analysis_results = await analyze_tables(result.tables, params.get("output_format", "json"))
-            result.analysis = analysis_results
-        
         # Post-traitement spécifique selon le type de document
-        document_type = params.get("document_type", "generic")
         structured_data = None
-        if document_type.lower() == "invoice" and result.tables_count > 0:
+        
+        if document_type in ["devis", "technical_invoice", "devis_technique"]:
+            update_progress(92, "Post-traitement de devis technique")
+            try:
+                # Appliquer le post-traitement pour les devis techniques
+                invoice_processor = components.invoice_processor
+                structured_data = invoice_processor.process_technical_invoice(result.tables)
+                
+                # Ajouter des métadonnées d'extraction
+                structured_data["extraction_id"] = task_id
+                structured_data["extraction_method"] = result.extraction_method_used
+                structured_data["pdf_type"] = result.pdf_type
+                structured_data["ocr_used"] = result.ocr_used
+                
+                # Si auto-détection, ajouter l'information
+                if auto_detect:
+                    structured_data["auto_detected"] = True
+                    structured_data["detection_confidence"] = detected_confidence
+                
+                # Écrire le résultat
+                with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
+                    json.dump(structured_data, f, default=str)
+                    
+                update_progress(100, "Traitement terminé")
+                return
+                
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de devis technique: {e}")
+                structured_data = {"error": str(e)}
+                
+        elif document_type == "invoice":
             update_progress(92, "Post-traitement de facture")
             try:
                 # Appliquer le post-traitement pour les factures
-                invoice_processor = InvoiceProcessor()
+                invoice_processor = components.invoice_processor
                 structured_data = invoice_processor.process(result.tables)
-                logger.info(f"Post-traitement de facture appliqué avec succès")
             except Exception as e:
                 logger.error(f"Erreur lors du post-traitement de facture: {e}")
                 structured_data = {"error": str(e)}
-        
-        # Finalisation
-        update_progress(95, "Finalisation des résultats")
-        
-        # Ajouter les données structurées au résultat
-        if structured_data:
-            result_dict = result.to_dict()
-            result_dict["structured_data"] = structured_data
-            # Écrire le résultat
-            with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
-                json.dump(result_dict, f)
-        else:
-            # Écrire le résultat original
-            with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
-                f.write(result.to_json())
         
         # Mise à jour finale
         update_progress(100, "Traitement terminé")
