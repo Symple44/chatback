@@ -161,22 +161,37 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         docs_paths = ["/docs", "/redoc", "/openapi.json"]
         is_docs_path = path in docs_paths or any(path.startswith(p + "#") for p in docs_paths)
         
-        # Pour les chemins de documentation, autoriser uniquement les IP de confiance
+        # Pour les chemins de documentation, vérifier le domaine et l'IP
         if is_docs_path and self.protected_docs:
-            if self._is_ip_trusted(client_ip) or self.dev_mode:
-                return await call_next(request)
-            else:
-                logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}")
+            # Vérification du domaine
+            host = request.headers.get("Host", "")
+            
+            # Si le domaine est api.symple.fr, bloquer l'accès même si l'IP est de confiance
+            if "api.symple.fr" in host:
+                logger.warning(f"Tentative d'accès à la documentation depuis le domaine interdit: {host} (IP: {client_ip})")
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
                     content={
-                        "detail": "Accès à la documentation refusé depuis cette adresse IP",
+                        "detail": "Accès à la documentation refusé depuis ce domaine",
                         "error_code": "DOCS_ACCESS_DENIED",
                         "timestamp": datetime.utcnow().isoformat(),
                         "request_id": str(uuid.uuid4())
                     }
                 )
-        
+            
+            # Vérification de l'IP seulement si le domaine est autorisé
+            if not self._is_ip_trusted(client_ip) or not self.dev_mode:
+                logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}, host: {host}")
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={
+                        "detail": "Accès à la documentation refusé. Utilisez une IP locale ou un domaine autorisé.",
+                        "error_code": "DOCS_ACCESS_DENIED",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "request_id": str(uuid.uuid4())
+                    }
+                )
+            
         # Vérifier les exemptions standard
         if self._is_path_excluded(path) or self.dev_mode or self._is_ip_trusted(client_ip):
             return await call_next(request)
