@@ -9,6 +9,7 @@ import os
 import io
 import tempfile
 import fitz  # PyMuPDF
+import logging
 from typing import Dict, List, Any, Optional, Union, Tuple
 import asyncio
 
