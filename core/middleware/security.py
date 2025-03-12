@@ -180,7 +180,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
                 )
             
             # Vérification de l'IP seulement si le domaine est autorisé
-            if not self._is_ip_trusted(client_ip) or not self.dev_mode:
+            if not self._is_ip_trusted(client_ip) and not self.dev_mode:
                 logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}, host: {host}")
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
