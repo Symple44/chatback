@@ -185,7 +185,7 @@ async def extract_tables(
         if auto_detect:
             # Utiliser la méthode de détection intégrée à l'InvoiceProcessor
             invoice_processor = components.invoice_processor
-            doc_types = await invoice_processor.detect_document_type(file_obj)
+            doc_types = invoice_processor.detect_document_type(file_obj)
             dominant_type = max(doc_types.items(), key=lambda x: x[1])
             detected_type = dominant_type[0]
             detected_confidence = dominant_type[1]
@@ -507,7 +507,7 @@ async def process_pdf_in_background(
             # Utiliser la méthode de détection intégrée à l'InvoiceProcessor
             update_progress(10, "Détection du type de document")
             invoice_processor = components.invoice_processor
-            doc_types = await invoice_processor.detect_document_type(file_path)
+            doc_types = invoice_processor.detect_document_type(file_path)
             dominant_type = max(doc_types.items(), key=lambda x: x[1])
             detected_type = dominant_type[0]
             detected_confidence = dominant_type[1]

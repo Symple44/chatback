@@ -1082,10 +1082,9 @@ class InvoiceProcessor:
         # Calcul final
         return round(score / max(1, total_points), 2)
 
-    # Ajoutez cette méthode à la classe InvoiceProcessor pour détecter le type de document
     def detect_document_type(self, file_content: Union[str, bytes, io.BytesIO]) -> Dict[str, float]:
         """
-        Détecte le type de document à partir de son contenu.
+        Détecte le type de document à partir de son contenu (version synchrone).
         
         Args:
             file_content: Contenu du fichier (chemin, bytes ou BytesIO)
