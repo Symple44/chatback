@@ -37,7 +37,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         rate_limit_window: int = 60,
     ):
         super().__init__(app)
-        self.api_key = api_key or settings.API_KEY
+        self.api_key = api_key or settings.security.API_KEY
         self.excluded_paths = set(excluded_paths or [])
         self.trusted_ips = set(trusted_ips or [])
         self.dev_mode = dev_mode or settings.DEBUG

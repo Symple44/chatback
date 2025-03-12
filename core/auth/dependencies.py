@@ -73,7 +73,7 @@ async def get_api_key(
         )
     
     # Vérifier la clé API
-    if key != settings.API_KEY:
+    if key != settings.security.API_KEY:
         logger.warning(f"Tentative d'accès avec clé API invalide: {request.url.path}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

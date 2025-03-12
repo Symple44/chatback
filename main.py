@@ -451,7 +451,7 @@ from core.middleware.security import APISecurityMiddleware
 # Ajouter le middleware de sécurité
 app.add_middleware(
     APISecurityMiddleware,
-    api_key=settings.API_KEY,
+    api_key=settings.security.API_KEY,
     trusted_ips=[
         "127.0.0.1",           # localhost
         "::1",                 # localhost IPv6
