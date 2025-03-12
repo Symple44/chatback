@@ -445,7 +445,35 @@ app = FastAPI(
     default_response_class=CustomJSONResponse
 )
 
-# Middlewares
+# Importer le middleware de sécurité
+from core.middleware.security import APISecurityMiddleware
+
+# Ajouter le middleware de sécurité
+app.add_middleware(
+    APISecurityMiddleware,
+    api_key=settings.API_KEY,
+    trusted_ips=[
+        "127.0.0.1",           # localhost
+        "::1",                 # localhost IPv6
+        "192.168.0.0/24",      # Réseau local 192.168.0.x
+        "10.0.0.0/8"           # Réseau privé
+    ],
+    excluded_paths=[
+        "/docs",               # Documentation Swagger
+        "/redoc",              # Documentation ReDoc
+        "/openapi.json",       # Schéma OpenAPI
+        "/api/health",         # Endpoints de santé
+        "/api/health/*",       # Tous les sous-chemins de health
+        "/api/ping",           # Ping simple
+        "/static/*"            # Fichiers statiques
+    ],
+    dev_mode=settings.DEBUG,   # Automatiquement désactivé en production
+    rate_limit_enabled=True,   # Protection contre les attaques par force brute
+    rate_limit_max=100,        # 100 requêtes
+    rate_limit_window=60       # par minute
+)
+
+# Middlewares existants
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.security.CORS_ORIGINS,
