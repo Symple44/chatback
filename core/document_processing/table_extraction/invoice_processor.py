@@ -54,7 +54,41 @@ class InvoiceProcessor:
         try:
             # Traitement du premier tableau (souvent le principal dans une facture)
             first_table = extracted_tables[0]
-            data = first_table.get("data", [])
+            raw_data = first_table.get("data", [])
+            
+            # Conversion du format de données si nécessaire
+            data = []
+            if isinstance(raw_data, pd.DataFrame):
+                # Convertir DataFrame en liste de dictionnaires
+                data = raw_data.to_dict(orient='records')
+            elif isinstance(raw_data, str):
+                # Tenter de parser JSON ou CSV
+                try:
+                    import json
+                    data = json.loads(raw_data)
+                    if not isinstance(data, list):
+                        data = [{"content": raw_data}]
+                except json.JSONDecodeError:
+                    # Si ce n'est pas du JSON, essayer CSV
+                    try:
+                        import csv
+                        import io
+                        reader = csv.DictReader(io.StringIO(raw_data))
+                        data = list(reader)
+                    except:
+                        # Fallback si aucun format n'est reconnu
+                        data = [{"content": raw_data}]
+            elif isinstance(raw_data, list):
+                # Vérifier que les éléments sont des dictionnaires
+                data = []
+                for item in raw_data:
+                    if isinstance(item, dict):
+                        data.append(item)
+                    else:
+                        data.append({"value": str(item)})
+            else:
+                # Fallback pour tout autre type
+                data = [{"content": str(raw_data)}]
             
             # Extraction des informations de base
             self._extract_basic_info(data, result)
