@@ -18,6 +18,7 @@ from core.utils.metrics import metrics
 from core.config.config import settings
 from core.document_processing.table_extraction.pipeline import TableExtractionPipeline
 from core.document_processing.table_extraction.models import ExtractionResult, TableData, ImageData, PDFType
+from core.document_processing.table_extraction.invoice_processor import InvoiceProcessor
 
 logger = get_logger("pdf_tables_routes")
 router = APIRouter(prefix="/pdf/tables", tags=["pdf"])
@@ -38,6 +39,7 @@ class TableExtractionResponse(BaseModel):
     analysis: Optional[Dict[str, Any]] = Field(None, description="Analyse des tableaux")
     status: str = Field(default="completed", description="Statut de l'extraction")
     message: Optional[str] = Field(None, description="Message d'information")
+    structured_data: Optional[Dict[str, Any]] = Field(None, description="Données structurées après post-traitement")
 
 class TaskStatus(BaseModel):
     task_id: str = Field(..., description="Identifiant de la tâche")
@@ -53,6 +55,8 @@ async def extract_tables(
     strategy: str = Form(settings.table_extraction.DEFAULT_STRATEGY.value, description="Stratégie d'extraction"),
     output_format: str = Form("json", description="Format des données dans la réponse"),
     pages: str = Form("all", description="Pages à analyser"),
+    # Type de document
+    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, receipt, etc.)"),
     # Paramètres OCR
     ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
     ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
@@ -220,6 +224,18 @@ async def extract_tables(
         if analyze and result.tables:
             analysis_results = await analyze_tables(result.tables, output_format)
             result.analysis = analysis_results
+
+        # Post-traitement spécifique selon le type de document
+        structured_data = None
+        if document_type.lower() == "invoice" and result.tables:
+            try:
+                # Appliquer le post-traitement pour les factures
+                invoice_processor = InvoiceProcessor()
+                structured_data = invoice_processor.process(result.tables)
+                logger.info(f"Post-traitement de facture appliqué avec succès")
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de facture: {e}")
+                structured_data = {"error": str(e)}
         
         # Terminer le suivi des métriques
         processing_time = time.time() - start_time
@@ -235,7 +251,14 @@ async def extract_tables(
         except Exception as e:
             logger.error(f"Erreur tracking métriques: {e}")
         
-        # Retour du résultat
+        # Ajouter les données structurées à la réponse si disponibles
+        if structured_data:
+            # Créer une copie du résultat pour ajouter les données structurées
+            result_dict = result.to_dict()
+            result_dict["structured_data"] = structured_data
+            return result_dict
+            
+        # Retour du résultat standard si pas de post-traitement
         return result.to_dict()
         
     except HTTPException:
@@ -462,12 +485,34 @@ async def process_pdf_in_background(
             analysis_results = await analyze_tables(result.tables, params.get("output_format", "json"))
             result.analysis = analysis_results
         
+        # Post-traitement spécifique selon le type de document
+        document_type = params.get("document_type", "generic")
+        structured_data = None
+        if document_type.lower() == "invoice" and result.tables_count > 0:
+            update_progress(92, "Post-traitement de facture")
+            try:
+                # Appliquer le post-traitement pour les factures
+                invoice_processor = InvoiceProcessor()
+                structured_data = invoice_processor.process(result.tables)
+                logger.info(f"Post-traitement de facture appliqué avec succès")
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de facture: {e}")
+                structured_data = {"error": str(e)}
+        
         # Finalisation
         update_progress(95, "Finalisation des résultats")
         
-        # Sauvegarder le résultat
-        with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
-            f.write(result.to_json())
+        # Ajouter les données structurées au résultat
+        if structured_data:
+            result_dict = result.to_dict()
+            result_dict["structured_data"] = structured_data
+            # Écrire le résultat
+            with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
+                json.dump(result_dict, f)
+        else:
+            # Écrire le résultat original
+            with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
+                f.write(result.to_json())
         
         # Mise à jour finale
         update_progress(100, "Traitement terminé")
