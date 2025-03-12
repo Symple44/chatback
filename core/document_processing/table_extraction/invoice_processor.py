@@ -1,10 +1,11 @@
 # core/document_processing/invoice_processor.py
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 import re
 import logging
 import pandas as pd
 import dateutil.parser
 from datetime import datetime
+
 
 logger = logging.getLogger("invoice_processor")
 
