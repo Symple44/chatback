@@ -141,7 +141,6 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         """Traiter la requête et vérifier l'authentification."""
-        # Obtenir l'IP du client
         client_ip = request.client.host if request.client else "unknown"
         path = request.url.path
         
@@ -161,55 +160,58 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         docs_paths = ["/docs", "/redoc", "/openapi.json"]
         is_docs_path = path in docs_paths or any(path.startswith(p + "#") for p in docs_paths)
         
-        # Pour les chemins de documentation, vérifier le domaine et l'IP
+        # Pour les chemins de documentation, gérer l'accès avec des règles spécifiques
         if is_docs_path and self.protected_docs:
-            # Vérification du domaine
             host = request.headers.get("Host", "")
             
-            # Si le domaine est api.symple.fr, bloquer l'accès même si l'IP est de confiance
+            # Bloquer l'accès à api.symple.fr pour docs
             if "api.symple.fr" in host:
-                logger.warning(f"Tentative d'accès à la documentation depuis le domaine interdit: {host} (IP: {client_ip})")
+                logger.warning(f"Tentative d'accès à la documentation depuis domaine interdit: {host}")
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    content={
-                        "detail": "Accès à la documentation refusé depuis ce domaine",
-                        "error_code": "DOCS_ACCESS_DENIED",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "request_id": str(uuid.uuid4())
-                    }
+                    content={"detail": "Accès à la documentation refusé depuis ce domaine"}
                 )
             
-            # Vérification de l'IP seulement si le domaine est autorisé
-            if not self._is_ip_trusted(client_ip) and not self.dev_mode:
-                logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}, host: {host}")
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={
-                        "detail": "Accès à la documentation refusé. Utilisez une IP locale ou un domaine autorisé.",
-                        "error_code": "DOCS_ACCESS_DENIED",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "request_id": str(uuid.uuid4())
-                    }
-                )
+            # Autoriser l'accès pour les IP de confiance
+            if self._is_ip_trusted(client_ip) or self.dev_mode:
+                return await call_next(request)
             
-        # Vérifier les exemptions standard
-        if self._is_path_excluded(path) or self.dev_mode or self._is_ip_trusted(client_ip):
+            # Bloquer pour les autres IP
+            logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}")
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "Accès à la documentation refusé depuis cette IP"}
+            )
+        
+        # Vérifier si le chemin est exclu de toute authentification
+        if self._is_path_excluded(path):
             return await call_next(request)
         
-        # Vérifier la clé API
-        api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        # Pour les chemins d'API, toujours vérifier la clé API, même pour les IP de confiance
+        if path.startswith("/api/"):
+            api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            
+            if not api_key or api_key != self.api_key:
+                logger.warning(f"Tentative d'accès non autorisé à l'API depuis {client_ip} vers {path}")
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"detail": "Clé API invalide ou manquante"}
+                )
         
-        if not api_key or api_key != self.api_key:
-            logger.warning(f"Tentative d'accès non autorisé depuis {client_ip} vers {path}")
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "detail": "Clé API invalide ou manquante",
-                    "error_code": "INVALID_API_KEY",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "request_id": str(uuid.uuid4())
-                }
-            )
+        # Pour les autres chemins non-API, autoriser l'accès pour les IP de confiance ou en mode dev
+        elif self._is_ip_trusted(client_ip) or self.dev_mode:
+            return await call_next(request)
+        
+        # Pour tout le reste, demander la clé API
+        else:
+            api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            
+            if not api_key or api_key != self.api_key:
+                logger.warning(f"Tentative d'accès non autorisé depuis {client_ip} vers {path}")
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"detail": "Clé API invalide ou manquante"}
+                )
         
         # Requête valide
         return await call_next(request)
