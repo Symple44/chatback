@@ -1170,8 +1170,8 @@ class OCRTableStrategy(PDFTableStrategy):
             DataFrame ou None si échec
         """
         try:
-            # Prétraitement amélioré
-            enhanced_img = await self._enhance_table_image(table_img, high_contrast=True)
+            # Prétraitement amélioré - utiliser la méthode existante sans arguments supplémentaires
+            enhanced_img = await self._enhance_table_image(table_img)
             
             # Application d'un preprocessing spécifique aux tableaux
             binary = cv2.adaptiveThreshold(
@@ -1264,6 +1264,230 @@ class OCRTableStrategy(PDFTableStrategy):
         """Vérifie si une ligne est un en-tête valide."""
         if not data_rows:
             return False
+    def _detect_lines(self, binary_img: np.ndarray, is_horizontal: bool = True) -> np.ndarray:
+        """
+        Détecte les lignes horizontales ou verticales dans une image binaire.
+        
+        Args:
+            binary_img: Image binaire
+            is_horizontal: Si True, détecte les lignes horizontales, sinon verticales
+            
+        Returns:
+            Image binaire avec les lignes détectées
+        """
+        # Créer une copie de l'image
+        img = binary_img.copy()
+        
+        # Définir la taille du noyau selon l'orientation
+        if is_horizontal:
+            kernel_length = np.array(img).shape[1] // 30
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_length, 1))
+        else:
+            kernel_length = np.array(img).shape[0] // 30
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_length))
+        
+        # Morphologie pour extraire les lignes
+        img = cv2.erode(img, kernel, iterations=1)
+        img = cv2.dilate(img, kernel, iterations=1)
+        
+        return img
+
+    def _detect_cells(self, grid_img: np.ndarray, binary_img: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Détecte les cellules d'un tableau à partir d'une image de grille.
+        
+        Args:
+            grid_img: Image de la grille (lignes)
+            binary_img: Image binaire originale
+            
+        Returns:
+            Liste des cellules détectées avec leurs coordonnées
+        """
+        try:
+            # Trouver les contours
+            contours, _ = cv2.findContours(grid_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filtrer et trier les contours par position
+            cells = []
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                
+                # Filtrer les trop petits contours
+                if w < 20 or h < 20:
+                    continue
+                    
+                cells.append({
+                    "x": x,
+                    "y": y,
+                    "width": w,
+                    "height": h,
+                    "area": w * h
+                })
+            
+            # Trier par position (d'abord par y, puis par x)
+            cells.sort(key=lambda c: (c["y"], c["x"]))
+            
+            return cells
+        except Exception as e:
+            logger.error(f"Erreur détection cellules: {e}")
+            return []
+
+    async def _process_cells_to_dataframe(
+        self,
+        cells: List[Dict[str, Any]],
+        image: np.ndarray,
+        lang: str = "fra+eng"
+    ) -> Optional[pd.DataFrame]:
+        """
+        Traite les cellules détectées en DataFrame.
+        
+        Args:
+            cells: Liste des cellules avec coordonnées
+            image: Image source
+            lang: Langue pour OCR
+            
+        Returns:
+            DataFrame avec le contenu des cellules
+        """
+        try:
+            # Grouper les cellules par lignes
+            tolerance = 10  # Tolérance en pixels pour regrouper par Y
+            rows = []
+            current_row = []
+            last_y = -tolerance*2
+            
+            for cell in cells:
+                # Si on change de ligne
+                if cell["y"] > last_y + tolerance:
+                    if current_row:
+                        rows.append(sorted(current_row, key=lambda c: c["x"]))
+                    current_row = [cell]
+                    last_y = cell["y"]
+                else:
+                    current_row.append(cell)
+            
+            # Ajouter la dernière ligne
+            if current_row:
+                rows.append(sorted(current_row, key=lambda c: c["x"]))
+            
+            # OCR sur chaque cellule
+            table_data = []
+            loop = asyncio.get_event_loop()
+            custom_config = f'--oem 3 --psm 7 -l {lang}'  # PSM 7 pour ligne unique
+            
+            for row in rows:
+                row_data = []
+                for cell in row:
+                    # Extraire l'image de la cellule
+                    cell_img = image[cell["y"]:cell["y"]+cell["height"], cell["x"]:cell["x"]+cell["width"]]
+                    
+                    # OCR
+                    try:
+                        text = await loop.run_in_executor(
+                            self.executor,
+                            lambda: pytesseract.image_to_string(cell_img, config=custom_config).strip()
+                        )
+                        row_data.append(text)
+                    except Exception as e:
+                        logger.debug(f"Erreur OCR cellule: {e}")
+                        row_data.append("")
+                
+                table_data.append(row_data)
+            
+            # Créer le DataFrame
+            if not table_data:
+                return None
+                
+            # Normaliser le nombre de colonnes
+            max_cols = max(len(row) for row in table_data)
+            normalized_data = [row + [""] * (max_cols - len(row)) for row in table_data]
+            
+            # Créer DataFrame
+            if len(normalized_data) > 1:
+                # Vérifier si la première ligne est un en-tête
+                if self._is_valid_header(normalized_data[0], normalized_data[1:]):
+                    df = pd.DataFrame(normalized_data[1:], columns=normalized_data[0])
+                else:
+                    columns = [f"Col_{i+1}" for i in range(max_cols)]
+                    df = pd.DataFrame(normalized_data, columns=columns)
+            else:
+                columns = [f"Col_{i+1}" for i in range(max_cols)]
+                df = pd.DataFrame(normalized_data, columns=columns)
+            
+            return self._process_dataframe(df)
+            
+        except Exception as e:
+            logger.error(f"Erreur traitement cellules: {e}")
+            return None
+
+    async def _parse_ocr_text_to_dataframe(self, text: str) -> Optional[pd.DataFrame]:
+        """
+        Convertit le texte OCR en DataFrame.
+        
+        Args:
+            text: Texte OCR
+            
+        Returns:
+            DataFrame ou None si impossible
+        """
+        try:
+            # Nettoyage du texte
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            
+            if not lines:
+                return None
+                
+            # Détection du séparateur
+            separator = self._detect_separator(lines)
+            
+            # Conversion en lignes et colonnes
+            rows = []
+            for line in lines:
+                if separator == 'whitespace':
+                    # Diviser par blocs d'espaces
+                    row = [col.strip() for col in line.split() if col.strip()]
+                elif separator in line:
+                    # Diviser par le séparateur détecté
+                    row = [col.strip() for col in line.split(separator) if col.strip()]
+                else:
+                    # Devinette des colonnes
+                    row = self._guess_columns(line)
+                
+                if row:
+                    rows.append(row)
+            
+            if not rows:
+                return None
+            
+            # Normalisation des colonnes
+            col_counts = [len(row) for row in rows]
+            most_common_count = max(set(col_counts), key=col_counts.count)
+            
+            # Correction des lignes avec nombre incorrect de colonnes
+            normalized_rows = []
+            for row in rows:
+                if len(row) < most_common_count:
+                    row = row + [''] * (most_common_count - len(row))
+                elif len(row) > most_common_count:
+                    row = row[:most_common_count]
+                normalized_rows.append(row)
+            
+            # Création du DataFrame
+            if normalized_rows:
+                if self._is_valid_header(normalized_rows[0], normalized_rows[1:]):
+                    df = pd.DataFrame(normalized_rows[1:], columns=normalized_rows[0])
+                else:
+                    columns = [f'Col_{i+1}' for i in range(most_common_count)]
+                    df = pd.DataFrame(normalized_rows, columns=columns)
+                
+                # Nettoyage et optimisation
+                return self._process_dataframe(df)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erreur parsing texte OCR: {e}")
+            return None
         
 class EnhancedHybridStrategy(PDFTableStrategy):
     """Stratégie hybride améliorée avec meilleure pondération des résultats."""
