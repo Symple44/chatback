@@ -111,12 +111,38 @@ class TableOptimizer:
                     else:
                         df[col] = converted.astype('float')
                 
-                # Vérifier si c'est une date
+                # Vérifier si c'est une date - ajouter formats courants
                 elif df[col].dtype == object:
-                    date_count = pd.to_datetime(df[col], errors='coerce').notna().sum()
+                    # Définir des formats de date courants
+                    date_formats = [
+                        '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', 
+                        '%d.%m.%Y', '%Y.%m.%d'
+                    ]
                     
-                    if num_values > 0 and date_count / num_values > 0.7:
-                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    # Essayer chaque format
+                    for date_format in date_formats:
+                        try:
+                            # Utiliser un format spécifique pour éviter les avertissements
+                            converted_dates = pd.to_datetime(df[col], format=date_format, errors='coerce')
+                            date_count = converted_dates.notna().sum()
+                            
+                            if num_values > 0 and date_count / num_values > 0.7:
+                                df[col] = converted_dates
+                                break
+                        except:
+                            continue
+                            
+                    # Si aucun format n'a fonctionné et qu'on a pas encore converti
+                    if df[col].dtype == object:
+                        # Essayer sans format (en évitant l'avertissement)
+                        import warnings
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            converted_dates = pd.to_datetime(df[col], errors='coerce')
+                            date_count = converted_dates.notna().sum()
+                            
+                            if num_values > 0 and date_count / num_values > 0.7:
+                                df[col] = converted_dates
             
             except Exception as e:
                 logger.debug(f"Erreur optimisation type colonne {col}: {e}")
@@ -216,33 +242,55 @@ class TableOptimizer:
         Returns:
             DataFrame avec colonnes fusionnées si nécessaire
         """
-        # Si peu de colonnes, pas besoin de fusionner
-        if len(df.columns) <= 2:
+        try:
+            # Si peu de colonnes, pas besoin de fusionner
+            if len(df.columns) <= 2:
+                return df
+                
+            cols_to_merge = {}
+            
+            # Détecter les colonnes qui pourraient être des fragments
+            for i, col1 in enumerate(df.columns[:-1]):
+                for j, col2 in enumerate(df.columns[i+1:], i+1):
+                    if self._should_merge_columns(df[col1], df[col2]):
+                        if col1 not in cols_to_merge:
+                            cols_to_merge[col1] = []
+                        cols_to_merge[col1].append(col2)
+            
+            # Fusionner les colonnes
+            for main_col, fragment_cols in cols_to_merge.items():
+                # Vérifier que toutes les colonnes existent bien avant de fusionner
+                valid_fragment_cols = [col for col in fragment_cols if col in df.columns]
+                
+                if not valid_fragment_cols:
+                    continue
+                    
+                # Créer une copie du DataFrame pour éviter les avertissements de copie
+                df = df.copy()
+                
+                # Fusionner les colonnes valides une par une
+                for fragment_col in valid_fragment_cols:
+                    try:
+                        # Utiliser une fonction vectorisée au lieu de apply pour la performance
+                        df[main_col] = df.apply(
+                            lambda x: self._combine_values(x[main_col], x[fragment_col])
+                            if fragment_col in x.index else x[main_col],  # Vérification supplémentaire
+                            axis=1
+                        )
+                        
+                        # Marquer la colonne fragment pour suppression
+                        df = df.drop(columns=[fragment_col])
+                    except KeyError as e:
+                        # Log l'erreur et continuez
+                        logger.warning(f"Erreur lors de la fusion des colonnes {main_col} et {fragment_col}: {e}")
+                        continue
+            
             return df
             
-        cols_to_merge = {}
-        
-        # Détecter les colonnes qui pourraient être des fragments
-        for i, col1 in enumerate(df.columns[:-1]):
-            for j, col2 in enumerate(df.columns[i+1:], i+1):
-                if self._should_merge_columns(df[col1], df[col2]):
-                    if col1 not in cols_to_merge:
-                        cols_to_merge[col1] = []
-                    cols_to_merge[col1].append(col2)
-        
-        # Fusionner les colonnes
-        for main_col, fragment_cols in cols_to_merge.items():
-            # Créer une nouvelle colonne fusionnée
-            for fragment_col in fragment_cols:
-                df[main_col] = df.apply(
-                    lambda x: self._combine_values(x[main_col], x[fragment_col]),
-                    axis=1
-                )
-                
-                # Marquer la colonne fragment pour suppression
-                df = df.drop(columns=[fragment_col])
-        
-        return df
+        except Exception as e:
+            logger.error(f"Erreur fusion colonnes: {e}")
+            # En cas d'erreur, retourner le DataFrame original
+            return df
     
     def _should_merge_columns(self, col1: pd.Series, col2: pd.Series) -> bool:
         """
