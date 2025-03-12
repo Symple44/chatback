@@ -1,10 +1,16 @@
 # core/document_processing/invoice_processor.py
-from typing import Dict, List, Any, Optional, Union
 import re
-import logging
 import pandas as pd
-import dateutil.parser
+import numpy as np
 from datetime import datetime
+import dateutil.parser
+import json
+import os
+import io
+import tempfile
+import fitz  # PyMuPDF
+from typing import Dict, List, Any, Optional, Union, Tuple
+import asyncio
 
 
 logger = logging.getLogger("invoice_processor")
