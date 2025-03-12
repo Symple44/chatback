@@ -824,23 +824,6 @@ class HybridTableStrategy(PDFTableStrategy):
             if strategy and hasattr(strategy, 'cleanup'):
                 await strategy.cleanup()
 
-        # Vérifier si tous les éléments d'en-tête sont des chaînes non vides
-        header_valid = all(h and isinstance(h, str) for h in header_row)
-        
-        # Vérifier si l'en-tête contient des valeurs numériques
-        header_numeric = sum(1 for h in header_row if isinstance(h, (int, float)) or 
-                           (isinstance(h, str) and h.replace('.', '').isdigit()))
-        
-        # Vérifier si les données contiennent beaucoup de valeurs numériques
-        data_numeric = sum(1 for row in data_rows for cell in row 
-                         if isinstance(cell, (int, float)) or 
-                         (isinstance(cell, str) and cell.replace('.', '').isdigit()))
-        
-        avg_numeric_ratio = data_numeric / (len(data_rows) * len(header_row))
-        header_numeric_ratio = header_numeric / len(header_row)
-        
-        return header_valid and header_numeric_ratio < avg_numeric_ratio / 2
-
 class OCRTableStrategy(PDFTableStrategy):
     """Stratégie d'extraction de tableaux par OCR."""
     
