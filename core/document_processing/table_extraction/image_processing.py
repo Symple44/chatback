@@ -362,9 +362,14 @@ class PDFImageProcessor:
     def cleanup(self):
         """Nettoie les fichiers temporaires."""
         try:
-            for file in os.listdir(self.temp_dir):
-                file_path = os.path.join(self.temp_dir, file)
-                if os.path.isfile(file_path):
-                    os.unlink(file_path)
+            # Vérifier si le répertoire existe avant d'essayer de le nettoyer
+            if os.path.exists(self.temp_dir):
+                for file in os.listdir(self.temp_dir):
+                    file_path = os.path.join(self.temp_dir, file)
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                logger.debug(f"Nettoyage des fichiers temporaires réussi dans {self.temp_dir}")
+            else:
+                logger.debug(f"Répertoire temporaire {self.temp_dir} non trouvé, aucun nettoyage nécessaire")
         except Exception as e:
             logger.error(f"Erreur nettoyage fichiers temporaires: {e}")
