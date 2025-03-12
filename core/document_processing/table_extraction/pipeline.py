@@ -24,7 +24,8 @@ from .strategies import (
     PDFPlumberTableStrategy, 
     OCRTableStrategy,
     AIDetectionTableStrategy,
-    HybridTableStrategy
+    HybridTableStrategy,
+    EnhancedHybridStrategy
 )
 from .models import (
     ExtractionResult,
