@@ -188,7 +188,7 @@ class ComponentManager:
                 if hasattr(settings, 'table_extraction') and \
                     hasattr(settings.table_extraction, 'AI_DETECTION') and \
                     getattr(getattr(settings.table_extraction, 'AI_DETECTION', None), 'ENABLED', False):
-                    from core.document_processing.table_detection import TableDetectionModel
+                    from core.llm.table_detection_model import TableDetectionModel
                     table_detector = TableDetectionModel(cuda_manager=self.cuda_manager)
                     await table_detector.initialize()
                     self._components["table_detector"] = table_detector

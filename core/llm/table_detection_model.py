@@ -1,4 +1,4 @@
-# core/document_processing/table_detection.py
+# core/llm/table_detection_model.py
 from typing import List, Dict, Any, Union, Optional, Tuple
 import torch
 import os
@@ -14,7 +14,7 @@ import warnings
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
 from core.config.config import settings
-from core.llm.cuda_manager import ModelPriority
+from core.llm.cuda_manager import ModelPriority  # Import inchangé mais plus cohérent dans ce dossier
 
 # Réduire le niveau de log pour masquer les avertissements non critiques
 logging.getLogger("transformers").setLevel(logging.ERROR)
@@ -32,7 +32,8 @@ class TableDetectionModel:
         Args:
             cuda_manager: Gestionnaire CUDA pour l'allocation mémoire (optionnel)
         """
-        self.model_name = "microsoft/table-transformer-detection"  # Utiliser directement la valeur par défaut
+        # Lire la configuration depuis settings
+        self.model_name = settings.table_extraction.AI_DETECTION.MODEL
         self.processor = None
         self.model = None
         self.cuda_manager = cuda_manager
@@ -40,9 +41,9 @@ class TableDetectionModel:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.id2label = None
         
-        # Configurations
-        self.threshold = 0.7
-        self.max_tables = 10
+        # Configurations depuis settings
+        self.threshold = settings.table_extraction.AI_DETECTION.CONFIDENCE_THRESHOLD
+        self.max_tables = settings.table_extraction.AI_DETECTION.MAX_TABLES
         
         # Dossier pour les modèles
         self.models_dir = Path(settings.MODELS_DIR) / "table_detection"
