@@ -1170,74 +1170,50 @@ class OCRTableStrategy(PDFTableStrategy):
             DataFrame ou None si échec
         """
         try:
+            # Prétraitement amélioré
+            enhanced_img = await self._enhance_table_image(table_img, high_contrast=True)
+            
+            # Application d'un preprocessing spécifique aux tableaux
+            binary = cv2.adaptiveThreshold(
+                enhanced_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 11, 2
+            )
+            
+            # Détection des lignes
+            horizontal = self._detect_lines(binary, is_horizontal=True)
+            vertical = self._detect_lines(binary, is_horizontal=False)
+            
+            # Combiner pour obtenir la grille
+            grid = cv2.bitwise_or(horizontal, vertical)
+            
+            # Si une grille est détectée, utiliser l'approche par cellules
+            if np.sum(grid) > 100:  # Seuil arbitraire pour détecter une grille
+                # Détection des cellules par intersection des lignes
+                cells = self._detect_cells(grid, binary)
+                if cells and len(cells) > 4:  # Au moins quelques cellules
+                    return await self._process_cells_to_dataframe(cells, enhanced_img, lang)
+            
+            # Si pas de grille ou échec, utiliser l'OCR normal
             loop = asyncio.get_event_loop()
             
-            # Configuration OCR
-            custom_config = f'--oem 3 --psm {psm} -l {lang}'
+            # Configuration OCR optimisée
+            custom_config = f'--oem 3 --psm {psm} -l {lang} --dpi 300'
             
             # Exécuter l'OCR
             text = await loop.run_in_executor(
                 self.executor,
-                lambda: pytesseract.image_to_string(table_img, config=custom_config)
+                lambda: pytesseract.image_to_string(enhanced_img, config=custom_config)
             )
             
             if not text.strip():
                 logger.warning("Aucun texte détecté par OCR")
                 return None
             
-            # Analyse du texte
-            lines = [line.strip() for line in text.split('\n') if line.strip()]
-            
-            # Détection du séparateur
-            separator = self._detect_separator(lines)
-            
-            # Conversion en lignes et colonnes
-            rows = []
-            for line in lines:
-                if separator == 'whitespace':
-                    # Diviser par blocs d'espaces
-                    row = [col.strip() for col in line.split() if col.strip()]
-                elif separator in line:
-                    # Diviser par le séparateur détecté
-                    row = [col.strip() for col in line.split(separator) if col.strip()]
-                else:
-                    # Devinette des colonnes
-                    row = self._guess_columns(line)
-                
-                if row:
-                    rows.append(row)
-            
-            if not rows:
-                return None
-            
-            # Normalisation des colonnes
-            col_counts = [len(row) for row in rows]
-            most_common_count = max(set(col_counts), key=col_counts.count)
-            
-            # Correction des lignes avec nombre incorrect de colonnes
-            normalized_rows = []
-            for row in rows:
-                if len(row) < most_common_count:
-                    row = row + [''] * (most_common_count - len(row))
-                elif len(row) > most_common_count:
-                    row = row[:most_common_count]
-                normalized_rows.append(row)
-            
-            # Création du DataFrame
-            if normalized_rows:
-                if self._is_valid_header(normalized_rows[0], normalized_rows[1:]):
-                    df = pd.DataFrame(normalized_rows[1:], columns=normalized_rows[0])
-                else:
-                    columns = [f'Col_{i+1}' for i in range(most_common_count)]
-                    df = pd.DataFrame(normalized_rows, columns=columns)
-                
-                # Nettoyage et optimisation
-                return self._process_dataframe(df)
-            
-            return None
+            # Traitement amélioré du texte OCR
+            return await self._parse_ocr_text_to_dataframe(text)
             
         except Exception as e:
-            logger.error(f"Erreur OCR tableau: {e}")
+            logger.error(f"Erreur OCR tableau amélioré: {e}")
             return None
     
     def _detect_separator(self, lines: List[str]) -> str:
@@ -1288,3 +1264,346 @@ class OCRTableStrategy(PDFTableStrategy):
         """Vérifie si une ligne est un en-tête valide."""
         if not data_rows:
             return False
+        
+class EnhancedHybridStrategy(PDFTableStrategy):
+    """Stratégie hybride améliorée avec meilleure pondération des résultats."""
+    
+    def __init__(self, table_detector=None):
+        super().__init__()
+        self.table_detector = table_detector
+        
+        # Initialiser les stratégies avec paramètres optimisés
+        self.camelot_strategy = CamelotTableStrategy()
+        self.tabula_strategy = TabulaTableStrategy()
+        self.pdfplumber_strategy = PDFPlumberTableStrategy()
+        self.ocr_strategy = OCRTableStrategy()
+        
+    async def extract_tables(self, context: TableExtractionContext) -> List[ProcessedTable]:
+        try:
+            with metrics.timer("enhanced_hybrid_extraction"):
+                # Initialiser les pondérations selon le type de PDF
+                if context.pdf_type == PDFType.SCANNED:
+                    strategies = [
+                        (self.ocr_strategy, "ocr", 1.2)
+                    ]
+                    
+                    # Ajouter IA si disponible
+                    if self.table_detector:
+                        ai_strategy = AIDetectionTableStrategy(self.table_detector)
+                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3))
+                elif context.pdf_type == PDFType.HYBRID:
+                    # Pour PDF hybride, essayer plusieurs approches
+                    strategies = [
+                        (self.camelot_strategy, "camelot", 1.0),
+                        (self.tabula_strategy, "tabula", 0.9),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8)
+                    ]
+                    # Ajouter OCR avec faible pondération
+                    strategies.append((self.ocr_strategy, "ocr", 0.6))
+                else:
+                    # PDF digital standard
+                    strategies = [
+                        (self.camelot_strategy, "camelot", 1.1),
+                        (self.tabula_strategy, "tabula", 1.0),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8)
+                    ]
+                
+                # Exécuter les stratégies en parallèle
+                tasks = []
+                for strategy, name, weight in strategies:
+                    tasks.append(self._run_strategy_with_weight(strategy, context, name, weight))
+                
+                # Attendre tous les résultats
+                results = await asyncio.gather(*tasks)
+                
+                # Filtrer les résultats vides
+                results = [tables for tables in results if tables]
+                
+                if not results:
+                    logger.warning("Aucun résultat trouvé avec les stratégies hybrides, tentative avec approche simple")
+                    # Fallback avec stratégie simple
+                    return await self._run_fallback_extraction(context)
+                
+                # Fusionner les résultats avec meilleure gestion des tableaux
+                all_tables = await self._enhanced_merge_tables_results(results, context)
+                
+                # Appliquer une validation finale
+                validated_tables = []
+                for table in all_tables:
+                    # Validation personnalisée pour éviter les faux positifs
+                    if self._is_valid_table(table):
+                        validated_tables.append(table)
+                
+                logger.info(f"Hybride amélioré: {len(validated_tables)} tableaux extraits")
+                return validated_tables
+                
+        except Exception as e:
+            logger.error(f"Erreur extraction hybride améliorée: {e}")
+            return []
+    
+    async def _run_strategy_with_weight(
+        self, 
+        strategy: PDFTableStrategy, 
+        context: TableExtractionContext,
+        name: str,
+        weight: float
+    ) -> List[ProcessedTable]:
+        """Exécute une stratégie et ajuste les scores de confiance."""
+        try:
+            result = await strategy.extract_tables(context)
+            
+            # Ajuster les scores et le nom de la méthode
+            for table in result:
+                table.confidence *= weight
+                table.method = f"enhanced-hybrid-{name}"
+                
+            return result
+        except Exception as e:
+            logger.warning(f"Erreur exécution stratégie {name}: {e}")
+            return []
+    
+    async def _run_fallback_extraction(self, context: TableExtractionContext) -> List[ProcessedTable]:
+        """Méthode de secours si aucune stratégie ne donne de résultat."""
+        try:
+            # Essayer avec PDFPlumber qui est souvent plus tolérant
+            tables = await self.pdfplumber_strategy.extract_tables(context)
+            
+            if not tables:
+                # Si toujours rien, essayer OCR comme dernier recours
+                tables = await self.ocr_strategy.extract_tables(context)
+                
+            return tables
+        except Exception as e:
+            logger.error(f"Erreur extraction de secours: {e}")
+            return []
+    
+    async def _enhanced_merge_tables_results(
+        self, 
+        results: List[List[ProcessedTable]],
+        context: TableExtractionContext
+    ) -> List[ProcessedTable]:
+        """
+        Fusion améliorée des résultats avec gestion des doublons et règles de priorité.
+        """
+        # Aplatir les résultats
+        all_tables = [table for sublist in results for table in sublist]
+        
+        # Trier par page puis par confiance
+        all_tables.sort(key=lambda x: (x.page, -x.confidence))
+        
+        # Collecte intelligente de tableaux uniques
+        unique_tables = []
+        seen_regions = {}  # {page: [regions]}
+        
+        for table in all_tables:
+            page = table.page
+            
+            # Initialiser la liste des régions pour cette page si nécessaire
+            if page not in seen_regions:
+                seen_regions[page] = []
+            
+            # Vérifier si la région du tableau chevauche une région existante
+            is_duplicate = False
+            for region_idx, existing_region in enumerate(seen_regions[page]):
+                # Si le tableau a une région définie
+                if table.region and existing_region:
+                    # Calculer le chevauchement
+                    overlap = self._calculate_region_overlap(table.region, existing_region)
+                    
+                    # Si chevauchement significatif, c'est un doublon potentiel
+                    if overlap > 0.6:  # 60% de chevauchement
+                        # Trouver le tableau correspondant pour comparaison
+                        existing_table = next((t for t in unique_tables 
+                                              if t.page == page and t.region == existing_region), None)
+                        
+                        if existing_table:
+                            # Comparer sur contenu et qualité
+                            similarity = await self._calculate_table_similarity(existing_table, table)
+                            
+                            # Si tables similaires, garder celle avec la meilleure confiance
+                            if similarity > 0.7:  # 70% de similitude
+                                is_duplicate = True
+                                
+                                # Remplacer si la nouvelle table est meilleure
+                                if table.confidence > existing_table.confidence:
+                                    # Trouver l'index du tableau existant
+                                    table_idx = unique_tables.index(existing_table)
+                                    unique_tables[table_idx] = table
+                                    seen_regions[page][region_idx] = table.region
+                                break
+            
+            # Si ce n'est pas un doublon, l'ajouter
+            if not is_duplicate:
+                if table.region:
+                    seen_regions[page].append(table.region)
+                unique_tables.append(table)
+        
+        # Vérification finale de la qualité
+        final_tables = []
+        for table in unique_tables:
+            # Limiter le nombre de tableaux par page
+            page_tables = [t for t in final_tables if t.page == table.page]
+            if len(page_tables) >= 5:  # Max 5 tableaux par page
+                # Ne garder que si meilleure confiance qu'un des tableaux existants
+                min_confidence_table = min(page_tables, key=lambda t: t.confidence)
+                if table.confidence > min_confidence_table.confidence:
+                    final_tables.remove(min_confidence_table)
+                    final_tables.append(table)
+            else:
+                final_tables.append(table)
+        
+        # Trier par page et position dans la page (si disponible)
+        final_tables.sort(key=lambda x: (x.page, x.region.y if x.region else 0))
+        
+        return final_tables
+    
+    def _calculate_region_overlap(self, region1: TableRegion, region2: TableRegion) -> float:
+        """Calcule le chevauchement entre deux régions."""
+        # Calcul des coordonnées des régions
+        r1_x1, r1_y1 = region1.x, region1.y
+        r1_x2, r1_y2 = region1.x + region1.width, region1.y + region1.height
+        
+        r2_x1, r2_y1 = region2.x, region2.y
+        r2_x2, r2_y2 = region2.x + region2.width, region2.y + region2.height
+        
+        # Calculer l'intersection
+        x_overlap = max(0, min(r1_x2, r2_x2) - max(r1_x1, r2_x1))
+        y_overlap = max(0, min(r1_y2, r2_y2) - max(r1_y1, r2_y1))
+        intersection = x_overlap * y_overlap
+        
+        # Calculer l'union
+        r1_area = region1.width * region1.height
+        r2_area = region2.width * region2.height
+        union = r1_area + r2_area - intersection
+        
+        # Retourner le rapport intersection/union (IoU)
+        return intersection / union if union > 0 else 0
+    
+    async def _calculate_table_similarity(self, table1: ProcessedTable, table2: ProcessedTable) -> float:
+        """Calcule la similarité entre deux tableaux."""
+        # Si la structure est différente, similarité nulle
+        if table1.rows != table2.rows or table1.columns != table2.columns:
+            return 0.0
+        
+        try:
+            # Convertir en DataFrames si ce n'est pas déjà le cas
+            df1 = table1.data if isinstance(table1.data, pd.DataFrame) else pd.DataFrame(table1.data)
+            df2 = table2.data if isinstance(table2.data, pd.DataFrame) else pd.DataFrame(table2.data)
+            
+            # Vérifier que les deux DataFrames ont au moins une ligne
+            if len(df1) == 0 or len(df2) == 0:
+                return 0.0
+            
+            # Conversion en chaînes pour comparaison
+            df1_str = df1.fillna('').astype(str)
+            df2_str = df2.fillna('').astype(str)
+            
+            # Nombre de cellules identiques
+            identical_cells = 0
+            total_cells = 0
+            
+            # Comparer les cellules en tenant compte de variations mineures
+            for col in df1_str.columns:
+                if col in df2_str.columns:
+                    for idx in range(min(len(df1_str), len(df2_str))):
+                        if idx >= len(df1_str) or idx >= len(df2_str):
+                            continue
+                            
+                        val1 = df1_str.iloc[idx][col]
+                        val2 = df2_str.iloc[idx][col]
+                        
+                        # Nettoyage léger pour la comparaison
+                        val1 = val1.strip().lower()
+                        val2 = val2.strip().lower()
+                        
+                        # Identique ou très similaire
+                        if val1 == val2 or self._strings_very_similar(val1, val2):
+                            identical_cells += 1
+                        
+                        total_cells += 1
+            
+            # Retourner le ratio de similarité
+            return identical_cells / total_cells if total_cells > 0 else 0.0
+            
+        except Exception as e:
+            logger.warning(f"Erreur calcul similarité: {e}")
+            return 0.0
+    
+    def _strings_very_similar(self, s1: str, s2: str, threshold: float = 0.85) -> bool:
+        """Détermine si deux chaînes sont très similaires (tolérance aux erreurs OCR)."""
+        if not s1 and not s2:
+            return True
+        if not s1 or not s2:
+            return False
+            
+        # Si l'une est contenue dans l'autre
+        if s1 in s2 or s2 in s1:
+            return True
+            
+        # Calcul de similarité simple
+        # On pourrait utiliser Levenshtein mais pour la simplicité, on utilise une approche basique
+        shorter = s1 if len(s1) <= len(s2) else s2
+        longer = s2 if len(s1) <= len(s2) else s1
+        
+        # Si trop de différence de longueur
+        if len(shorter) == 0:
+            return len(longer) == 0
+            
+        if len(longer) / len(shorter) > 2:
+            return False
+            
+        # Compte de caractères communs
+        s1_chars = set(s1)
+        s2_chars = set(s2)
+        common_chars = s1_chars.intersection(s2_chars)
+        
+        # Ratio de caractères communs
+        ratio = len(common_chars) / max(len(s1_chars), len(s2_chars))
+        
+        return ratio >= threshold
+    
+    def _is_valid_table(self, table: ProcessedTable) -> bool:
+        """Validation améliorée des tableaux."""
+        if table.rows < 2 or table.columns < 2:
+            return False
+            
+        # Vérifier que ce n'est pas juste du texte formaté
+        df = table.data
+        
+        # Si plus de 80% des cellules sont vides, c'est probablement un faux positif
+        empty_ratio = df.isna().sum().sum() / df.size
+        if empty_ratio > 0.8:
+            return False
+            
+        # Vérifier la cohérence des données
+        # Si toutes les colonnes ont des types de données différents, c'est suspect
+        try:
+            num_cols = len(df.select_dtypes(include=[np.number]).columns)
+            str_cols = len(df.select_dtypes(include=['object']).columns)
+            
+            # Un vrai tableau a généralement une structure cohérente
+            if (num_cols == 1 and str_cols > 3) or (str_cols == 1 and num_cols > 3):
+                # Structure déséquilibrée
+                column_value_counts = {col: df[col].nunique() for col in df.columns}
+                
+                # Vérifier si une seule colonne contient toutes les valeurs différentes
+                max_unique = max(column_value_counts.values()) if column_value_counts else 0
+                if max_unique == len(df) and len(df) > 4:
+                    # C'est probablement une liste et non un tableau
+                    return False
+        except:
+            # Erreur dans l'analyse, on accepte le tableau par défaut
+            pass
+            
+        return True
+        
+    async def cleanup(self):
+        """Nettoie les ressources."""
+        await super().cleanup()
+        
+        # Nettoyage des sous-stratégies
+        strategies = [self.camelot_strategy, self.tabula_strategy, 
+                      self.pdfplumber_strategy, self.ocr_strategy]
+        for strategy in strategies:
+            if strategy and hasattr(strategy, 'cleanup'):
+                await strategy.cleanup()

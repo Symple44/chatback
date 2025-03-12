@@ -87,7 +87,8 @@ class TableExtractionPipeline:
                         hasattr(settings, 'table_extraction') and 
                         hasattr(settings.table_extraction, 'AI_DETECTION') and 
                         getattr(getattr(settings.table_extraction, 'AI_DETECTION', None), 'ENABLED', False) else None,
-            "hybrid": HybridTableStrategy(table_detector) if table_detector else None
+            "hybrid": HybridTableStrategy(table_detector) if table_detector else None,
+            "enhanced": EnhancedHybridStrategy(table_detector) if table_detector else None
         }
         
     async def extract_tables(
@@ -298,104 +299,112 @@ class TableExtractionPipeline:
             Tuple contenant le type de PDF et un score de confiance (0-1)
         """
         try:
-            # Initialisation des scores
-            text_score = 0.0
-            font_score = 0.0
-            size_score = 0.0
-            image_ratio_score = 0.0
-            
+            # Analyse plus détaillée avec méthodes multiples
             with fitz.open(file_path) as doc:
                 page_count = len(doc)
                 if page_count == 0:
-                    return PDFType.DIGITAL, 0.5  # Document vide
+                    return PDFType.DIGITAL, 0.5
                 
-                # Taille moyenne par page
-                file_size = os.path.getsize(file_path)
-                size_per_page = file_size / page_count
+                # Analyser un échantillon de pages plus représentatif
+                sample_size = min(max(3, page_count // 5), 10)  # Entre 3 et 10 pages
+                # Choisir des pages du début, du milieu et de la fin pour un meilleur échantillonnage
+                indices = [0]  # Première page
+                if page_count > 1:
+                    indices.append(page_count - 1)  # Dernière page
+                # Pages du milieu
+                for i in range(1, sample_size - 1):
+                    idx = (i * page_count) // sample_size
+                    if idx not in indices:
+                        indices.append(idx)
                 
-                # Les PDFs scannés sont généralement plus volumineux par page
-                if size_per_page > 500000:  # > 500KB par page
-                    size_score = 0.7
-                elif size_per_page > 200000:  # > 200KB par page
-                    size_score = 0.5
-                else:
-                    size_score = 0.2
+                # Scores pour chaque dimension d'analyse
+                text_scores = []
+                font_scores = []
+                image_scores = []
+                line_counts = []
                 
-                # Analyse sur un échantillon de pages
-                sample_size = min(5, page_count)
-                sample_pages = list(range(0, page_count, max(1, page_count // sample_size)))[:sample_size]
-                
-                total_text = 0
-                total_chars = 0
-                total_fonts = set()
-                total_images = 0
-                
-                for page_idx in sample_pages:
+                for page_idx in indices:
                     page = doc[page_idx]
-                    
-                    # Analyse du texte
                     text = page.get_text()
-                    total_text += len(text)
-                    total_chars += len(text.replace(" ", ""))
-                    
-                    # Analyse des fontes
                     fonts = page.get_fonts()
-                    total_fonts.update([font[3] for font in fonts])
-                    
-                    # Comptage des images
                     images = page.get_images()
-                    total_images += len(images)
-                
-                # Calcul des scores
-                
-                # Score basé sur la quantité de texte
-                chars_per_page = total_chars / sample_size
-                if chars_per_page < 50:  # Presque pas de texte
-                    text_score = 0.9  # Forte probabilité d'être scanné
-                elif chars_per_page < 200:
-                    text_score = 0.7
-                elif chars_per_page < 500:
-                    text_score = 0.5
-                else:
-                    text_score = 0.1  # Forte probabilité d'être numérique
-                
-                # Score basé sur les fontes
-                if len(total_fonts) == 0:
-                    font_score = 0.9  # Pas de fonte = probablement scanné
-                elif len(total_fonts) < 3:
-                    font_score = 0.6
-                else:
-                    font_score = 0.2  # Plusieurs fontes = probablement numérique
-                
-                # Score basé sur le ratio texte/images
-                if total_images > 0 and total_chars > 0:
-                    char_per_image = total_chars / total_images
-                    if char_per_image < 100:  # Peu de texte par image
-                        image_ratio_score = 0.8
-                    elif char_per_image < 500:
-                        image_ratio_score = 0.5
+                    drawings = page.get_drawings()
+                    
+                    # Analyse plus précise du texte
+                    words = page.get_text("words")
+                    chars = len("".join([w[4] for w in words]))
+                    blocks = page.get_text("blocks")
+                    
+                    # Score basé sur la densité et qualité du texte
+                    text_score = min(1.0, len(words) / 500) if len(words) > 0 else 0
+                    if chars < 50:
+                        text_score = 0.9  # Très peu de texte = probablement scanné
+                    
+                    # L'OCR produit souvent du texte avec fautes
+                    if text and len(words) > 20:
+                        from spellchecker import SpellChecker
+                        try:
+                            spell = SpellChecker()
+                            word_samples = [w[4].lower() for w in words[:50] if len(w[4]) > 3]
+                            misspelled = spell.unknown(word_samples)
+                            misspelled_ratio = len(misspelled) / len(word_samples) if word_samples else 0
+                            if misspelled_ratio > 0.4:  # Beaucoup de fautes = probablement OCR
+                                text_score = min(0.8, text_score + 0.3)
+                        except:
+                            pass
+                    
+                    # Détection de la qualité des caractères
+                    if fonts:
+                        # Les PDFs scannés utilisent généralement moins de polices
+                        font_score = 0.2 if len(fonts) > 3 else 0.7
                     else:
-                        image_ratio_score = 0.2
-                else:
-                    # Pas d'image mais du texte = numérique
-                    if total_chars > 0:
-                        image_ratio_score = 0.1
-                    else:
-                        image_ratio_score = 0.7  # Ni texte ni image = cas particulier
+                        font_score = 0.9  # Pas de fonts = probablement scanné
+                    
+                    # Détection de la présence d'images
+                    image_score = 0.8 if images else 0.2
+                    
+                    # Densité des lignes (plus élevée dans les PDFs scannés)
+                    line_count = len([d for d in drawings if d["type"] == "l"])
+                    line_ratio = min(1.0, line_count / 100)
+                    
+                    # Ajouter aux scores globaux
+                    text_scores.append(text_score)
+                    font_scores.append(font_score)
+                    image_scores.append(image_score)
+                    line_counts.append(line_ratio)
                 
-                # Combinaison pondérée des scores
-                # Privilégier le score de texte et de fontes qui sont les plus fiables
-                combined_score = (text_score * 0.5) + (font_score * 0.3) + (size_score * 0.1) + (image_ratio_score * 0.1)
+                # Moyenne des scores
+                avg_text_score = sum(text_scores) / len(text_scores) if text_scores else 0.5
+                avg_font_score = sum(font_scores) / len(font_scores) if font_scores else 0.5
+                avg_image_score = sum(image_scores) / len(image_scores) if image_scores else 0.5
+                avg_line_score = sum(line_counts) / len(line_counts) if line_counts else 0.5
                 
-                # Décision finale
-                if combined_score > 0.6:
+                # Calcul de score avec poids optimisés
+                weights = {
+                    "text": 0.5,    # Texte sélectionnable est le meilleur indicateur
+                    "font": 0.25,   # Police de caractères
+                    "image": 0.15,  # Présence d'images
+                    "line": 0.1     # Présence de lignes
+                }
+                
+                combined_score = (
+                    avg_text_score * weights["text"] +
+                    avg_font_score * weights["font"] +
+                    avg_image_score * weights["image"] +
+                    avg_line_score * weights["line"]
+                )
+                
+                # Classification avec hysteresis pour éviter les changements brusques
+                if combined_score > 0.65:
                     return PDFType.SCANNED, combined_score
+                elif combined_score < 0.35:
+                    return PDFType.DIGITAL, 1.0 - combined_score
                 else:
-                    return PDFType.DIGITAL, 1 - combined_score
+                    # Zone de doute - analyser plus en détail ou retourner HYBRID
+                    return PDFType.HYBRID, 0.5
                     
         except Exception as e:
             logger.error(f"Erreur identification type PDF: {e}")
-            # En cas d'erreur, par défaut considérer comme numérique
             return PDFType.DIGITAL, 0.5
     
     async def _detect_best_strategy(self, context: TableExtractionContext) -> str:
@@ -408,12 +417,18 @@ class TableExtractionPipeline:
         Returns:
             Nom de la stratégie recommandée
         """
-        # Si PDF scanné détecté avec haute confiance, utiliser OCR directement
+        # Si PDF scanné détecté avec haute confiance, utiliser OCR ou IA
         if context.pdf_type == PDFType.SCANNED and context.pdf_type_confidence > 0.8:
+            # Vérifier si la stratégie améliorée est disponible
+            if "enhanced" in self.strategies and self.strategies["enhanced"]:
+                return "enhanced"
             return "ocr"
         
-        # Pour les PDFs avec tableaux complexes, Camelot est souvent plus efficace
-        if context.complexity_score > 0.7:
+        # Pour les PDFs avec tableaux complexes, utiliser la méthode améliorée
+        if context.complexity_score > 0.6:
+            # Utiliser la stratégie améliorée si disponible
+            if "enhanced" in self.strategies and self.strategies["enhanced"]:
+                return "enhanced"
             return "camelot"
         
         # Pour les PDFs simples, tabula est plus rapide et généralement efficace
@@ -422,9 +437,14 @@ class TableExtractionPipeline:
         
         # Utilisation de la détection IA pour les cas intermédiaires
         if self.table_detector is not None:
+            # Utiliser la stratégie améliorée pour les cas intermédiaires
+            if "enhanced" in self.strategies and self.strategies["enhanced"]:
+                return "enhanced"
             return "ai"
         
-        # Si l'IA n'est pas disponible, utiliser hybrid qui combine plusieurs approches
+        # Si l'IA n'est pas disponible, utiliser hybrid ou enhanced
+        if "enhanced" in self.strategies and self.strategies["enhanced"]:
+            return "enhanced"
         return "hybrid" if "hybrid" in self.strategies else "camelot"
     
     async def _convert_to_output_format(

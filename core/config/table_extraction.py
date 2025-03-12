@@ -13,6 +13,7 @@ class TableExtractionStrategy(str, Enum):
     OCR = "ocr"
     AI = "ai"
     HYBRID = "hybrid"
+    ENHANSED = "enhanced"
 
 class OCRConfig(BaseModel):
     """Configuration pour l'OCR des tableaux."""
