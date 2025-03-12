@@ -459,14 +459,12 @@ app.add_middleware(
         "10.0.0.0/8"           # Réseau privé
     ],
     excluded_paths=[
-        "/docs",               # Documentation Swagger
-        "/redoc",              # Documentation ReDoc
-        "/openapi.json",       # Schéma OpenAPI
         "/api/health",         # Endpoints de santé
         "/api/health/*",       # Tous les sous-chemins de health
         "/api/ping",           # Ping simple
         "/static/*"            # Fichiers statiques
     ],
+    protected_docs=True,
     dev_mode=settings.DEBUG,   # Automatiquement désactivé en production
     rate_limit_enabled=True,   # Protection contre les attaques par force brute
     rate_limit_max=100,        # 100 requêtes

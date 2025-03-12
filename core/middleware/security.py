@@ -31,6 +31,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         api_key: str = None,
         excluded_paths: List[str] = None,
         trusted_ips: List[str] = None,
+        protected_docs: bool = False,
         dev_mode: bool = False,
         rate_limit_enabled: bool = True,
         rate_limit_max: int = 100,
@@ -41,6 +42,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         self.excluded_paths = set(excluded_paths or [])
         self.trusted_ips = set(trusted_ips or [])
         self.dev_mode = dev_mode or settings.DEBUG
+        self.protected_docs = protected_docs
         self.rate_limit_enabled = rate_limit_enabled
         self.rate_limit_max = rate_limit_max
         self.rate_limit_window = rate_limit_window
@@ -59,8 +61,12 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
             except ValueError:
                 logger.warning(f"IP ou réseau invalide ignoré: {ip}")
         
-        # Toujours exclure les chemins de documentation et health check
-        self.excluded_paths.update(["/docs", "/redoc", "/openapi.json", "/api/health", "/api/ping"])
+        # Si la documentation n'est pas protégée, ajouter les chemins de documentation aux exclusions
+        if not self.protected_docs:
+            self.excluded_paths.update(["/docs", "/redoc", "/openapi.json"])
+        
+        # Toujours exclure les chemins de health check
+        self.excluded_paths.update(["/api/health", "/api/ping"])
         
         # Logger la configuration
         self._log_configuration()
@@ -151,7 +157,27 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
                 }
             )
         
-        # Vérifier les exemptions
+        # Chemins de documentation
+        docs_paths = ["/docs", "/redoc", "/openapi.json"]
+        is_docs_path = path in docs_paths or any(path.startswith(p + "#") for p in docs_paths)
+        
+        # Pour les chemins de documentation, autoriser uniquement les IP de confiance
+        if is_docs_path and self.protected_docs:
+            if self._is_ip_trusted(client_ip) or self.dev_mode:
+                return await call_next(request)
+            else:
+                logger.warning(f"Tentative d'accès non autorisé à la documentation depuis {client_ip}")
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={
+                        "detail": "Accès à la documentation refusé depuis cette adresse IP",
+                        "error_code": "DOCS_ACCESS_DENIED",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "request_id": str(uuid.uuid4())
+                    }
+                )
+        
+        # Vérifier les exemptions standard
         if self._is_path_excluded(path) or self.dev_mode or self._is_ip_trusted(client_ip):
             return await call_next(request)
         
