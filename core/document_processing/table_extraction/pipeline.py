@@ -341,18 +341,21 @@ class TableExtractionPipeline:
                     if chars < 50:
                         text_score = 0.9  # Très peu de texte = probablement scanné
                     
-                    # L'OCR produit souvent du texte avec fautes
+                    # L'OCR produit souvent du texte avec fautes - cette partie a été modifiée pour éviter l'utilisation de spellchecker
                     if text and len(words) > 20:
-                        from spellchecker import SpellChecker
-                        try:
-                            spell = SpellChecker()
-                            word_samples = [w[4].lower() for w in words[:50] if len(w[4]) > 3]
-                            misspelled = spell.unknown(word_samples)
-                            misspelled_ratio = len(misspelled) / len(word_samples) if word_samples else 0
-                            if misspelled_ratio > 0.4:  # Beaucoup de fautes = probablement OCR
+                        # Analyse de la cohérence des mots sans dépendre de spellchecker
+                        word_samples = [w[4].lower() for w in words[:50] if len(w[4]) > 3]
+                        
+                        # Heuristique : calcul de la variance des longueurs des mots 
+                        # (l'OCR produit souvent des mots avec des longueurs erratiques)
+                        if word_samples:
+                            word_lengths = [len(w) for w in word_samples]
+                            mean_length = sum(word_lengths) / len(word_lengths)
+                            variance = sum((x - mean_length) ** 2 for x in word_lengths) / len(word_lengths)
+                            
+                            # Une forte variance peut indiquer des erreurs OCR
+                            if variance > 10:  
                                 text_score = min(0.8, text_score + 0.3)
-                        except:
-                            pass
                     
                     # Détection de la qualité des caractères
                     if fonts:

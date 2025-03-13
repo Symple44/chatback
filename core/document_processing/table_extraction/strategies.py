@@ -366,11 +366,17 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
     
     def _is_valid_header(self, header_row: List, data_rows: List[List]) -> bool:
         """Vérifie si une ligne peut être considérée comme un en-tête."""
-        if not data_rows:
+        if not header_row or not data_rows:
+            return False
+            
+        # Vérifier que tous les éléments sont bien des types adaptés
+        # pour éviter l'erreur "arg must be a list, tuple, 1-d array, or Series"
+        if not isinstance(header_row, (list, tuple)) or not all(isinstance(row, (list, tuple)) for row in data_rows):
+            logger.warning("Format de données invalide pour l'analyse d'en-tête")
             return False
             
         # Vérifier si l'en-tête contient des chaînes numériques
-        header_numeric = sum(1 for cell in header_row if cell.replace('.', '').isdigit() if isinstance(cell, str))
+        header_numeric = sum(1 for cell in header_row if isinstance(cell, str) and cell.replace('.', '').isdigit())
         
         # Échantillon des lignes de données pour vérifier si elles sont numériques
         sample_size = min(5, len(data_rows))
@@ -382,11 +388,16 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
             numeric_counts.append(numeric_count)
         
         # Calculer le pourcentage moyen de cellules numériques dans les données
-        avg_numeric_percent = sum(numeric_counts) / (sample_size * len(header_row)) if sample_size > 0 else 0
+        # Éviter la division par zéro
+        if sample_size == 0 or len(header_row) == 0:
+            return False
         
-        # Si l'en-tête contient significativement moins de numériques que les données, c'est probablement un en-tête
+        avg_numeric_percent = sum(numeric_counts) / (sample_size * len(header_row))
+        
+        # Calculer le pourcentage de numériques dans l'en-tête
         header_numeric_percent = header_numeric / len(header_row)
         
+        # Si l'en-tête contient significativement moins de numériques que les données, c'est probablement un en-tête
         return header_numeric_percent < avg_numeric_percent * 0.5
     
     async def _ocr_table_grid_approach(
@@ -1532,31 +1543,56 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                         (self.pdfplumber_strategy, "pdfplumber", 0.8)
                     ]
                 
-                # Exécuter les stratégies en parallèle
+                # Exécuter les stratégies en parallèle avec un timeout pour éviter les blocages
                 tasks = []
                 for strategy, name, weight in strategies:
-                    tasks.append(self._run_strategy_with_weight(strategy, context, name, weight))
+                    # Ajouter un timeout pour chaque stratégie
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            self._run_strategy_with_weight(strategy, context, name, weight),
+                            timeout=30.0  # 30 secondes timeout max par stratégie
+                        )
+                    )
+                    tasks.append(task)
                 
-                # Attendre tous les résultats
-                results = await asyncio.gather(*tasks)
+                # Attendre tous les résultats avec gestion des erreurs
+                results = []
+                for task in asyncio.as_completed(tasks):
+                    try:
+                        result = await task
+                        if result:  # Ne garder que les résultats non vides
+                            results.append(result)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout dépassé pour une stratégie d'extraction")
+                    except Exception as e:
+                        logger.warning(f"Erreur dans une stratégie d'extraction: {e}")
                 
                 # Filtrer les résultats vides
                 results = [tables for tables in results if tables]
                 
                 if not results:
                     logger.warning("Aucun résultat trouvé avec les stratégies hybrides, tentative avec approche simple")
-                    # Fallback avec stratégie simple
-                    return await self._run_fallback_extraction(context)
+                    # Fallback avec stratégie simple - avec timeout pour éviter blocage
+                    try:
+                        return await asyncio.wait_for(
+                            self._run_fallback_extraction(context),
+                            timeout=30.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("Timeout dépassé pour la stratégie de secours")
+                        return []
                 
                 # Fusionner les résultats avec meilleure gestion des tableaux
                 all_tables = await self._enhanced_merge_tables_results(results, context)
                 
-                # Appliquer une validation finale
+                # Appliquer une validation finale avec critères de qualité
                 validated_tables = []
                 for table in all_tables:
                     # Validation personnalisée pour éviter les faux positifs
                     if self._is_valid_table(table):
-                        validated_tables.append(table)
+                        # Normaliser le tableau avant de l'ajouter
+                        normalized_table = await self._normalize_table(table)
+                        validated_tables.append(normalized_table)
                 
                 logger.info(f"Hybride amélioré: {len(validated_tables)} tableaux extraits")
                 return validated_tables
@@ -1564,7 +1600,7 @@ class EnhancedHybridStrategy(PDFTableStrategy):
         except Exception as e:
             logger.error(f"Erreur extraction hybride améliorée: {e}")
             return []
-    
+
     async def _run_strategy_with_weight(
         self, 
         strategy: PDFTableStrategy, 
@@ -1585,7 +1621,105 @@ class EnhancedHybridStrategy(PDFTableStrategy):
         except Exception as e:
             logger.warning(f"Erreur exécution stratégie {name}: {e}")
             return []
-    
+    async def _normalize_table(self, table: ProcessedTable) -> ProcessedTable:
+        """
+        Normalise un tableau pour améliorer sa qualité.
+        
+        Args:
+            table: Tableau à normaliser
+            
+        Returns:
+            Tableau normalisé
+        """
+        try:
+            df = table.data
+            
+            # Vérifier si c'est un DataFrame
+            if not isinstance(df, pd.DataFrame):
+                return table
+            
+            # 1. Nettoyer les valeurs
+            # Supprimer les caractères de contrôle et les espaces multiples
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].astype(str).apply(
+                        lambda x: ' '.join(re.sub(r'[\x00-\x1F\x7F]', '', x).split())
+                    )
+            
+            # 2. Fusionner les colonnes identiques ou presque identiques
+            columns = list(df.columns)
+            to_drop = []
+            
+            for i, col1 in enumerate(columns):
+                for j in range(i + 1, len(columns)):
+                    col2 = columns[j]
+                    
+                    # Comparer les colonnes
+                    if col2 not in to_drop and df[col1].equals(df[col2]):
+                        # Colonnes identiques
+                        to_drop.append(col2)
+                    elif col2 not in to_drop and df[col1].dtype == df[col2].dtype == 'object':
+                        # Calculer la similarité des chaînes
+                        similarity = df.apply(
+                            lambda row: self._string_similarity(str(row[col1]), str(row[col2])),
+                            axis=1
+                        ).mean()
+                        
+                        if similarity > 0.9:  # 90% de similarité
+                            to_drop.append(col2)
+            
+            # Supprimer les colonnes dupliquées
+            if to_drop:
+                df = df.drop(columns=to_drop)
+            
+            # Retourner le nouveau tableau
+            return ProcessedTable(
+                data=df,
+                page=table.page,
+                rows=len(df),
+                columns=len(df.columns),
+                method=table.method,
+                confidence=table.confidence,
+                region=table.region
+            )
+        
+        except Exception as e:
+            logger.warning(f"Erreur normalisation tableau: {e}")
+            return table
+        
+    def _string_similarity(self, s1: str, s2: str) -> float:
+        """
+        Calcule la similarité entre deux chaînes (ratio de Levenshtein simplifié).
+        
+        Args:
+            s1, s2: Chaînes à comparer
+            
+        Returns:
+            Score de similarité entre 0 et 1
+        """
+        if s1 == s2:
+            return 1.0
+        
+        # Ignorer les chaînes vides
+        if not s1 or not s2:
+            return 0.0
+        
+        # Normaliser les chaînes
+        s1 = s1.lower().strip()
+        s2 = s2.lower().strip()
+        
+        # Longueur des chaînes
+        len1, len2 = len(s1), len(s2)
+        max_len = max(len1, len2)
+        
+        if max_len == 0:
+            return 1.0
+        
+        # Compter les caractères communs
+        matches = sum(1 for c in s1 if c in s2)
+        
+        return matches / max_len
+
     async def _run_fallback_extraction(self, context: TableExtractionContext) -> List[ProcessedTable]:
         """Méthode de secours si aucune stratégie ne donne de résultat."""
         try:
