@@ -16,6 +16,7 @@ from PIL import Image
 import pytesseract
 import fitz
 import time
+import re
 
 from core.config.config import settings
 from core.utils.logger import get_logger
@@ -330,13 +331,26 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
                             if not table_data or len(table_data) < 2:  # Au moins une ligne d'en-tête et une ligne de données
                                 continue
                                 
-                            # Conversion en DataFrame
+                            # Vérifications pour éviter l'erreur "arg must be a list, tuple, 1-d array, or Series"
+                            valid_table = True
+                            for row in table_data:
+                                if not isinstance(row, (list, tuple)):
+                                    logger.warning(f"Format de ligne non valide dans le tableau PDFPlumber")
+                                    valid_table = False
+                                    break
+                            
+                            if not valid_table:
+                                continue
+                            
+                            # Conversion en DataFrame avec validation supplémentaire
                             try:
                                 # Déterminer si la première ligne est un en-tête
                                 is_header = self._is_valid_header(table_data[0], table_data[1:])
                                 
                                 if is_header:
-                                    df = pd.DataFrame(table_data[1:], columns=table_data[0])
+                                    # Assurer que tous les noms de colonnes sont des chaînes
+                                    header_row = [str(col) if col is not None else f"Col_{j+1}" for j, col in enumerate(table_data[0])]
+                                    df = pd.DataFrame(table_data[1:], columns=header_row)
                                 else:
                                     columns = [f"Col_{j+1}" for j in range(len(table_data[0]))]
                                     df = pd.DataFrame(table_data, columns=columns)
@@ -370,13 +384,17 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
             return False
             
         # Vérifier que tous les éléments sont bien des types adaptés
-        # pour éviter l'erreur "arg must be a list, tuple, 1-d array, or Series"
         if not isinstance(header_row, (list, tuple)) or not all(isinstance(row, (list, tuple)) for row in data_rows):
             logger.warning("Format de données invalide pour l'analyse d'en-tête")
             return False
             
         # Vérifier si l'en-tête contient des chaînes numériques
-        header_numeric = sum(1 for cell in header_row if isinstance(cell, str) and cell.replace('.', '').isdigit())
+        header_numeric = 0
+        for cell in header_row:
+            if isinstance(cell, str) and cell.replace('.', '').isdigit():
+                header_numeric += 1
+            elif isinstance(cell, (int, float)):
+                header_numeric += 1
         
         # Échantillon des lignes de données pour vérifier si elles sont numériques
         sample_size = min(5, len(data_rows))
@@ -384,7 +402,12 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
         
         numeric_counts = []
         for row in sample_rows:
-            numeric_count = sum(1 for cell in row if isinstance(cell, str) and cell.replace('.', '').isdigit())
+            numeric_count = 0
+            for cell in row:
+                if isinstance(cell, str) and cell.replace('.', '').isdigit():
+                    numeric_count += 1
+                elif isinstance(cell, (int, float)):
+                    numeric_count += 1
             numeric_counts.append(numeric_count)
         
         # Calculer le pourcentage moyen de cellules numériques dans les données
@@ -1519,38 +1542,46 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                 # Initialiser les pondérations selon le type de PDF
                 if context.pdf_type == PDFType.SCANNED:
                     strategies = [
-                        (self.ocr_strategy, "ocr", 1.2)
+                        (self.ocr_strategy, "ocr", 1.2, 45.0),  # OCR a besoin de plus de temps
                     ]
                     
                     # Ajouter IA si disponible
                     if self.table_detector:
                         ai_strategy = AIDetectionTableStrategy(self.table_detector)
-                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3))
+                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3, 30.0))
                 elif context.pdf_type == PDFType.HYBRID:
                     # Pour PDF hybride, essayer plusieurs approches
                     strategies = [
-                        (self.camelot_strategy, "camelot", 1.0),
-                        (self.tabula_strategy, "tabula", 0.9),
-                        (self.pdfplumber_strategy, "pdfplumber", 0.8)
+                        (self.camelot_strategy, "camelot", 1.0, 25.0),
+                        (self.tabula_strategy, "tabula", 0.9, 20.0),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 15.0)
                     ]
                     # Ajouter OCR avec faible pondération
-                    strategies.append((self.ocr_strategy, "ocr", 0.6))
+                    strategies.append((self.ocr_strategy, "ocr", 0.6, 30.0))
                 else:
                     # PDF digital standard
                     strategies = [
-                        (self.camelot_strategy, "camelot", 1.1),
-                        (self.tabula_strategy, "tabula", 1.0),
-                        (self.pdfplumber_strategy, "pdfplumber", 0.8)
+                        (self.camelot_strategy, "camelot", 1.1, 20.0),
+                        (self.tabula_strategy, "tabula", 1.0, 15.0),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 10.0)
                     ]
+                
+                # Estimer la complexité du document pour ajuster les timeouts
+                complexity_factor = min(2.0, max(1.0, context.complexity_score * 1.5))
                 
                 # Exécuter les stratégies en parallèle avec un timeout pour éviter les blocages
                 tasks = []
-                for strategy, name, weight in strategies:
+                for strategy, name, weight, base_timeout in strategies:
+                    # Ajuster le timeout en fonction de la complexité du document
+                    adjusted_timeout = base_timeout * complexity_factor
+                    
+                    # Log pour le débogage
+                    logger.debug(f"Démarrage stratégie {name} avec timeout {adjusted_timeout:.1f}s")
+                    
                     # Ajouter un timeout pour chaque stratégie
                     task = asyncio.create_task(
-                        asyncio.wait_for(
-                            self._run_strategy_with_weight(strategy, context, name, weight),
-                            timeout=30.0  # 30 secondes timeout max par stratégie
+                        self._run_strategy_with_timeout(
+                            strategy, context, name, weight, adjusted_timeout
                         )
                     )
                     tasks.append(task)
@@ -1562,8 +1593,6 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                         result = await task
                         if result:  # Ne garder que les résultats non vides
                             results.append(result)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout dépassé pour une stratégie d'extraction")
                     except Exception as e:
                         logger.warning(f"Erreur dans une stratégie d'extraction: {e}")
                 
@@ -1601,6 +1630,41 @@ class EnhancedHybridStrategy(PDFTableStrategy):
             logger.error(f"Erreur extraction hybride améliorée: {e}")
             return []
 
+    async def _run_strategy_with_timeout(
+        self, 
+        strategy: PDFTableStrategy, 
+        context: TableExtractionContext,
+        name: str,
+        weight: float,
+        timeout: float
+    ) -> List[ProcessedTable]:
+        """
+        Exécute une stratégie avec un timeout.
+        
+        Args:
+            strategy: Stratégie à exécuter
+            context: Contexte d'extraction
+            name: Nom de la stratégie
+            weight: Pondération des résultats
+            timeout: Timeout en secondes
+            
+        Returns:
+            Liste de tableaux extraits
+        """
+        try:
+            # Exécuter la stratégie avec timeout
+            result = await asyncio.wait_for(
+                self._run_strategy_with_weight(strategy, context, name, weight),
+                timeout=timeout
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout dépassé pour la stratégie {name}")
+            return []
+        except Exception as e:
+            logger.warning(f"Erreur exécution stratégie {name}: {e}")
+            return []
+    
     async def _run_strategy_with_weight(
         self, 
         strategy: PDFTableStrategy, 
@@ -1621,6 +1685,7 @@ class EnhancedHybridStrategy(PDFTableStrategy):
         except Exception as e:
             logger.warning(f"Erreur exécution stratégie {name}: {e}")
             return []
+        
     async def _normalize_table(self, table: ProcessedTable) -> ProcessedTable:
         """
         Normalise un tableau pour améliorer sa qualité.
