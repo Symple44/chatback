@@ -202,6 +202,12 @@ class ComponentManager:
                     )
                     self._components["table_extraction_pipeline"] = table_extraction_pipeline
                     logger.info("Pipeline d'extraction de tableaux initialisé")
+                    
+                    # Initialisation de l'exportateur de tableaux
+                    from core.document_processing.table_extraction.exporter import TableExporter
+                    table_exporter = TableExporter()
+                    self._components["table_exporter"] = table_exporter
+                    logger.info("Exportateur de tableaux initialisé")
                 
                 # Google Drive (optionnel)
                 if settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH:
@@ -270,7 +276,7 @@ class ComponentManager:
             # Ordre explicite de nettoyage - du plus haut niveau au plus bas niveau
             cleanup_order = [
                 "search_manager", "doc_extractor", "pdf_processor",
-                "table_extraction_pipeline", "table_detector",
+                "table_extraction_pipeline", "table_detector","table_exporter",
                 "model", "summarizer", "embedding_manager", "model_manager", 
                 "model_loader", "tokenizer_manager", "cuda_manager", "auth_manager", 
                 "es_client", "pdf_cache", "models_cache", "cache_manager", "redis_cache", 

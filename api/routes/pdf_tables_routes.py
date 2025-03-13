@@ -793,7 +793,7 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
     
     Args:
         tables: Liste de tableaux
-        format: Format d'export ('csv', 'excel', 'json', 'html')
+        format: Format d'export ('excel', 'csv', 'json', 'html', 'pdf', 'markdown')
         filename: Nom du fichier original
         components: Composants de l'application
         
@@ -801,231 +801,16 @@ async def export_tables(tables: List[Dict[str, Any]], format: str, filename: str
         Informations sur le fichier exporté
     """
     try:
-        import pandas as pd
-        import numpy as np
-        from io import BytesIO
+        # Vérifier si l'exportateur est déjà initialisé dans les composants
+        if not hasattr(components, 'table_exporter'):
+            from core.document_processing.table_extraction.exporter import TableExporter
+            components._components["table_exporter"] = TableExporter()
+            logger.info("Table Exporter initialisé")
         
-        # Créer le répertoire d'export s'il n'existe pas
-        export_dir = os.path.join("temp", "pdf_exports")
-        os.makedirs(export_dir, exist_ok=True)
+        # Utiliser l'exportateur pour générer le fichier
+        exporter = components.table_exporter
+        return await exporter.export_tables(tables, format, filename)
         
-        # Fonction pour rendre les objets sérialisables en JSON
-        def json_serializable(obj):
-            if isinstance(obj, (pd.Series, pd.Index)):
-                return obj.tolist()
-            elif isinstance(obj, pd.DataFrame):
-                return obj.to_dict(orient="records")
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif pd.isna(obj):
-                return None
-            else:
-                return str(obj)
-        
-        # Conversion des tableaux en DataFrames
-        dataframes = []
-        for table in tables:
-            if "data" not in table:
-                continue
-                
-            df = None
-            if isinstance(table["data"], pd.DataFrame):
-                df = table["data"]
-            elif isinstance(table["data"], list):
-                df = pd.DataFrame(table["data"])
-            elif isinstance(table["data"], str):
-                try:
-                    # Tenter de parser CSV, JSON ou HTML
-                    if table.get("extraction_method", "").lower().endswith("csv"):
-                        df = pd.read_csv(io.StringIO(table["data"]))
-                    elif table.get("extraction_method", "").lower().endswith("json"):
-                        df = pd.read_json(io.StringIO(table["data"]))
-                    elif table.get("extraction_method", "").lower().endswith("html"):
-                        df = pd.read_html(table["data"])[0]
-                except:
-                    continue
-            
-            if df is not None:
-                # Ajouter des métadonnées
-                df = df.copy()
-                if "page" in table:
-                    df.insert(0, "_page", table["page"])
-                if "table_id" in table:
-                    df.insert(1, "_table_id", table["table_id"])
-                
-                dataframes.append(df)
-        
-        if not dataframes:
-            raise ValueError("Aucun tableau valide à exporter")
-        
-        if format == "excel":
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                for i, df in enumerate(dataframes):
-                    # Remplacer les NaN par None
-                    df = df.replace({np.nan: None})
-                    
-                    sheet_name = f"Table_{i+1}"
-                    if len(sheet_name) > 31:  # Excel limite à 31 caractères
-                        sheet_name = sheet_name[:31]
-                    
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # Ajuster les colonnes
-                    worksheet = writer.sheets[sheet_name]
-                    for j, col in enumerate(df.columns):
-                        # Définir la largeur
-                        max_len = max(
-                            df[col].astype(str).map(len).max() if len(df) > 0 else 0,
-                            len(str(col))
-                        )
-                        worksheet.set_column(j, j, max_len + 2)
-            
-            output.seek(0)
-            export_filename = f"{os.path.splitext(filename)[0]}_tables.xlsx"
-            export_path = os.path.join(export_dir, export_filename)
-            
-            with open(export_path, "wb") as f:
-                f.write(output.getvalue())
-            
-            return {
-                "content": output.getvalue(),
-                "filename": export_filename,
-                "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "download_url": f"/api/pdf/tables/download/{export_filename}"
-            }
-            
-        elif format == "csv":
-            import zipfile
-            
-            output = BytesIO()
-            with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for i, df in enumerate(dataframes):
-                    # Remplacer les NaN par None
-                    df = df.replace({np.nan: None})
-                    
-                    # Créer CSV en mémoire
-                    csv_buffer = BytesIO()
-                    df.to_csv(csv_buffer, index=False)
-                    csv_buffer.seek(0)
-                    
-                    # Ajouter au ZIP
-                    zipf.writestr(f"table_{i+1}.csv", csv_buffer.getvalue())
-            
-            output.seek(0)
-            export_filename = f"{os.path.splitext(filename)[0]}_tables.zip"
-            export_path = os.path.join(export_dir, export_filename)
-            
-            with open(export_path, "wb") as f:
-                f.write(output.getvalue())
-            
-            return {
-                "content": output.getvalue(),
-                "filename": export_filename,
-                "media_type": "application/zip",
-                "download_url": f"/api/pdf/tables/download/{export_filename}"
-            }
-            
-        elif format == "json":
-            output = BytesIO()
-            result = []
-            
-            for i, df in enumerate(dataframes):
-                # Préparation pour JSON
-                table_result = {
-                    "table_id": i + 1,
-                    "page": df["_page"].iloc[0] if "_page" in df.columns else None,
-                    "rows": len(df),
-                    "columns": len(df.columns),
-                    "data": df.replace({np.nan: None}).to_dict(orient="records")
-                }
-                result.append(table_result)
-            
-            # Sérialisation JSON
-            import json
-            json_str = json.dumps(result, default=json_serializable, indent=2)
-            output.write(json_str.encode('utf-8'))
-            output.seek(0)
-            
-            export_filename = f"{os.path.splitext(filename)[0]}_tables.json"
-            export_path = os.path.join(export_dir, export_filename)
-            
-            with open(export_path, "wb") as f:
-                f.write(output.getvalue())
-            
-            return {
-                "content": output.getvalue(),
-                "filename": export_filename,
-                "media_type": "application/json",
-                "download_url": f"/api/pdf/tables/download/{export_filename}"
-            }
-            
-        elif format == "html":
-            output = BytesIO()
-            html_content = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Tables Export</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        h2 { color: #333; }
-        .metadata { color: #666; font-size: 0.9em; margin-bottom: 10px; }
-    </style>
-</head>
-<body>
-"""
-            
-            for i, df in enumerate(dataframes):
-                # Extraire les métadonnées
-                page_num = df["_page"].iloc[0] if "_page" in df.columns else "N/A"
-                table_id = df["_table_id"].iloc[0] if "_table_id" in df.columns else i+1
-                
-                # Nettoyer le DataFrame pour l'affichage
-                if "_page" in df.columns:
-                    df = df.drop("_page", axis=1)
-                if "_table_id" in df.columns:
-                    df = df.drop("_table_id", axis=1)
-                
-                # Remplir les NaN par des chaînes vides
-                df = df.fillna("")
-                
-                # Convertir en HTML
-                table_html = df.to_html(index=False, classes='data-table', border=1)
-                
-                html_content += f"""<h2>Tableau {table_id}</h2>
-<div class="metadata">Page: {page_num}</div>
-{table_html}
-<hr>
-"""
-            
-            html_content += "</body></html>"
-            output.write(html_content.encode('utf-8'))
-            output.seek(0)
-            
-            export_filename = f"{os.path.splitext(filename)[0]}_tables.html"
-            export_path = os.path.join(export_dir, export_filename)
-            
-            with open(export_path, "wb") as f:
-                f.write(output.getvalue())
-            
-            return {
-                "content": output.getvalue(),
-                "filename": export_filename,
-                "media_type": "text/html",
-                "download_url": f"/api/pdf/tables/download/{export_filename}"
-            }
-            
-        else:
-            raise ValueError(f"Format non supporté: {format}")
-            
     except Exception as e:
         logger.error(f"Erreur export tableaux: {e}")
         raise HTTPException(
