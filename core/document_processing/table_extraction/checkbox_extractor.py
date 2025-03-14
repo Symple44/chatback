@@ -1122,6 +1122,299 @@ class CheckboxExtractor:
                 })
         
         return form_regions
+    
+    def _detect_checkboxes_by_structure(self, page, text_dict, page_img, page_num):
+        """
+        Détecte les cases à cocher basées sur la structure du document.
+        
+        Args:
+            page: Page PDF (fitz page)
+            text_dict: Dictionnaire de texte extrait
+            page_img: Image de la page convertie en array numpy
+            page_num: Numéro de la page
+            
+        Returns:
+            Liste des cases à cocher détectées
+        """
+        checkboxes = []
+        
+        # Détecter les cases à cocher basées sur la structure du document
+        # Recherche de motifs structurels typiques comme les listes à puces, etc.
+        
+        # Paramètres de détection
+        min_bullet_size = 8
+        max_bullet_size = 25
+        
+        # Extraire les blocs de texte
+        blocks = text_dict.get("blocks", [])
+        
+        for block_idx, block in enumerate(blocks):
+            if block["type"] != 0:  # Ignorer les non-texte
+                continue
+            
+            # Récupérer les lignes du bloc
+            for line_idx, line in enumerate(block.get("lines", [])):
+                line_spans = line.get("spans", [])
+                
+                # Recherche de modèles typiques de cases à cocher dans les spans
+                for span_idx, span in enumerate(line_spans):
+                    span_text = span.get("text", "").strip()
+                    span_font = span.get("font", "")
+                    
+                    # 1. Vérifier si le span contient des symboles de cases à cocher
+                    has_checkbox_symbol = any(symbol in span_text for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣"])
+                    
+                    # 2. Détecter les structures typiques de cases à cocher
+                    is_checkbox_structure = False
+                    
+                    # 2.1 Vérifier si c'est un élément court suivi d'un texte plus long (typique d'une structure de liste)
+                    if len(span_text) <= 2 and span_idx + 1 < len(line_spans):
+                        next_span = line_spans[span_idx + 1]
+                        next_text = next_span.get("text", "").strip()
+                        if len(next_text) > 3:  # Le texte suivant est significativement plus long
+                            is_checkbox_structure = True
+                    
+                    # 2.2 Vérifier les spans de type puce/bullet
+                    if span_text in ["•", "○", "◦", "▪", "▫", "◆", "◇", "–", "-", "*"]:
+                        is_checkbox_structure = True
+                    
+                    # Si c'est un candidat de case à cocher
+                    if has_checkbox_symbol or is_checkbox_structure:
+                        # Récupérer les coordonnées du span
+                        bbox = span.get("bbox", [0, 0, 0, 0])
+                        x0, y0, x1, y1 = bbox
+                        
+                        # Déterminer l'état (coché/non coché)
+                        is_checked = any(symbol in span_text for symbol in ["☑", "☒", "■"])
+                        
+                        # Obtenir l'étiquette de la case (souvent dans le span suivant)
+                        label = ""
+                        if span_idx + 1 < len(line_spans):
+                            label = line_spans[span_idx + 1].get("text", "").strip()
+                        
+                        # Si aucune étiquette trouvée, utiliser le texte de la ligne entière
+                        if not label:
+                            label = " ".join([s.get("text", "") for s in line_spans]).strip()
+                            # Retirer les symboles de case à cocher de l'étiquette
+                            for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣", "•", "○", "◦", "▪", "▫"]:
+                                label = label.replace(symbol, "").strip()
+                        
+                        # Créer l'objet case à cocher
+                        checkbox = {
+                            "label": label,
+                            "checked": is_checked,
+                            "bbox": bbox,
+                            "page": page_num,
+                            "confidence": 0.7 if has_checkbox_symbol else 0.5,
+                            "type": "structure"
+                        }
+                        
+                        checkboxes.append(checkbox)
+        
+        return checkboxes
+    
+    def _detect_square_checkboxes(self, binary_img, scale=1.0):
+        """
+        Détecte les formes carrées qui pourraient être des cases à cocher.
+        
+        Args:
+            binary_img: Image binaire
+            scale: Facteur d'échelle pour les coordonnées
+            
+        Returns:
+            Liste des régions de cases à cocher détectées
+        """
+        # Recherche de contours
+        contours, _ = cv2.findContours(binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        checkbox_regions = []
+        
+        for contour in contours:
+            # Ignorer les contours trop petits
+            if cv2.contourArea(contour) < self.min_checkbox_area:
+                continue
+            
+            # Calculer le rectangle englobant
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Vérifier si c'est approximativement un carré
+            aspect_ratio = float(w) / h if h > 0 else 0
+            
+            if (self.checkbox_min_size <= w <= self.checkbox_max_size and 
+                self.checkbox_min_size <= h <= self.checkbox_max_size and
+                abs(aspect_ratio - 1.0) <= self.checkbox_tolerance):
+                
+                # Vérifier la solidité (rapport entre l'aire du contour et l'aire du rectangle englobant)
+                contour_area = cv2.contourArea(contour)
+                rect_area = w * h
+                solidity = float(contour_area) / rect_area if rect_area > 0 else 0
+                
+                if solidity > 0.7:  # Les carrés ont une solidité élevée
+                    # Appliquer le facteur d'échelle
+                    x_scaled = int(x / scale)
+                    y_scaled = int(y / scale)
+                    w_scaled = int(w / scale)
+                    h_scaled = int(h / scale)
+                    
+                    # Ajouter des marges pour capturer un peu plus de contexte
+                    margin = max(2, int(w_scaled * 0.1))
+                    x_with_margin = max(0, x_scaled - margin)
+                    y_with_margin = max(0, y_scaled - margin)
+                    width_with_margin = w_scaled + 2 * margin
+                    height_with_margin = h_scaled + 2 * margin
+                    
+                    checkbox_regions.append({
+                        "x": x_scaled,
+                        "y": y_scaled,
+                        "width": w_scaled,
+                        "height": h_scaled,
+                        "x_with_margin": x_with_margin,
+                        "y_with_margin": y_with_margin,
+                        "width_with_margin": width_with_margin,
+                        "height_with_margin": height_with_margin,
+                        "area": contour_area / (scale * scale),
+                        "solidity": solidity
+                    })
+        
+        return checkbox_regions
+    
+    def _extract_text_blocks(self, page_text):
+        """
+        Extrait les blocs de texte depuis le dictionnaire de texte de page.
+        
+        Args:
+            page_text: Dictionnaire de texte de la page (obtenu via page.get_text("dict"))
+            
+        Returns:
+            Liste des blocs de texte normalisés
+        """
+        text_blocks = []
+        
+        for block in page_text.get("blocks", []):
+            if block["type"] != 0:  # Ignorer les non-texte
+                continue
+            
+            block_text = ""
+            block_bbox = list(block.get("bbox", [0, 0, 0, 0]))
+            
+            # Extraire le texte des spans
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    span_text = span.get("text", "").strip()
+                    if span_text:
+                        block_text += span_text + " "
+            
+            block_text = block_text.strip()
+            
+            if block_text:
+                # Analyser le bloc pour déterminer si c'est un titre, une case à cocher, etc.
+                block_type = "text"
+                if any(symbol in block_text for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣"]):
+                    block_type = "checkbox"
+                elif block_text.endswith(":") and len(block_text) < 50:
+                    block_type = "title"
+                
+                # Ajouter le bloc normalisé
+                text_blocks.append({
+                    "text": block_text,
+                    "bbox": block_bbox,
+                    "type": block_type,
+                    "font_size": block.get("lines", [{}])[0].get("spans", [{}])[0].get("size", 0) if block.get("lines") else 0
+                })
+        
+        # Trier les blocs par position verticale
+        text_blocks.sort(key=lambda b: b["bbox"][1])
+        
+        return text_blocks
+
+    def _identify_checkbox_groups(self, checkbox_regions, text_blocks):
+        """
+        Identifie les groupes logiques de cases à cocher.
+        
+        Args:
+            checkbox_regions: Liste des régions de cases à cocher
+            text_blocks: Blocs de texte extraits
+            
+        Returns:
+            Liste des cases à cocher avec information de groupe
+        """
+        # Paramètres de regroupement
+        vertical_tolerance = 20  # Tolérance verticale pour considérer des cases sur la même ligne
+        horizontal_min_gap = 50  # Écart horizontal minimum entre des cases d'un même groupe
+        
+        # Trier les cases à cocher par position Y
+        checkbox_regions = sorted(checkbox_regions, key=lambda c: c.get("y", 0))
+        
+        # Initialiser les groupes
+        groups = []
+        current_group = []
+        last_y = -vertical_tolerance * 2
+        
+        # Regrouper par proximité verticale
+        for checkbox in checkbox_regions:
+            y = checkbox.get("y", 0)
+            
+            # Si on change de ligne
+            if y > last_y + vertical_tolerance:
+                if current_group:
+                    groups.append(current_group)
+                current_group = [checkbox]
+                last_y = y
+            else:
+                current_group.append(checkbox)
+        
+        # Ajouter le dernier groupe
+        if current_group:
+            groups.append(current_group)
+        
+        # Pour chaque groupe, trier horizontalement et assigner des IDs
+        checkboxes_with_groups = []
+        for group_id, group in enumerate(groups):
+            # Trier les cases du groupe par position X
+            group.sort(key=lambda c: c.get("x", 0))
+            
+            # Identifier les sous-groupes si les cases sont bien espacées
+            subgroups = []
+            current_subgroup = [group[0]] if group else []
+            
+            for i in range(1, len(group)):
+                current_x = group[i-1].get("x", 0) + group[i-1].get("width", 0)
+                next_x = group[i].get("x", 0)
+                
+                # Si l'écart horizontal est significatif, c'est un nouveau sous-groupe
+                if next_x - current_x > horizontal_min_gap:
+                    if current_subgroup:
+                        subgroups.append(current_subgroup)
+                    current_subgroup = [group[i]]
+                else:
+                    current_subgroup.append(group[i])
+            
+            # Ajouter le dernier sous-groupe
+            if current_subgroup:
+                subgroups.append(current_subgroup)
+            
+            # Assigner les informations de groupe à chaque case
+            for subgroup_id, subgroup in enumerate(subgroups):
+                for checkbox in subgroup:
+                    # Créer une copie enrichie avec les informations de groupe
+                    checkbox_with_group = checkbox.copy()
+                    checkbox_with_group["group_id"] = f"group_{group_id}"
+                    checkbox_with_group["subgroup_id"] = f"group_{group_id}_sub_{subgroup_id}"
+                    
+                    # Déterminer le type de sous-groupe (Oui/Non, options multiples, etc.)
+                    if len(subgroup) == 2:
+                        # Probablement un groupe Oui/Non
+                        checkbox_with_group["group_type"] = "binary"
+                    elif len(subgroup) > 2:
+                        # Probablement un groupe d'options multiples
+                        checkbox_with_group["group_type"] = "multiple"
+                    else:
+                        # Case unique
+                        checkbox_with_group["group_type"] = "single"
+                    
+                    checkboxes_with_groups.append(checkbox_with_group)
+        
+        return checkboxes_with_groups
 
     def _filter_duplicate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
