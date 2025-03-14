@@ -280,9 +280,47 @@ async def extract_tables(
                     structured_data["auto_detected"] = True
                     structured_data["detection_confidence"] = detected_confidence
                 
-                # Ajouter les résultats des cases à cocher si disponibles
+                # Formater et ajouter les résultats des cases à cocher si disponibles
                 if checkbox_results and extract_checkboxes:
-                    structured_data["checkboxes"] = checkbox_results
+                    # Conserver les résultats bruts pour la compatibilité
+                    structured_data["checkboxes_raw"] = checkbox_results
+                    
+                    # Créer une structure formatée plus simple pour l'API
+                    formatted_checkboxes = {}
+                    
+                    # Parcourir les cases à cocher et les organiser par groupes logiques
+                    for idx, checkbox in enumerate(checkbox_results.get("checkboxes", [])):
+                        label = checkbox.get("label", "")
+                        value = checkbox.get("value", "")
+                        checked = checkbox.get("checked", False)
+                        
+                        # Déterminer l'état réel en fonction de la valeur et de l'état coché
+                        if value.lower() in ["oui", "yes", "true"]:
+                            actual_value = "Oui" if checked else "Non"
+                        elif value.lower() in ["non", "no", "false"]:
+                            actual_value = "Non" if checked else "Oui"
+                        else:
+                            actual_value = "Oui" if checked else "Non"
+                        
+                        # Ajouter à la structure formatée - indice comme clé pour faciliter l'accès
+                        if label:
+                            formatted_checkboxes[str(idx)] = label
+                            formatted_checkboxes[str(idx+1)] = "Oui"
+                            formatted_checkboxes[str(idx+2)] = "Non"
+                    
+                    # Ajouter également une structure par étiquette pour plus de clarté
+                    labeled_checkboxes = {}
+                    for checkbox in checkbox_results.get("checkboxes", []):
+                        label = checkbox.get("label", "")
+                        value = checkbox.get("value", "")
+                        checked = checkbox.get("checked", False)
+                        
+                        if label:
+                            labeled_checkboxes[label] = value if value else ("Oui" if checked else "Non")
+                    
+                    # Ajouter les deux formats à la réponse
+                    structured_data["checkboxes"] = formatted_checkboxes
+                    structured_data["checkboxes_by_label"] = labeled_checkboxes
                 
                 return structured_data
                 
@@ -358,18 +396,94 @@ async def extract_tables(
             result_dict = result.to_dict()
             result_dict["structured_data"] = structured_data
             
-            # Ajouter les résultats des cases à cocher si disponibles
+            # Formater et ajouter les résultats des cases à cocher si disponibles
             if checkbox_results and extract_checkboxes:
-                result_dict["checkboxes"] = checkbox_results
+                # Conserver les résultats bruts pour la compatibilité
+                result_dict["checkboxes_raw"] = checkbox_results
+                
+                # Créer une structure formatée plus simple pour l'API
+                formatted_checkboxes = {}
+                
+                # Parcourir les cases à cocher et les organiser par groupes logiques
+                for idx, checkbox in enumerate(checkbox_results.get("checkboxes", [])):
+                    label = checkbox.get("label", "")
+                    value = checkbox.get("value", "")
+                    checked = checkbox.get("checked", False)
+                    
+                    # Déterminer l'état réel en fonction de la valeur et de l'état coché
+                    if value.lower() in ["oui", "yes", "true"]:
+                        actual_value = "Oui" if checked else "Non"
+                    elif value.lower() in ["non", "no", "false"]:
+                        actual_value = "Non" if checked else "Oui"
+                    else:
+                        actual_value = "Oui" if checked else "Non"
+                    
+                    # Ajouter à la structure formatée - indice comme clé pour faciliter l'accès
+                    if label:
+                        formatted_checkboxes[str(idx)] = label
+                        formatted_checkboxes[str(idx+1)] = "Oui"
+                        formatted_checkboxes[str(idx+2)] = "Non"
+                
+                # Ajouter également une structure par étiquette pour plus de clarté
+                labeled_checkboxes = {}
+                for checkbox in checkbox_results.get("checkboxes", []):
+                    label = checkbox.get("label", "")
+                    value = checkbox.get("value", "")
+                    checked = checkbox.get("checked", False)
+                    
+                    if label:
+                        labeled_checkboxes[label] = value if value else ("Oui" if checked else "Non")
+                
+                # Ajouter les deux formats à la réponse
+                result_dict["checkboxes"] = formatted_checkboxes
+                result_dict["checkboxes_by_label"] = labeled_checkboxes
                 
             return result_dict
             
         # Retour du résultat standard avec les cases à cocher si demandé
         result_dict = result.to_dict()
         
-        # Ajouter les résultats des cases à cocher si disponibles
+        # Formater et ajouter les résultats des cases à cocher si disponibles
         if checkbox_results and extract_checkboxes:
-            result_dict["checkboxes"] = checkbox_results
+            # Conserver les résultats bruts pour la compatibilité
+            result_dict["checkboxes_raw"] = checkbox_results
+            
+            # Créer une structure formatée plus simple pour l'API
+            formatted_checkboxes = {}
+            
+            # Parcourir les cases à cocher et les organiser par groupes logiques
+            for idx, checkbox in enumerate(checkbox_results.get("checkboxes", [])):
+                label = checkbox.get("label", "")
+                value = checkbox.get("value", "")
+                checked = checkbox.get("checked", False)
+                
+                # Déterminer l'état réel en fonction de la valeur et de l'état coché
+                if value.lower() in ["oui", "yes", "true"]:
+                    actual_value = "Oui" if checked else "Non"
+                elif value.lower() in ["non", "no", "false"]:
+                    actual_value = "Non" if checked else "Oui"
+                else:
+                    actual_value = "Oui" if checked else "Non"
+                
+                # Ajouter à la structure formatée - indice comme clé pour faciliter l'accès
+                if label:
+                    formatted_checkboxes[str(idx)] = label
+                    formatted_checkboxes[str(idx+1)] = "Oui"
+                    formatted_checkboxes[str(idx+2)] = "Non"
+            
+            # Ajouter également une structure par étiquette pour plus de clarté
+            labeled_checkboxes = {}
+            for checkbox in checkbox_results.get("checkboxes", []):
+                label = checkbox.get("label", "")
+                value = checkbox.get("value", "")
+                checked = checkbox.get("checked", False)
+                
+                if label:
+                    labeled_checkboxes[label] = value if value else ("Oui" if checked else "Non")
+            
+            # Ajouter les deux formats à la réponse
+            result_dict["checkboxes"] = formatted_checkboxes
+            result_dict["checkboxes_by_label"] = labeled_checkboxes
             
         return result_dict
         
@@ -681,16 +795,54 @@ async def process_pdf_in_background(
                 logger.error(f"Erreur lors du post-traitement de facture: {e}")
                 structured_data = {"error": str(e)}
         
-        # Préparer le résultat final
+        # Préparation du résultat final
         update_progress(90, "Préparation des résultats")
         result_dict = result.to_dict()
         
         if structured_data:
             result_dict["structured_data"] = structured_data
         
-        # Ajouter les cases à cocher si disponibles
+        # Ajouter les cases à cocher si disponibles - MODIFIÉ ICI
         if checkbox_results and params.get("extract_checkboxes", False):
-            result_dict["checkboxes"] = checkbox_results
+            # Conserver les résultats bruts pour la compatibilité
+            result_dict["checkboxes_raw"] = checkbox_results
+            
+            # Créer une structure formatée plus simple pour l'API
+            formatted_checkboxes = {}
+            
+            # Parcourir les cases à cocher et les organiser par groupes logiques
+            for idx, checkbox in enumerate(checkbox_results.get("checkboxes", [])):
+                label = checkbox.get("label", "")
+                value = checkbox.get("value", "")
+                checked = checkbox.get("checked", False)
+                
+                # Déterminer l'état réel en fonction de la valeur et de l'état coché
+                if value.lower() in ["oui", "yes", "true"]:
+                    actual_value = "Oui" if checked else "Non"
+                elif value.lower() in ["non", "no", "false"]:
+                    actual_value = "Non" if checked else "Oui"
+                else:
+                    actual_value = "Oui" if checked else "Non"
+                
+                # Ajouter à la structure formatée - indice comme clé pour faciliter l'accès
+                if label:
+                    formatted_checkboxes[str(idx)] = label
+                    formatted_checkboxes[str(idx+1)] = "Oui"
+                    formatted_checkboxes[str(idx+2)] = "Non"
+            
+            # Ajouter également une structure par étiquette pour plus de clarté
+            labeled_checkboxes = {}
+            for checkbox in checkbox_results.get("checkboxes", []):
+                label = checkbox.get("label", "")
+                value = checkbox.get("value", "")
+                checked = checkbox.get("checked", False)
+                
+                if label:
+                    labeled_checkboxes[label] = value if value else ("Oui" if checked else "Non")
+            
+            # Ajouter les deux formats à la réponse
+            result_dict["checkboxes"] = formatted_checkboxes
+            result_dict["checkboxes_by_label"] = labeled_checkboxes
         
         # Sauvegarder le résultat
         with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:

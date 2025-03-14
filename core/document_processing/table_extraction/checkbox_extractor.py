@@ -257,6 +257,82 @@ class CheckboxExtractor:
             logger.error(f"Erreur détection cases à cocher: {e}")
             return []
     
+    def _detect_checkbox_groups(self, checkbox_regions: List[Dict[str, Any]], page_text: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Détecte les groupes de cases à cocher (notamment les paires Oui/Non).
+        
+        Args:
+            checkbox_regions: Régions des cases à cocher détectées
+            page_text: Texte de la page au format dict de PyMuPDF
+            
+        Returns:
+            Dictionnaire de groupes de cases à cocher
+        """
+        # Extraire les blocs de texte
+        blocks = page_text.get("blocks", [])
+        
+        # Extraire tous les spans de texte avec leurs coordonnées
+        oui_non_spans = []
+        for block in blocks:
+            if block["type"] == 0:  # Type 0 = text block
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        span_text = span.get("text", "").strip().lower()
+                        if span_text in ["oui", "non", "yes", "no"]:
+                            # Calculer le centre du span
+                            bbox = span.get("bbox", [0, 0, 0, 0])
+                            span_center_x = (bbox[0] + bbox[2]) / 2
+                            span_center_y = (bbox[1] + bbox[3]) / 2
+                            
+                            oui_non_spans.append({
+                                "text": span_text,
+                                "center_x": span_center_x,
+                                "center_y": span_center_y,
+                                "bbox": bbox
+                            })
+        
+        # Organiser les checkboxes par groupes
+        groups = {}
+        
+        # Associer chaque case à cocher avec le texte Oui/Non le plus proche
+        for i, region in enumerate(checkbox_regions):
+            # Coordonnées du centre de la case
+            checkbox_center_x = region.get("center_x", region["x"] + region["width"] // 2)
+            checkbox_center_y = region.get("center_y", region["y"] + region["height"] // 2)
+            
+            # Trouver le texte Oui/Non le plus proche
+            closest_oui_non = None
+            min_distance = float('inf')
+            
+            for span in oui_non_spans:
+                distance = np.sqrt(
+                    (span["center_x"] - checkbox_center_x)**2 + 
+                    (span["center_y"] - checkbox_center_y)**2
+                )
+                
+                # Limiter la distance à 100 pixels (ajustable)
+                if distance < 100 and distance < min_distance:
+                    min_distance = distance
+                    closest_oui_non = span
+            
+            if closest_oui_non:
+                # Déterminer le type d'étiquette (Oui/Non)
+                label_type = closest_oui_non["text"]
+                
+                # Ajouter à un groupe basé sur la position Y pour regrouper les cases sur la même ligne
+                y_key = int(checkbox_center_y / 10) * 10  # Regrouper par tranches de 10 pixels
+                
+                if y_key not in groups:
+                    groups[y_key] = []
+                    
+                groups[y_key].append({
+                    "region": region,
+                    "label_type": label_type,
+                    "distance": min_distance
+                })
+        
+        return groups
+
     def _is_checkbox_checked(self, img: np.ndarray, region: Dict[str, Any]) -> bool:
         """
         Détermine si une case à cocher est cochée avec une méthode améliorée.
@@ -324,7 +400,7 @@ class CheckboxExtractor:
         page_num: int
     ) -> List[Dict[str, Any]]:
         """
-        Associe les étiquettes aux cases à cocher avec une méthode améliorée.
+        Associe les étiquettes aux cases à cocher et détermine leur état.
         
         Args:
             checkbox_regions: Régions des cases à cocher détectées
@@ -340,14 +416,17 @@ class CheckboxExtractor:
         # Extraire les blocs de texte
         blocks = page_text.get("blocks", [])
         
-        # Extraire tous les spans de texte avec leurs coordonnées
+        # Détecter les groupes de cases à cocher (notamment les paires Oui/Non)
+        checkbox_groups = self._detect_checkbox_groups(checkbox_regions, page_text)
+        
+        # Extraire tous les spans de texte (pour les étiquettes)
         all_spans = []
         for block in blocks:
             if block["type"] == 0:  # Type 0 = text block
                 for line in block.get("lines", []):
                     for span in line.get("spans", []):
                         span_text = span.get("text", "").strip()
-                        if span_text:
+                        if span_text and span_text.lower() not in ["oui", "non", "yes", "no", "true", "false"]:
                             # Calculer le centre du span
                             bbox = span.get("bbox", [0, 0, 0, 0])
                             span_center_x = (bbox[0] + bbox[2]) / 2
@@ -358,9 +437,75 @@ class CheckboxExtractor:
                                 "center_x": span_center_x,
                                 "center_y": span_center_y,
                                 "bbox": bbox,
-                                "is_value": span_text.lower() in ["oui", "non", "yes", "no", "true", "false"],
                                 "is_header": span_text.endswith(":") or span_text.endswith("/"),
                             })
+        
+        # Traiter d'abord les groupes de cases à cocher (Oui/Non)
+        for y_key, group in checkbox_groups.items():
+            if len(group) >= 2:
+                # Si nous avons un groupe d'au moins 2 cases, c'est probablement un groupe Oui/Non
+                
+                # Trier le groupe par label_type pour identifier clairement Oui et Non
+                group.sort(key=lambda x: x["label_type"])
+                
+                # Déterminer les états des cases
+                checked_states = [self._is_checkbox_checked(img, item["region"]) for item in group]
+                
+                # Chercher l'étiquette commune la plus proche
+                min_y = min([item["region"]["y"] for item in group])
+                max_y = max([item["region"]["y"] + item["region"]["height"] for item in group])
+                avg_y = (min_y + max_y) / 2
+                
+                # Chercher l'étiquette la plus proche à gauche des cases
+                left_x = min([item["region"]["x"] for item in group])
+                closest_label = None
+                closest_section = None
+                min_distance = float('inf')
+                
+                for span in all_spans:
+                    # L'étiquette doit être à gauche et à peu près au même niveau
+                    if span["center_x"] < left_x and abs(span["center_y"] - avg_y) < 30:
+                        distance = left_x - span["center_x"]
+                        if distance < min_distance and distance < 200:  # Limiter à 200 pixels
+                            min_distance = distance
+                            
+                            if span["is_header"]:
+                                closest_section = span["text"].rstrip(":/")
+                            else:
+                                closest_label = span["text"]
+                
+                # Si nous avons trouvé une étiquette et que nous avons des états de cases à cocher
+                if closest_label and checked_states:
+                    # Déterminer quelle option est sélectionnée
+                    selected_value = None
+                    for i, checked in enumerate(checked_states):
+                        if checked and i < len(group):
+                            selected_value = group[i]["label_type"]
+                    
+                    checkbox_info = {
+                        "label": closest_label,
+                        "value": selected_value.capitalize() if selected_value else "Non déterminé",
+                        "checked": True,  # Au moins une case est cochée
+                        "section": closest_section or "Information",
+                        "page": page_num,
+                        "position": {
+                            "x": min([item["region"]["x"] for item in group]),
+                            "y": min([item["region"]["y"] for item in group]),
+                            "width": max([item["region"]["x"] + item["region"]["width"] for item in group]) - 
+                                    min([item["region"]["x"] for item in group]),
+                            "height": max_y - min_y
+                        },
+                        "group": "oui_non",
+                        "checked_states": {
+                            group[i]["label_type"]: checked_states[i] 
+                            for i in range(min(len(group), len(checked_states)))
+                        }
+                    }
+                    results.append(checkbox_info)
+                    
+                    # Marquer ces cases comme traitées
+                    for item in group:
+                        item["processed"] = True
         
         # Structure typique des cases à cocher: "Option Oui Non"
         for region in checkbox_regions:
