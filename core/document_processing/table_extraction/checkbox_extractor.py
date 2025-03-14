@@ -152,6 +152,7 @@ class CheckboxExtractor:
             return {
                 "error": str(e),
                 "checkboxes": []
+            }
         
     def _validate_global_checkbox_results(self, results: Dict[str, Any]) -> None:
         """
