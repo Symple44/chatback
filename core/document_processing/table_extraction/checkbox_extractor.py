@@ -292,6 +292,7 @@ class CheckboxExtractor:
         
         # 3. Fusionner et dédupliquer les résultats
         merged_checkboxes = self._merge_checkbox_results(symbol_checkboxes, visual_checkboxes)
+        merged_checkboxes = self._improve_label_associations(merged_checkboxes)
         
         # 4. Déterminer l'état de chaque case (cochée ou non)
         for checkbox in merged_checkboxes:
@@ -625,7 +626,7 @@ class CheckboxExtractor:
     
     def _find_closest_text(self, page_text: Dict, bbox: List[int]) -> str:
         """
-        Trouve le texte le plus proche d'une case à cocher.
+        Trouve le texte le plus proche d'une case à cocher avec des améliorations.
         
         Args:
             page_text: Texte structuré de la page
@@ -644,7 +645,10 @@ class CheckboxExtractor:
         
         closest_text = ""
         min_distance = float('inf')
-        max_distance = 150  # Distance maximale à considérer
+        max_distance = 200  # Distance maximale à considérer (augmentée)
+        
+        # Pour stocker tous les textes candidats
+        candidates = []
         
         # Chercher dans les blocs de texte
         for block in page_text["blocks"]:
@@ -658,17 +662,9 @@ class CheckboxExtractor:
                 
                 # Calculer la distance euclidienne
                 distance = ((line_center_x - checkbox_center_x) ** 2 + 
-                           (line_center_y - checkbox_center_y) ** 2) ** 0.5
+                        (line_center_y - checkbox_center_y) ** 2) ** 0.5
                 
-                # Privilégier les textes à droite ou en dessous (plus probables pour être des étiquettes)
-                direction_factor = 1.0
-                if line_center_x < checkbox_center_x:  # Texte à gauche
-                    direction_factor = 1.5
-                
-                adjusted_distance = distance * direction_factor
-                
-                # Mettre à jour le texte le plus proche
-                if adjusted_distance < min_distance and adjusted_distance < max_distance:
+                if distance < max_distance:
                     line_text = " ".join([span["text"] for span in line["spans"]])
                     
                     # Nettoyer le texte (enlever les symboles de case à cocher)
@@ -677,10 +673,134 @@ class CheckboxExtractor:
                         cleaned_text = cleaned_text.replace(symbol, "").strip()
                     
                     if cleaned_text:
-                        min_distance = adjusted_distance
-                        closest_text = cleaned_text
+                        # Ajouter aux candidats
+                        candidates.append({
+                            "text": cleaned_text,
+                            "distance": distance,
+                            "coords": [line_center_x, line_center_y]
+                        })
+
+        # Analyser les candidats en considérant leur position relative
+        for candidate in candidates:
+            distance = candidate["distance"]
+            x, y = candidate["coords"]
+            
+            # Facteurs de pondération selon la position relative
+            position_factor = 1.0
+            
+            # Privilégier fortement les textes à droite (association classique étiquette-case)
+            if x > checkbox_center_x:
+                # À droite = meilleur candidat
+                position_factor = 0.7
+            elif x < checkbox_center_x and abs(y - checkbox_center_y) < 15:
+                # À gauche sur la même ligne = bon candidat aussi
+                position_factor = 0.8
+            else:
+                # Positions moins probables
+                position_factor = 1.2
+            
+            # Appliquer la pondération
+            adjusted_distance = distance * position_factor
+            
+            # Vérifier le texte (privilégier les textes courts, probablement des étiquettes)
+            text = candidate["text"]
+            if len(text) < 30:  # Probablement une étiquette
+                adjusted_distance *= 0.9
+            
+            # Les textes contenant "Oui" ou "Non" sont de bons candidats pour les cases à cocher
+            if re.search(r'\b(oui|non|yes|no)\b', text.lower()):
+                adjusted_distance *= 0.8
+            
+            # Mettre à jour le texte le plus proche
+            if adjusted_distance < min_distance:
+                min_distance = adjusted_distance
+                closest_text = text
         
         return closest_text
+    
+    def _improve_label_associations(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Améliore les associations d'étiquettes en analysant les groupes de cases.
+        
+        Args:
+            checkboxes: Liste des cases à cocher détectées
+            
+        Returns:
+            Liste des cases avec étiquettes améliorées
+        """
+        # Trier par page puis par position Y
+        checkboxes.sort(key=lambda c: (c.get("page", 0), c.get("bbox", [0, 0, 0, 0])[1]))
+        
+        # Regrouper par proximité verticale (cases sur la même ligne)
+        groups = []
+        current_group = []
+        last_page = -1
+        last_y = -1
+        y_tolerance = 15  # Tolérance verticale
+        
+        for checkbox in checkboxes:
+            page = checkbox.get("page", 0)
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            y = bbox[1]
+            
+            # Nouvelle page ou nouvelle ligne
+            if page != last_page or (last_y != -1 and abs(y - last_y) > y_tolerance):
+                if current_group:
+                    groups.append(current_group)
+                current_group = [checkbox]
+            else:
+                current_group.append(checkbox)
+            
+            last_page = page
+            last_y = y
+        
+        # Ajouter le dernier groupe
+        if current_group:
+            groups.append(current_group)
+        
+        # Analyser les groupes pour améliorer les étiquettes
+        improved_checkboxes = []
+        
+        for group in groups:
+            # Trier par position X
+            group.sort(key=lambda c: c.get("bbox", [0, 0, 0, 0])[0])
+            
+            # Si exactement 2 cases, c'est possiblement un groupe Oui/Non
+            if len(group) == 2:
+                oui_non_pattern = re.compile(r'\b(oui|non|yes|no)\b', re.IGNORECASE)
+                
+                # Vérifier les étiquettes
+                has_oui = False
+                has_non = False
+                
+                for cb in group:
+                    label = cb.get("label", "").lower()
+                    if re.search(r'\b(oui|yes)\b', label):
+                        has_oui = True
+                        cb["value"] = "Oui"
+                    elif re.search(r'\b(non|no)\b', label):
+                        has_non = True
+                        cb["value"] = "Non"
+                
+                # Si on a un groupe Oui/Non, extraire l'étiquette commune
+                if has_oui and has_non:
+                    # La vraie étiquette pourrait être dans un texte à proximité
+                    # Utiliser les informations de page et de position pour rechercher
+                    # l'étiquette dans le document (cette partie nécessiterait un accès
+                    # au contenu textuel complet de la page)
+                    
+                    # Pour l'instant, on peut améliorer en standardisant les valeurs
+                    for cb in group:
+                        label = cb.get("label", "").lower()
+                        if "oui" in label or "yes" in label:
+                            cb["value"] = "Oui"
+                        elif "non" in label or "no" in label:
+                            cb["value"] = "Non"
+            
+            # Ajouter les cases du groupe
+            improved_checkboxes.extend(group)
+        
+        return improved_checkboxes
     
     def _extract_checkbox_image(self, page: fitz.Page, checkbox: Dict[str, Any], page_image: np.ndarray) -> Optional[str]:
         """

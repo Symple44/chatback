@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
 """
 Script de test pour l'extracteur de cases à cocher.
-Permet de valider le fonctionnement de la classe CheckboxExtractor.
-
-Utilisation:
-python test_checkbox_extractor.py path/to/pdf_with_checkboxes.pdf
-
-Options:
--v, --verbose      Mode verbeux avec plus de détails
--i, --images       Inclure les images des cases à cocher
--p, --pages PAGE   Spécifier les pages à analyser (ex: 1,3,5-7)
--o, --output FILE  Enregistrer les résultats dans un fichier JSON
--d, --debug        Activer le mode de débogage avancé
+Version simplifiée sans dépendance matplotlib.
 """
 
 import argparse
@@ -114,78 +104,41 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
                 json.dump(results, f, ensure_ascii=False, indent=2)
             print(f"\nRésultats enregistrés dans {output}")
         
-        # Mode debug avancé
+        # Mode debug simple (sans matplotlib)
         if debug:
-            import cv2
-            import numpy as np
-            import matplotlib.pyplot as plt
-            from matplotlib.patches import Rectangle
-            import io
-            import fitz  # PyMuPDF
+            debug_dir = "debug_output"
+            os.makedirs(debug_dir, exist_ok=True)
             
-            print("\n===== MODE DEBUG =====")
+            # Enregistrer les résultats détaillés en JSON
+            debug_json = os.path.join(debug_dir, "debug_checkboxes.json")
+            with open(debug_json, 'w', encoding='utf-8') as f:
+                json.dump(results, f, ensure_ascii=False, indent=2)
             
-            # Ouvrir le PDF
-            doc = fitz.open(pdf_path)
+            print(f"\nDétails de débogage enregistrés dans {debug_json}")
             
-            # Pour chaque page avec des cases à cocher
-            checkboxes_by_page = {}
+            # Statistiques supplémentaires
+            methods = {}
+            checked_count = 0
+            empty_labels = 0
+            
             for checkbox in results.get("checkboxes", []):
-                page_num = checkbox.get("page", 1)
-                if page_num not in checkboxes_by_page:
-                    checkboxes_by_page[page_num] = []
-                checkboxes_by_page[page_num].append(checkbox)
+                method = checkbox.get("method", "unknown")
+                if method not in methods:
+                    methods[method] = 0
+                methods[method] += 1
+                
+                if checkbox.get("checked", False):
+                    checked_count += 1
+                
+                if not checkbox.get("label", "").strip():
+                    empty_labels += 1
             
-            # Visualiser les pages avec les cases détectées
-            for page_num, page_checkboxes in checkboxes_by_page.items():
-                if page_num <= len(doc):
-                    page = doc[page_num-1]  # Convertir 1-indexed en 0-indexed
-                    
-                    # Convertir la page en image
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-                    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                    if pix.n == 4:  # RGBA
-                        img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-                    
-                    # Afficher l'image
-                    plt.figure(figsize=(12, 16))
-                    plt.imshow(img)
-                    
-                    # Ajouter des rectangles pour les cases à cocher
-                    ax = plt.gca()
-                    for checkbox in page_checkboxes:
-                        bbox = checkbox.get("bbox", [0, 0, 0, 0])
-                        x, y, x2, y2 = bbox
-                        width, height = x2 - x, y2 - y
-                        
-                        # Couleur selon l'état (vert = cochée, rouge = non cochée)
-                        color = 'g' if checkbox.get("checked", False) else 'r'
-                        
-                        # Dessiner le rectangle
-                        rect = Rectangle((x, y), width, height, 
-                                         linewidth=2, edgecolor=color, facecolor='none')
-                        ax.add_patch(rect)
-                        
-                        # Afficher le numéro de la case
-                        plt.text(x, y-10, f"#{page_checkboxes.index(checkbox)+1}", 
-                                 color=color, fontsize=12, backgroundcolor='white')
-                    
-                    plt.title(f"Page {page_num} - {len(page_checkboxes)} cases détectées")
-                    plt.axis('off')
-                    plt.tight_layout()
-                    
-                    # Enregistrer l'image de débogage
-                    debug_dir = "debug_output"
-                    os.makedirs(debug_dir, exist_ok=True)
-                    debug_filename = os.path.join(debug_dir, f"debug_page_{page_num}.png")
-                    plt.savefig(debug_filename, dpi=150)
-                    print(f"Image de débogage enregistrée: {debug_filename}")
-                    
-                    # Fermer pour libérer la mémoire
-                    plt.close()
-            
-            # Fermer le document
-            doc.close()
+            print("\n--- Statistiques de débogage ---")
+            print(f"Cases cochées: {checked_count} sur {len(results.get('checkboxes', []))}")
+            print(f"Cases sans étiquette: {empty_labels}")
+            print("Méthodes de détection:")
+            for method, count in methods.items():
+                print(f"  - {method}: {count}")
         
         return results
         
@@ -201,7 +154,7 @@ def main():
     parser.add_argument("-i", "--images", action="store_true", help="Inclure les images des cases à cocher")
     parser.add_argument("-p", "--pages", help="Pages à analyser (ex: 1,3,5-7)")
     parser.add_argument("-o", "--output", help="Enregistrer les résultats dans un fichier JSON")
-    parser.add_argument("-d", "--debug", action="store_true", help="Mode débogage avancé")
+    parser.add_argument("-d", "--debug", action="store_true", help="Mode débogage")
     
     args = parser.parse_args()
     
