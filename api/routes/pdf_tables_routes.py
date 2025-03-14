@@ -70,7 +70,7 @@ async def extract_tables(
     download_format: Optional[str] = Form(None, description="Format à télécharger (csv, excel, json, html)"),
     background_processing: bool = Form(False, description="Traiter en arrière-plan (pour les grands PDF)"),
     use_cache: bool = Form(True, description="Utiliser le cache si disponible"),
-    #Traiter les cases à cocher
+    # Traiter les cases à cocher
     extract_checkboxes: bool = Form(False, description="Extraire également les cases à cocher"),
     components = Depends(get_components)
 ):
@@ -85,6 +85,7 @@ async def extract_tables(
     - Support OCR avancé pour les PDF scannés
     - Validation et optimisation des tableaux extraits
     - Cache configurable pour les extractions répétées
+    - Support pour l'extraction des cases à cocher
     """
     try:
         # Mesure des performances
@@ -104,6 +105,43 @@ async def extract_tables(
         file_content = await file.read()
         file_size = len(file_content)
         file_obj = io.BytesIO(file_content)
+        
+        # Extraction des cases à cocher si demandé
+        checkbox_results = None
+        if extract_checkboxes:
+            try:
+                # Créer une copie du fichier pour l'extraction des cases à cocher
+                checkbox_file = io.BytesIO(file_content)
+                
+                # Extraire les cases à cocher
+                if not hasattr(components, 'checkbox_extractor'):
+                    from core.document_processing.table_extraction.checkbox_extractor import CheckboxExtractor
+                    components._components["checkbox_extractor"] = CheckboxExtractor()
+                
+                checkbox_extractor = components.checkbox_extractor
+                
+                # Convertir la plage de pages
+                if pages == "all":
+                    page_range = None
+                else:
+                    page_range = []
+                    try:
+                        for part in pages.split(','):
+                            if '-' in part:
+                                start, end = map(int, part.split('-'))
+                                page_range.extend(range(start, end + 1))
+                            else:
+                                page_range.append(int(part))
+                    except:
+                        page_range = None
+                
+                metrics.increment_counter("checkbox_extractions")
+                checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(checkbox_file, page_range)
+                logger.info(f"Extraction des cases à cocher terminée: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
+            except Exception as e:
+                logger.error(f"Erreur extraction cases à cocher: {e}")
+                metrics.increment_counter("checkbox_extraction_errors")
+                checkbox_results = {"error": str(e)}
         
         # Vérification de la taille
         if file_size > settings.table_extraction.MAX_FILE_SIZE:
@@ -150,7 +188,8 @@ async def extract_tables(
                     "include_images": include_images,
                     "analyze": analyze,
                     "search_query": search_query,
-                    "use_cache": use_cache
+                    "use_cache": use_cache,
+                    "extract_checkboxes": extract_checkboxes
                 },
                 components=components
             )
@@ -241,6 +280,10 @@ async def extract_tables(
                     structured_data["auto_detected"] = True
                     structured_data["detection_confidence"] = detected_confidence
                 
+                # Ajouter les résultats des cases à cocher si disponibles
+                if checkbox_results and extract_checkboxes:
+                    structured_data["checkboxes"] = checkbox_results
+                
                 return structured_data
                 
             except Exception as e:
@@ -314,10 +357,21 @@ async def extract_tables(
             # Créer une copie du résultat pour ajouter les données structurées
             result_dict = result.to_dict()
             result_dict["structured_data"] = structured_data
+            
+            # Ajouter les résultats des cases à cocher si disponibles
+            if checkbox_results and extract_checkboxes:
+                result_dict["checkboxes"] = checkbox_results
+                
             return result_dict
             
-        # Retour du résultat standard si pas de post-traitement
-        return result.to_dict()
+        # Retour du résultat standard avec les cases à cocher si demandé
+        result_dict = result.to_dict()
+        
+        # Ajouter les résultats des cases à cocher si disponibles
+        if checkbox_results and extract_checkboxes:
+            result_dict["checkboxes"] = checkbox_results
+            
+        return result_dict
         
     except HTTPException:
         metrics.increment_counter("pdf_extraction_errors")
@@ -494,6 +548,43 @@ async def process_pdf_in_background(
         # Mettre à jour l'état initial
         update_progress(0, "Initialisation de l'extraction")
         
+        # Extraire les cases à cocher si demandé
+        checkbox_results = None
+        if params.get("extract_checkboxes", False):
+            try:
+                update_progress(10, "Extraction des cases à cocher")
+                
+                # Initialiser l'extracteur de cases à cocher si nécessaire
+                if not hasattr(components, 'checkbox_extractor'):
+                    from core.document_processing.table_extraction.checkbox_extractor import CheckboxExtractor
+                    components._components["checkbox_extractor"] = CheckboxExtractor()
+                
+                checkbox_extractor = components.checkbox_extractor
+                
+                # Convertir la plage de pages
+                pages = params.get("pages", "all")
+                if pages == "all":
+                    page_range = None
+                else:
+                    page_range = []
+                    try:
+                        for part in pages.split(','):
+                            if '-' in part:
+                                start, end = map(int, part.split('-'))
+                                page_range.extend(range(start, end + 1))
+                            else:
+                                page_range.append(int(part))
+                    except:
+                        page_range = None
+                
+                checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(file_path, page_range)
+                logger.info(f"Extraction des cases à cocher terminée: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
+                update_progress(20, f"Extraction des cases à cocher terminée: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
+            except Exception as e:
+                logger.error(f"Erreur extraction cases à cocher: {e}")
+                checkbox_results = {"error": str(e)}
+                update_progress(20, f"Erreur extraction cases à cocher: {str(e)}")
+        
         # Vérifier si c'est un devis technique
         document_type = params.get("document_type", "generic").lower()
         
@@ -507,7 +598,7 @@ async def process_pdf_in_background(
         
         if auto_detect:
             # Utiliser la méthode de détection intégrée à l'InvoiceProcessor
-            update_progress(10, "Détection du type de document")
+            update_progress(30, "Détection du type de document")
             invoice_processor = components.invoice_processor
             doc_types = invoice_processor.detect_document_type(file_path)
             dominant_type = max(doc_types.items(), key=lambda x: x[1])
@@ -527,6 +618,7 @@ async def process_pdf_in_background(
             )
         
         # Code existant pour l'extraction...
+        update_progress(40, "Extraction des tableaux en cours")
         pipeline = components.table_extraction_pipeline
         result = await pipeline.extract_tables(
             file_obj=file_path,
@@ -537,11 +629,13 @@ async def process_pdf_in_background(
             use_cache=params.get("use_cache", True)
         )
         
+        update_progress(70, f"Extraction des tableaux terminée: {result.tables_count} tableaux trouvés")
+        
         # Post-traitement spécifique selon le type de document
         structured_data = None
         
         if document_type in ["devis", "technical_invoice", "devis_technique"]:
-            update_progress(92, "Post-traitement de devis technique")
+            update_progress(80, "Post-traitement de devis technique")
             try:
                 # Appliquer le post-traitement pour les devis techniques
                 invoice_processor = components.invoice_processor
@@ -558,6 +652,10 @@ async def process_pdf_in_background(
                     structured_data["auto_detected"] = True
                     structured_data["detection_confidence"] = detected_confidence
                 
+                # Ajouter les cases à cocher si disponibles
+                if checkbox_results and params.get("extract_checkboxes", False):
+                    structured_data["checkboxes"] = checkbox_results
+                
                 # Écrire le résultat
                 with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
                     json.dump(structured_data, f, default=str)
@@ -570,14 +668,33 @@ async def process_pdf_in_background(
                 structured_data = {"error": str(e)}
                 
         elif document_type == "invoice":
-            update_progress(92, "Post-traitement de facture")
+            update_progress(80, "Post-traitement de facture")
             try:
                 # Appliquer le post-traitement pour les factures
                 invoice_processor = components.invoice_processor
                 structured_data = invoice_processor.process(result.tables)
+                
+                # Ajouter les cases à cocher si disponibles
+                if checkbox_results and params.get("extract_checkboxes", False):
+                    structured_data["checkboxes"] = checkbox_results
             except Exception as e:
                 logger.error(f"Erreur lors du post-traitement de facture: {e}")
                 structured_data = {"error": str(e)}
+        
+        # Préparer le résultat final
+        update_progress(90, "Préparation des résultats")
+        result_dict = result.to_dict()
+        
+        if structured_data:
+            result_dict["structured_data"] = structured_data
+        
+        # Ajouter les cases à cocher si disponibles
+        if checkbox_results and params.get("extract_checkboxes", False):
+            result_dict["checkboxes"] = checkbox_results
+        
+        # Sauvegarder le résultat
+        with open(os.path.join("temp", "pdf_tasks", f"{task_id}_result.json"), "w") as f:
+            json.dump(result_dict, f, default=str)
         
         # Mise à jour finale
         update_progress(100, "Traitement terminé")
