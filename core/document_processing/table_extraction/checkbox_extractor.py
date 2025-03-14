@@ -104,13 +104,13 @@ class CheckboxExtractor:
                         page_num = page_idx + 1  # Convertir en 1-based
                         
                         # Extraire le texte et convertir en image pour analyse visuelle
-                        page_text = page.get_text("dict")
+                        page_texts = page.get_text("dict")
                         page_image = self._convert_page_to_image(page)
                         
                         # Détecter les cases à cocher (approche hybride)
                         checkboxes = await self._detect_checkboxes(
                             page, 
-                            page_text, 
+                            page_texts, 
                             page_image, 
                             page_num, 
                             confidence_threshold,
@@ -285,7 +285,7 @@ class CheckboxExtractor:
             gray = page_image
         
         # 1. Détection basée sur le texte (symboles de case à cocher)
-        symbol_checkboxes = self._detect_by_symbols(page_texts["dict"], page_num)
+        symbol_checkboxes = self._detect_by_symbols(page_texts, page_num)
         
         # 2. Détection visuelle (basée sur l'image)
         visual_checkboxes = self._detect_by_vision(gray, page_num, enhance_detection)
