@@ -131,6 +131,154 @@ class InvoiceProcessor:
                     "error": True
                 }
             }
+        
+    def process_form_data(self, extracted_tables: List[Dict[str, Any]], checkbox_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Traite les données de formulaire pour créer une structure plus claire et exploitable.
+        
+        Args:
+            extracted_tables: Liste des tableaux extraits
+            checkbox_data: Données des cases à cocher extraites (optionnel)
+            
+        Returns:
+            Structure de données de formulaire enrichie
+        """
+        # Structure de résultat
+        result = {
+            "type_document": "formulaire",
+            "metadata": {
+                "reference": None,
+                "date": None,
+                "titre": None,
+                "processor_version": "1.0",
+                "processing_date": datetime.utcnow().isoformat()
+            },
+            "sections": {},
+            "form_fields": {}
+        }
+        
+        try:
+            # Extraire les métadonnées de base
+            all_text = self._get_combined_text(extracted_tables)
+            
+            # Recherche de métadonnées communes dans les formulaires
+            patterns = {
+                'reference': r'(?i)(?:Réf|N°)[\.:\s]*([A-Z0-9\/-]+)',
+                'date': r'(?i)(?:Le|Date|Edité le)[\s:]*(\d{1,2}[\s/.-]+\w+[\s/.-]+\d{4}|\d{1,2}[\s/.-]\d{1,2}[\s/.-]\d{2,4})',
+                'client': r'(?i)(?:Client|Adress)[\.:\s]*([^\n.]+)',
+                'titre': r'(?i)(?:Fiche|Formulaire|Affaire)[\.:\s]*([^\n.]+)',
+            }
+            
+            # Extraction des métadonnées avec les patterns spécifiques
+            for field, pattern in patterns.items():
+                match = re.search(pattern, all_text)
+                if match:
+                    value = match.group(1).strip()
+                    result["metadata"][field] = value
+            
+            # Traitement des tableaux principaux
+            for i, table in enumerate(extracted_tables):
+                table_data = table.get("data", None)
+                
+                # Ignorer les tableaux vides
+                if not table_data or not isinstance(table_data, pd.DataFrame) or table_data.empty:
+                    continue
+                
+                # Identifier les sections dans le tableau
+                section_name = f"Section_{i+1}"
+                
+                # Tentative de détection du nom de section
+                if "section" in table:
+                    section_name = table["section"]
+                else:
+                    # Essayer de détecter le nom de section dans le tableau
+                    for col_name in table_data.columns:
+                        if "section" in str(col_name).lower() or "zone" in str(col_name).lower():
+                            section_values = table_data[col_name].unique()
+                            if len(section_values) > 0 and isinstance(section_values[0], str):
+                                section_name = section_values[0]
+                                break
+                
+                # Convertir le DataFrame en dictionnaire pour avoir une structure JSON exploitable
+                fields = {}
+                
+                # Parcourir les lignes et rechercher des champs spécifiques
+                for _, row in table_data.iterrows():
+                    # Chercher des paires label/valeur
+                    for i, col in enumerate(table_data.columns):
+                        cell_value = row[col]
+                        if pd.isna(cell_value) or cell_value == "":
+                            continue
+                        
+                        cell_str = str(cell_value).strip()
+                        
+                        # Si c'est un label potentiel (se termine par :)
+                        if cell_str.endswith(':'):
+                            label = cell_str.rstrip(':')
+                            
+                            # Chercher la valeur dans les colonnes suivantes
+                            for next_col in table_data.columns[i+1:]:
+                                next_value = row[next_col]
+                                if not pd.isna(next_value) and next_value != "":
+                                    fields[label] = str(next_value).strip()
+                                    break
+                        # Sinon, si c'est une colonne clé/valeur typique de formulaire
+                        elif i < len(table_data.columns) - 1:
+                            next_col = table_data.columns[i+1]
+                            next_value = row[next_col]
+                            
+                            if not pd.isna(next_value) and next_value != "":
+                                fields[cell_str] = str(next_value).strip()
+                                
+                # Ajouter à la section appropriée
+                if section_name not in result["sections"]:
+                    result["sections"][section_name] = {}
+                    
+                result["sections"][section_name].update(fields)
+                
+                # Ajouter également au dictionnaire plat pour accès facile
+                result["form_fields"].update(fields)
+            
+            # Intégrer les données de cases à cocher si disponibles
+            if checkbox_data:
+                checkbox_values = {}
+                
+                # Format par section
+                if "sections" in checkbox_data:
+                    for section, checkboxes in checkbox_data["sections"].items():
+                        if section not in result["sections"]:
+                            result["sections"][section] = {}
+                        
+                        for checkbox in checkboxes:
+                            label = checkbox.get("label", "")
+                            value = checkbox.get("value", "")
+                            
+                            if label:
+                                result["sections"][section][label] = value
+                                checkbox_values[label] = value
+                
+                # Format plat (liste complète)
+                if "checkboxes" in checkbox_data:
+                    for checkbox in checkbox_data["checkboxes"]:
+                        label = checkbox.get("label", "")
+                        value = checkbox.get("value", "")
+                        
+                        if label:
+                            checkbox_values[label] = value
+                
+                # Format simplifié déjà prêt
+                if "form_values" in checkbox_data:
+                    checkbox_values.update(checkbox_data["form_values"])
+                
+                # Ajouter au dictionnaire plat
+                result["form_fields"].update(checkbox_values)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement des données de formulaire: {e}")
+            result["error"] = str(e)
+            return result
     
     def _extract_basic_info(self, data: List[Dict[str, Any]], result: Dict[str, Any]):
         """Extrait les informations de base de la facture."""
