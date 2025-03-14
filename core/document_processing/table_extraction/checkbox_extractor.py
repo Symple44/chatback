@@ -125,6 +125,12 @@ class CheckboxExtractor:
                     
                     # Post-traitement pour organiser les cases à cocher
                     try:
+                        # Améliorer les étiquettes et grouper les paires Oui/Non
+                        results["checkboxes"] = self._detect_and_group_yes_no_pairs(results["checkboxes"])
+                        # Filtrer les cases redondantes ou inutiles
+                        results["checkboxes"] = self._filter_redundant_checkboxes(results["checkboxes"])
+                        
+                        # Post-traitement pour organiser les cases à cocher
                         self._organize_checkboxes(results)
                     except Exception as e:
                         logger.error(f"Erreur organisation des cases: {e}")
@@ -550,7 +556,7 @@ class CheckboxExtractor:
         for checkbox in merged_checkboxes:
             if not checkbox.get("label"):
                 bbox = checkbox.get("bbox", [0, 0, 0, 0])
-                label = self._find_closest_text(page_texts, bbox)
+                label = self._find_closest_text_improved(page_texts, bbox)
                 checkbox["label"] = label
         
         # 6. Détecter et normaliser les groupes Oui/Non
@@ -1822,3 +1828,386 @@ class CheckboxExtractor:
         
         # 5. Extraire et mettre à jour les valeurs de formulaire
         results["form_values"] = structured_results["form_values"]
+
+    # Filtrage avancé des étiquettes inappropriées
+
+    def _clean_and_validate_label(self, text: str) -> str:
+        """
+        Nettoie et valide une étiquette candidate.
+        Filtre les étiquettes inappropriées ou sans valeur informative.
+        
+        Args:
+            text: Texte candidat pour une étiquette
+            
+        Returns:
+            Étiquette nettoyée ou chaîne vide si inappropriée
+        """
+        if not text:
+            return ""
+        
+        # Nettoyer les espaces et caractères spéciaux
+        cleaned = text.strip()
+        
+        # Filtres basés sur des motifs réguliers
+        
+        # 1. Rejeter les prépositions isolées
+        if re.match(r'^[àaádeèéêëdulesàauauxpourparsur]{1,3}$', cleaned.lower().replace(' ', '')):
+            return ""
+        
+        # 2. Rejeter les numéros de page, dates et heures
+        if re.match(r'^\d+\s*\/\s*\d+$', cleaned):  # Format "4 / 5" (page)
+            return ""
+        if re.match(r'^\d{1,2}:\d{2}$', cleaned):  # Format heure "15:18"
+            return ""
+        if re.match(r'^\d{1,2}/\d{1,2}/\d{2,4}$', cleaned):  # Format date
+            return ""
+        
+        # 3. Rejeter les codes et références
+        if re.match(r'^[A-Z0-9]{3,}\d{2}/\d{3}[A-Z]?$', cleaned):  # Format "FIC03/006A"
+            return ""
+        
+        # 4. Rejeter les coordonnées/contacts
+        if '/' in cleaned and ('@' in cleaned or re.search(r'\d{2}\s*\d{2}\s*\d{2}\s*\d{2}\s*\d{2}', cleaned)):
+            return ""
+        
+        # 5. Rejeter les textes trop courts sauf Oui/Non
+        if len(cleaned) < 2 and cleaned.lower() not in ["oui", "non", "yes", "no"]:
+            return ""
+        
+        # 6. Normaliser Oui/Non
+        if cleaned.lower() in ["oui", "yes"]:
+            return "Oui"
+        if cleaned.lower() in ["non", "no"]:
+            return "Non"
+        
+        # 7. Limiter la longueur des étiquettes très longues
+        if len(cleaned) > 100:
+            # Tronquer en cherchant un point ou une virgule pour une coupure propre
+            for i in range(80, min(100, len(cleaned))):
+                if cleaned[i] in ['.', ',', ';', ':', '!', '?']:
+                    return cleaned[:i+1] + "..."
+            # Si pas de ponctuation trouvée
+            return cleaned[:80] + "..."
+        
+        return cleaned
+
+
+    def _find_closest_text_improved(self, page_text: Dict, bbox: List[int]) -> str:
+        """
+        Version améliorée pour l'association d'étiquettes, avec meilleur filtrage.
+        
+        Args:
+            page_text: Texte structuré de la page
+            bbox: Rectangle englobant de la case [x1, y1, x2, y2]
+            
+        Returns:
+            Texte le plus pertinent à associer à la case
+        """
+        if not page_text or "blocks" not in page_text:
+            return ""
+        
+        # Coordonnées du centre de la case
+        x1, y1, x2, y2 = bbox
+        checkbox_center_x = (x1 + x2) / 2
+        checkbox_center_y = (y1 + y2) / 2
+        
+        # Pour stocker tous les textes candidats
+        candidates = []
+        
+        # 1. PHASE DE COLLECTE DES CANDIDATS
+        
+        # Distance maximale à considérer
+        max_distance = 150
+        
+        # Chercher dans les blocs de texte
+        for block in page_text["blocks"]:
+            if block["type"] != 0:  # Ignorer les blocs non-textuels
+                continue
+                
+            for line in block["lines"]:
+                line_bbox = line["bbox"]
+                line_center_x = (line_bbox[0] + line_bbox[2]) / 2
+                line_center_y = (line_bbox[1] + line_bbox[3]) / 2
+                
+                # Distance horizontale et verticale
+                dx = line_center_x - checkbox_center_x
+                dy = line_center_y - checkbox_center_y
+                
+                # Distance euclidienne
+                distance = (dx**2 + dy**2)**0.5
+                
+                if distance < max_distance:
+                    # Récupérer le texte complet
+                    line_text = " ".join([span["text"] for span in line["spans"]])
+                    
+                    # Nettoyer les symboles de case à cocher
+                    cleaned_text = line_text
+                    for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣", "▪", "▫"]:
+                        cleaned_text = cleaned_text.replace(symbol, "").strip()
+                    
+                    if cleaned_text:
+                        # Ajouter aux candidats
+                        candidates.append({
+                            "text": cleaned_text,
+                            "distance": distance,
+                            "dx": dx,
+                            "dy": dy,
+                            "bbox": line_bbox
+                        })
+        
+        # Si aucun candidat, retourner chaîne vide
+        if not candidates:
+            return ""
+        
+        # 2. PHASE D'ANALYSE ET FILTRAGE
+        
+        # A. Première passe pour capter les paires Oui/Non
+        oui_non_candidates = []
+        for candidate in candidates:
+            text = candidate["text"].lower().strip()
+            if text in ["oui", "non", "yes", "no"]:
+                oui_non_candidates.append(candidate)
+        
+        # Si au moins deux options trouvées et proches en Y, privilégier Oui/Non
+        if len(oui_non_candidates) >= 2:
+            # Trier par position Y
+            oui_non_candidates.sort(key=lambda x: x["bbox"][1])
+            
+            # Vérifier si elles sont proches verticalement
+            for i in range(len(oui_non_candidates) - 1):
+                y1 = oui_non_candidates[i]["bbox"][1]
+                y2 = oui_non_candidates[i+1]["bbox"][1]
+                
+                if abs(y1 - y2) < 30:  # Considérer comme une paire sur la même ligne
+                    # Chercher celle la plus proche horizontalement de la case
+                    closest = min(oui_non_candidates[i:i+2], key=lambda x: abs(x["dx"]))
+                    return self._clean_and_validate_label(closest["text"])
+        
+        # B. Recherche de texte contextuel pertinent
+        
+        # Filtrage avancé: calculer un score pour chaque candidat
+        scored_candidates = []
+        
+        for candidate in candidates:
+            text = candidate["text"]
+            distance = candidate["distance"]
+            dx = candidate["dx"]
+            dy = candidate["dy"]
+            
+            # a) Position: préférence à droite puis à gauche
+            position_score = 0
+            
+            # Droite (étiquette typique)
+            if 5 < dx < 100:  # Pas trop proche, pas trop loin
+                position_score = 50 - abs(dx) * 0.2
+            # Gauche
+            elif -100 < dx < -5:
+                position_score = 30 - abs(dx) * 0.15
+            
+            # b) Alignement vertical: préférence même ligne
+            if abs(dy) < 15:
+                position_score += 40
+            elif abs(dy) < 30:
+                position_score += 20
+            
+            # c) Contenu: favoriser textes informatifs
+            content_score = 0
+            
+            # Bonus fort pour Oui/Non et réponses claires
+            if text.lower() in ["oui", "non", "yes", "no"]:
+                content_score += 50
+            
+            # Bonus pour texte formaté comme question
+            if text.strip().endswith("?"):
+                content_score += 40
+            elif "?" in text:
+                content_score += 25
+            
+            # Pénalité pour longueur inappropriée
+            if len(text) < 2 and text.lower() not in ["oui", "non", "yes", "no"]:
+                content_score -= 50  # Fortement pénaliser
+            elif len(text) > 150:
+                content_score -= 30  # Pénalité pour textes trop longs
+            
+            # d) Distance (inversée: plus proche = meilleur score)
+            distance_score = 100 - min(100, distance * 0.8)
+            
+            # Score total pondéré
+            total_score = (
+                distance_score * 0.3 +
+                position_score * 0.5 +  # Position a plus d'importance
+                content_score * 0.2
+            )
+            
+            # Vérification rapide pour filtrer les pires candidats
+            if content_score > -30:  # Pas complètement disqualifié par le contenu
+                scored_candidates.append({
+                    "text": text,
+                    "score": total_score
+                })
+        
+        # Trier par score décroissant
+        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Prendre le meilleur candidat si score suffisant
+        if scored_candidates and scored_candidates[0]["score"] > 20:
+            return self._clean_and_validate_label(scored_candidates[0]["text"])
+        
+        # Aucun candidat adéquat
+        return ""
+
+
+    def _detect_and_group_yes_no_pairs(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Détecte et regroupe les paires Oui/Non, en améliorant leurs étiquettes.
+        
+        Args:
+            checkboxes: Liste des cases à cocher
+            
+        Returns:
+            Liste des cases à cocher avec paires Oui/Non corrigées
+        """
+        if len(checkboxes) < 2:
+            return checkboxes
+        
+        # Trier par page et position Y
+        sorted_boxes = sorted(checkboxes, key=lambda cb: (cb.get("page", 0), cb.get("bbox", [0, 0, 0, 0])[1]))
+        
+        # Identifier les paires Oui/Non potentielles
+        result = []
+        i = 0
+        
+        while i < len(sorted_boxes):
+            current = sorted_boxes[i]
+            
+            # Chercher une paire potentielle (case suivante proche verticalement)
+            if i + 1 < len(sorted_boxes):
+                next_box = sorted_boxes[i + 1]
+                
+                # Même page et proche verticalement
+                same_page = current.get("page") == next_box.get("page")
+                y_current = current.get("bbox", [0, 0, 0, 0])[1]
+                y_next = next_box.get("bbox", [0, 0, 0, 0])[1]
+                close_y = abs(y_current - y_next) < 30
+                
+                # Si les cases sont proches et ont des étiquettes Oui/Non ou pas d'étiquettes
+                if same_page and close_y:
+                    # Cas 1: Les deux ont déjà des étiquettes correctes Oui/Non
+                    current_label = current.get("label", "").lower()
+                    next_label = next_box.get("label", "").lower()
+                    
+                    if (current_label in ["oui", "yes"] and next_label in ["non", "no"]) or \
+                    (current_label in ["non", "no"] and next_label in ["oui", "yes"]):
+                        # Normaliser les étiquettes
+                        if current_label in ["oui", "yes"]:
+                            current["label"] = "Oui"
+                            current["value"] = "Oui"
+                            next_box["label"] = "Non"
+                            next_box["value"] = "Non"
+                        else:
+                            current["label"] = "Non"
+                            current["value"] = "Non"
+                            next_box["label"] = "Oui"
+                            next_box["value"] = "Oui"
+                        
+                        # Marquer comme faisant partie d'une paire
+                        pair_id = f"pair_{current.get('page')}_{y_current}"
+                        current["pair_id"] = pair_id
+                        next_box["pair_id"] = pair_id
+                        
+                        # Ajouter les deux et avancer
+                        result.append(current)
+                        result.append(next_box)
+                        i += 2
+                        continue
+                    
+                    # Cas 2: Aucune n'a d'étiquette ou étiquettes incomplètes
+                    if (not current_label or not next_label or 
+                        (current_label in ["oui", "yes", "non", "no"] and not next_label) or
+                        (not current_label and next_label in ["oui", "yes", "non", "no"])):
+                        
+                        # Analyser la position relative pour déterminer Oui/Non
+                        x_current = current.get("bbox", [0, 0, 0, 0])[0]
+                        x_next = next_box.get("bbox", [0, 0, 0, 0])[0]
+                        
+                        # En français, typiquement Oui est à gauche de Non
+                        if x_current < x_next:
+                            current["label"] = "Oui"
+                            current["value"] = "Oui"
+                            next_box["label"] = "Non"
+                            next_box["value"] = "Non"
+                        else:
+                            current["label"] = "Non"
+                            current["value"] = "Non"
+                            next_box["label"] = "Oui"
+                            next_box["value"] = "Oui"
+                        
+                        # Marquer comme faisant partie d'une paire
+                        pair_id = f"pair_{current.get('page')}_{y_current}"
+                        current["pair_id"] = pair_id
+                        next_box["pair_id"] = pair_id
+                        
+                        # Ajouter les deux et avancer
+                        result.append(current)
+                        result.append(next_box)
+                        i += 2
+                        continue
+                
+            # Si pas de paire, ajouter normalement
+            result.append(current)
+            i += 1
+        
+        return result
+
+
+    def _filter_redundant_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filtre les cases redondantes et inutiles, comme des fausses détections.
+        
+        Args:
+            checkboxes: Liste des cases à cocher
+            
+        Returns:
+            Liste des cases à cocher filtrée
+        """
+        if not checkboxes:
+            return []
+        
+        # 1. Filtrer les cases avec des étiquettes invalides
+        filtered = []
+        
+        for checkbox in checkboxes:
+            # Nettoyer et valider l'étiquette
+            original_label = checkbox.get("label", "")
+            cleaned_label = self._clean_and_validate_label(original_label)
+            
+            # Mettre à jour l'étiquette
+            if cleaned_label != original_label:
+                checkbox["label"] = cleaned_label
+                if cleaned_label in ["Oui", "Non"]:
+                    checkbox["value"] = cleaned_label
+            
+            # Filtrer les étiquettes problématiques
+            if not cleaned_label and "pair_id" not in checkbox:
+                # Garder uniquement les cases cochées sans étiquette
+                if checkbox.get("checked", False) and checkbox.get("confidence", 0) > 0.75:
+                    filtered.append(checkbox)
+            else:
+                filtered.append(checkbox)
+        
+        # 2. Éliminer les doublons spatiaux
+        result = []
+        used_positions = set()
+        
+        for checkbox in filtered:
+            page = checkbox.get("page", 0)
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            
+            # Calculer une position unique (arrondie pour tolérance)
+            pos_key = f"{page}_{int(bbox[0]/5)}_{int(bbox[1]/5)}"
+            
+            if pos_key not in used_positions:
+                used_positions.add(pos_key)
+                result.append(checkbox)
+        
+        return result
