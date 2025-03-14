@@ -258,18 +258,18 @@ class CheckboxExtractor:
     async def _detect_checkboxes(
         self, 
         page: fitz.Page, 
-        page_text: Dict, 
+        page_texts: Dict, 
         page_image: np.ndarray, 
         page_num: int,
         confidence_threshold: float,
         enhance_detection: bool
     ) -> List[Dict[str, Any]]:
         """
-        Détecte les cases à cocher avec une approche hybride.
+        Détecte les cases à cocher avec une approche hybride avancée.
         
         Args:
             page: Page PDF
-            page_text: Texte extrait (dict)
+            page_texts: Textes extraits (différents formats)
             page_image: Image de la page
             page_num: Numéro de la page
             confidence_threshold: Seuil de confiance
@@ -285,14 +285,13 @@ class CheckboxExtractor:
             gray = page_image
         
         # 1. Détection basée sur le texte (symboles de case à cocher)
-        symbol_checkboxes = self._detect_by_symbols(page_text, page_num)
+        symbol_checkboxes = self._detect_by_symbols(page_texts["dict"], page_num)
         
         # 2. Détection visuelle (basée sur l'image)
         visual_checkboxes = self._detect_by_vision(gray, page_num, enhance_detection)
         
         # 3. Fusionner et dédupliquer les résultats
         merged_checkboxes = self._merge_checkbox_results(symbol_checkboxes, visual_checkboxes)
-        merged_checkboxes = self._improve_label_associations(merged_checkboxes)
         
         # 4. Déterminer l'état de chaque case (cochée ou non)
         for checkbox in merged_checkboxes:
@@ -312,10 +311,11 @@ class CheckboxExtractor:
                     checkbox["checked"] = False
         
         # 5. Associer les étiquettes aux cases
+        # (Cette étape initiale sera complétée par l'association contextuelle plus tard)
         for checkbox in merged_checkboxes:
             if not checkbox.get("label"):
                 bbox = checkbox.get("bbox", [0, 0, 0, 0])
-                label = self._find_closest_text(page_text, bbox)
+                label = self._find_closest_text(page_texts, bbox)
                 checkbox["label"] = label
         
         # 6. Filtrer par seuil de confiance
@@ -717,90 +717,6 @@ class CheckboxExtractor:
                 closest_text = text
         
         return closest_text
-    
-    def _improve_label_associations(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Améliore les associations d'étiquettes en analysant les groupes de cases.
-        
-        Args:
-            checkboxes: Liste des cases à cocher détectées
-            
-        Returns:
-            Liste des cases avec étiquettes améliorées
-        """
-        # Trier par page puis par position Y
-        checkboxes.sort(key=lambda c: (c.get("page", 0), c.get("bbox", [0, 0, 0, 0])[1]))
-        
-        # Regrouper par proximité verticale (cases sur la même ligne)
-        groups = []
-        current_group = []
-        last_page = -1
-        last_y = -1
-        y_tolerance = 15  # Tolérance verticale
-        
-        for checkbox in checkboxes:
-            page = checkbox.get("page", 0)
-            bbox = checkbox.get("bbox", [0, 0, 0, 0])
-            y = bbox[1]
-            
-            # Nouvelle page ou nouvelle ligne
-            if page != last_page or (last_y != -1 and abs(y - last_y) > y_tolerance):
-                if current_group:
-                    groups.append(current_group)
-                current_group = [checkbox]
-            else:
-                current_group.append(checkbox)
-            
-            last_page = page
-            last_y = y
-        
-        # Ajouter le dernier groupe
-        if current_group:
-            groups.append(current_group)
-        
-        # Analyser les groupes pour améliorer les étiquettes
-        improved_checkboxes = []
-        
-        for group in groups:
-            # Trier par position X
-            group.sort(key=lambda c: c.get("bbox", [0, 0, 0, 0])[0])
-            
-            # Si exactement 2 cases, c'est possiblement un groupe Oui/Non
-            if len(group) == 2:
-                oui_non_pattern = re.compile(r'\b(oui|non|yes|no)\b', re.IGNORECASE)
-                
-                # Vérifier les étiquettes
-                has_oui = False
-                has_non = False
-                
-                for cb in group:
-                    label = cb.get("label", "").lower()
-                    if re.search(r'\b(oui|yes)\b', label):
-                        has_oui = True
-                        cb["value"] = "Oui"
-                    elif re.search(r'\b(non|no)\b', label):
-                        has_non = True
-                        cb["value"] = "Non"
-                
-                # Si on a un groupe Oui/Non, extraire l'étiquette commune
-                if has_oui and has_non:
-                    # La vraie étiquette pourrait être dans un texte à proximité
-                    # Utiliser les informations de page et de position pour rechercher
-                    # l'étiquette dans le document (cette partie nécessiterait un accès
-                    # au contenu textuel complet de la page)
-                    
-                    # Pour l'instant, on peut améliorer en standardisant les valeurs
-                    for cb in group:
-                        label = cb.get("label", "").lower()
-                        if "oui" in label or "yes" in label:
-                            cb["value"] = "Oui"
-                        elif "non" in label or "no" in label:
-                            cb["value"] = "Non"
-            
-            # Ajouter les cases du groupe
-            improved_checkboxes.extend(group)
-        
-        return improved_checkboxes
     
     def _extract_checkbox_image(self, page: fitz.Page, checkbox: Dict[str, Any], page_image: np.ndarray) -> Optional[str]:
         """
