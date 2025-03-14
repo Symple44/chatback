@@ -41,7 +41,7 @@ class CheckboxExtractor:
         config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Version optimisée de l'extracteur de cases à cocher avec résolution des incohérences.
+        Version robuste de l'extracteur de cases à cocher avec résolution des incohérences.
         
         Args:
             pdf_path: Chemin du fichier PDF ou objet BytesIO
@@ -53,7 +53,7 @@ class CheckboxExtractor:
         """
         try:
             with metrics.timer("checkbox_extraction"):
-                # Configuration et autres étapes inchangées
+                # Préparer la configuration avec des valeurs plus strictes par défaut
                 conf = config or {}
                 confidence_threshold = conf.get("confidence_threshold", 0.65)
                 strict_mode = conf.get("strict_mode", True)
@@ -66,38 +66,109 @@ class CheckboxExtractor:
                     return {"error": "Impossible d'ouvrir le PDF", "checkboxes": []}
                 
                 try:
-                    # Stocker le document pour référence plus tard
-                    self._current_pdf_doc = pdf_doc
+                    # Normaliser le page_range
+                    page_indices = self._normalize_page_range(pdf_doc, page_range)
                     
-                    # Normaliser le page_range et traiter les pages comme avant
-                    # [Code inchangé pour le traitement des pages]
+                    # Structure des résultats
+                    results = {
+                        "metadata": {
+                            "filename": self._get_filename(pdf_path),
+                            "page_count": len(pdf_doc),
+                            "processed_pages": len(page_indices),
+                            "extraction_date": datetime.now().isoformat(),
+                            "config": {
+                                "confidence_threshold": confidence_threshold,
+                                "strict_mode": strict_mode,
+                                "enhance_detection": enhance_detection
+                            }
+                        },
+                        "checkboxes": [],
+                    }
                     
-                    # Post-traitement amélioré
+                    # Traiter chaque page
+                    for page_idx in page_indices:
+                        if page_idx >= len(pdf_doc):
+                            continue
+                            
+                        try:
+                            page = pdf_doc[page_idx]
+                            page_num = page_idx + 1  # Convertir en 1-based
+                            
+                            # Extraire le texte et convertir en image pour analyse visuelle
+                            page_texts = page.get_text("dict")
+                            page_image = self._convert_page_to_image(page)
+                            
+                            # Détecter les cases à cocher
+                            checkboxes = await self._detect_checkboxes(
+                                page, 
+                                page_texts, 
+                                page_image, 
+                                page_num, 
+                                confidence_threshold,
+                                enhance_detection
+                            )
+                            
+                            # En mode strict, appliquer un traitement post-détection
+                            if strict_mode:
+                                try:
+                                    # Limiter le nombre de cases cochées par page
+                                    checkboxes = self._apply_strict_filtering(checkboxes, page_num)
+                                except Exception as e:
+                                    logger.error(f"Erreur lors du filtrage strict page {page_num}: {e}")
+                            
+                            # Ajouter au résultat
+                            results["checkboxes"].extend(checkboxes)
+                            
+                        except Exception as e:
+                            logger.error(f"Erreur traitement page {page_idx+1}: {e}")
+                            # Continuer avec la page suivante
+                    
+                    # Post-traitement pour organiser les cases à cocher
                     try:
+                        # Stocker temporairement une référence au PDF pour l'extraction des questions
+                        self._current_pdf_doc = pdf_doc
+                        
                         # Améliorer les étiquettes et grouper les paires Oui/Non
                         results["checkboxes"] = self._detect_and_group_yes_no_pairs(results["checkboxes"])
+                        
                         # Filtrer les cases redondantes ou inutiles
                         results["checkboxes"] = self._filter_redundant_checkboxes(results["checkboxes"])
                         
-                        # Résoudre les incohérences et améliorer la structure
-                        self._enhance_checkbox_structure(results, pdf_doc)
+                        # Essayer la structure avancée avec résolution des incohérences
+                        try:
+                            # Résoudre les incohérences et améliorer la structure
+                            self._enhance_checkbox_structure(results, pdf_doc)
+                        except Exception as e:
+                            logger.error(f"Erreur lors du post-traitement avancé: {e}")
+                            # Fallback sur l'organisation simple
+                            self._organize_checkboxes(results)
+                        
+                        # Nettoyer la référence temporaire
+                        if hasattr(self, "_current_pdf_doc"):
+                            delattr(self, "_current_pdf_doc")
                     except Exception as e:
-                        logger.error(f"Erreur lors du post-traitement avancé: {e}")
-                        # Fallback sur l'organisation simple
-                        self._organize_checkboxes(results)
+                        logger.error(f"Erreur organisation des cases: {e}")
                     
-                    # Nettoyage
-                    if hasattr(self, "_current_pdf_doc"):
-                        delattr(self, "_current_pdf_doc")
+                    # En mode strict, effectuer une validation globale
+                    if strict_mode:
+                        try:
+                            self._validate_global_checkbox_results(results)
+                        except Exception as e:
+                            logger.error(f"Erreur validation globale: {e}")
+                    
+                    # Vérifier qu'on a des résultats valides
+                    if not results.get("checkboxes") and len(page_indices) > 0:
+                        results["warning"] = "Extraction terminée mais aucune case à cocher détectée"
                     
                     return results
-                    
+                
                 finally:
                     # Fermer le document
                     pdf_doc.close()
                     
         except Exception as e:
             logger.error(f"Erreur extraction cases à cocher: {e}")
+            metrics.increment_counter("checkbox_extraction_errors")
             return {
                 "error": str(e),
                 "checkboxes": []
