@@ -56,7 +56,7 @@ async def extract_tables(
     output_format: str = Form("json", description="Format des données dans la réponse"),
     pages: str = Form("all", description="Pages à analyser"),
     # Type de document
-    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, devis, receipt, etc.)"),
+    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, devis, receipt, form, etc.)"),
     # Paramètres OCR
     ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
     ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
@@ -70,28 +70,33 @@ async def extract_tables(
     download_format: Optional[str] = Form(None, description="Format à télécharger (csv, excel, json, html)"),
     background_processing: bool = Form(False, description="Traiter en arrière-plan (pour les grands PDF)"),
     use_cache: bool = Form(True, description="Utiliser le cache si disponible"),
-    # Traiter les cases à cocher
-    extract_checkboxes: bool = Form(False, description="Extraire également les cases à cocher"),
+    # NOUVEAUX PARAMÈTRES pour les cases à cocher
+    extract_checkboxes: bool = Form(True, description="Extraire également les cases à cocher"),
+    checkbox_confidence: float = Form(0.6, description="Seuil de confiance pour les cases à cocher"),
+    enhance_checkbox_detection: bool = Form(True, description="Utiliser la détection avancée pour les cases à cocher"),
+    detect_checkbox_groups: bool = Form(True, description="Détecter automatiquement les groupes de cases à cocher (Oui/Non)"),
+    include_checkbox_images: bool = Form(False, description="Inclure les images des cases à cocher détectées"),
     components = Depends(get_components)
 ):
     """
-    Extrait les tableaux d'un fichier PDF.
+    Extrait les tableaux et cases à cocher d'un fichier PDF.
     
-    Cette API utilise une nouvelle architecture modulaire qui sélectionne intelligemment 
-    la meilleure méthode d'extraction en fonction du contenu du PDF.
+    Cette API utilise une architecture modulaire qui sélectionne intelligemment 
+    la meilleure méthode d'extraction en fonction du contenu du PDF:
     
     - Détection automatique du type de PDF (scanné ou numérique)
     - Choix intelligent entre différentes méthodes d'extraction
     - Support OCR avancé pour les PDF scannés
     - Validation et optimisation des tableaux extraits
+    - Détection et analyse des cases à cocher avec leur état (coché/non coché)
+    - Extraction des groupes de cases à cocher (Oui/Non, etc.)
     - Cache configurable pour les extractions répétées
-    - Support pour l'extraction des cases à cocher
     """
     try:
         # Mesure des performances
         extraction_id = str(uuid.uuid4())
         metrics.start_request_tracking(extraction_id)
-        metrics.increment_counter("pdf_table_extractions")
+        metrics.increment_counter("pdf_extractions")
         start_time = time.time()
         
         # Vérification du fichier
@@ -106,6 +111,21 @@ async def extract_tables(
         file_size = len(file_content)
         file_obj = io.BytesIO(file_content)
         
+        # Vérification de la taille
+        if file_size > settings.table_extraction.MAX_FILE_SIZE:
+            max_mb = settings.table_extraction.MAX_FILE_SIZE / (1024 * 1024)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fichier trop volumineux. Taille maximum: {max_mb} Mo"
+            )
+        
+        # Vérification des formats
+        if output_format not in settings.table_extraction.SUPPORTED_OUTPUT_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Format de sortie invalide. Formats supportés: {', '.join(settings.table_extraction.SUPPORTED_OUTPUT_FORMATS)}"
+            )
+        
         # Extraction des cases à cocher si demandé
         checkbox_results = None
         if extract_checkboxes:
@@ -113,7 +133,7 @@ async def extract_tables(
                 # Créer une copie du fichier pour l'extraction des cases à cocher
                 checkbox_file = io.BytesIO(file_content)
                 
-                # Extraire les cases à cocher
+                # Initialiser l'extracteur de cases à cocher
                 if not hasattr(components, 'checkbox_extractor'):
                     from core.document_processing.table_extraction.checkbox_extractor import CheckboxExtractor
                     components._components["checkbox_extractor"] = CheckboxExtractor()
@@ -137,58 +157,78 @@ async def extract_tables(
                 
                 metrics.increment_counter("checkbox_extractions")
                 
-                # Tentative avec la méthode standard
-                checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(checkbox_file, page_range)
-                extracted_count = len(checkbox_results.get('checkboxes', []))
-                logger.info(f"Extraction standard des cases à cocher terminée: {extracted_count} cases trouvées")
+                # Configuration améliorée des paramètres
+                checkbox_config = {
+                    "confidence_threshold": checkbox_confidence,
+                    "enhance_detection": enhance_checkbox_detection,
+                    "detect_groups": detect_checkbox_groups,
+                    "include_images": include_checkbox_images
+                }
                 
-                # Si aucune case trouvée ou erreur, essayer avec la méthode pour formulaires
-                if extracted_count == 0 or "error" in checkbox_results:
-                    logger.info("Tentative avec la méthode optimisée pour formulaires")
-                    # Créer un fichier temporaire si besoin
-                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                        temp_file.write(file_content)
-                        temp_path = temp_file.name
+                # AMÉLIORATION: utiliser extract_form_checkboxes en priorité, plus adapté aux formulaires
+                checkbox_file.seek(0)  # Rembobiner le fichier
+                form_results = await checkbox_extractor.extract_form_checkboxes(
+                    checkbox_file, 
+                    page_range=page_range,
+                    config=checkbox_config
+                )
+                
+                extracted_form_count = len(form_results.get('checkboxes', []))
+                logger.info(f"Extraction formulaire: {extracted_form_count} cases trouvées")
+                
+                # Si peu de résultats avec la méthode formulaire, essayer avec la méthode standard
+                if extracted_form_count < 3:
+                    checkbox_file.seek(0)  # Rembobiner le fichier
+                    standard_results = await checkbox_extractor.extract_checkboxes_from_pdf(
+                        checkbox_file, 
+                        page_range=page_range,
+                        config=checkbox_config
+                    )
+                    
+                    extracted_std_count = len(standard_results.get('checkboxes', []))
+                    logger.info(f"Extraction standard: {extracted_std_count} cases trouvées")
+                    
+                    # Garder le résultat avec le plus de cases détectées
+                    if extracted_std_count > extracted_form_count:
+                        checkbox_results = standard_results
+                    else:
+                        checkbox_results = form_results
+                else:
+                    checkbox_results = form_results
+                
+                # POST-TRAITEMENT AVANCÉ: enrichir la structure des résultats
+                if checkbox_results and len(checkbox_results.get('checkboxes', [])) > 0:
+                    # Extraction des valeurs sélectionnées dans un format standardisé
+                    form_values = checkbox_extractor.extract_selected_values(checkbox_results)
+                    checkbox_results["form_values"] = form_values
+                    
+                    # Organisation par sections
+                    form_sections = {}
+                    for checkbox in checkbox_results.get('checkboxes', []):
+                        section = checkbox.get('section', 'Information')
+                        if section not in form_sections:
+                            form_sections[section] = {}
                         
-                        try:
-                            # Utiliser la méthode spécifique pour formulaires
-                            form_results = await checkbox_extractor.extract_form_checkboxes(temp_path, page_range)
-                            extracted_form_count = len(form_results.get('checkboxes', []))
+                        label = checkbox.get('label', '')
+                        if label:
+                            is_checked = checkbox.get('checked', False)
+                            value = checkbox.get('value', '')
                             
-                            if extracted_form_count > 0:
-                                logger.info(f"Extraction formulaire réussie: {extracted_form_count} cases trouvées")
-                                checkbox_results = form_results
+                            # Pour les champs de type Oui/Non
+                            if value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
+                                if is_checked:  # Si coché, prendre la valeur explicite
+                                    form_sections[section][label] = value
                             else:
-                                logger.info("Aucune case trouvée avec la méthode pour formulaires")
-                        except Exception as form_error:
-                            logger.error(f"Erreur extraction formulaire: {form_error}")
-                        
-                        # Nettoyage du fichier temporaire
-                        try:
-                            os.unlink(temp_path)
-                        except:
-                            pass
+                                # Pour les cases à cocher simples
+                                form_sections[section][label] = "Oui" if is_checked else "Non"
+                    
+                    checkbox_results["form_sections"] = form_sections
                 
                 logger.info(f"Extraction finale des cases à cocher: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
             except Exception as e:
                 logger.error(f"Erreur extraction cases à cocher: {e}")
                 metrics.increment_counter("checkbox_extraction_errors")
                 checkbox_results = {"error": str(e)}
-        
-        # Vérification de la taille
-        if file_size > settings.table_extraction.MAX_FILE_SIZE:
-            max_mb = settings.table_extraction.MAX_FILE_SIZE / (1024 * 1024)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Fichier trop volumineux. Taille maximum: {max_mb} Mo"
-            )
-        
-        # Vérification des formats
-        if output_format not in settings.table_extraction.SUPPORTED_OUTPUT_FORMATS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Format de sortie invalide. Formats supportés: {', '.join(settings.table_extraction.SUPPORTED_OUTPUT_FORMATS)}"
-        )
         
         # Vérification traitement en arrière-plan
         if background_processing and file_size > 5 * 1024 * 1024:  # > 5 Mo
@@ -222,7 +262,13 @@ async def extract_tables(
                     "analyze": analyze,
                     "search_query": search_query,
                     "use_cache": use_cache,
-                    "extract_checkboxes": extract_checkboxes
+                    "extract_checkboxes": extract_checkboxes,
+                    "checkbox_config": {
+                        "confidence_threshold": checkbox_confidence,
+                        "enhance_detection": enhance_checkbox_detection,
+                        "detect_groups": detect_checkbox_groups,
+                        "include_images": include_checkbox_images
+                    }
                 },
                 components=components
             )
@@ -313,50 +359,27 @@ async def extract_tables(
                     structured_data["auto_detected"] = True
                     structured_data["detection_confidence"] = detected_confidence
                 
-                # Formater et ajouter les résultats des cases à cocher si disponibles
+                # AMÉLIORÉ: Intégration standardisée des cases à cocher
                 if checkbox_results and extract_checkboxes:
-                    # Conserver les résultats bruts pour la compatibilité
-                    structured_data["checkboxes_raw"] = checkbox_results
-                    
-                    # Structure plus claire des cases à cocher
+                    # Structure claire des cases à cocher
                     form_values = {}
                     form_sections = {}
                     
-                    # Parcourir les cases à cocher et déterminer précisément les valeurs cochées
-                    for checkbox in checkbox_results.get("checkboxes", []):
-                        label = checkbox.get("label", "").strip()
-                        value = checkbox.get("value", "").strip()
-                        checked = checkbox.get("checked", False)
-                        section = checkbox.get("section", "Information").strip()
-                        
-                        # Ignorer les entrées sans étiquette
-                        if not label:
-                            continue
-                        
-                        # Pour les champs de type "Oui/Non"
-                        if value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
-                            # La valeur sélectionnée est celle qui correspond à la case cochée
-                            selected_value = value
-                        else:
-                            # Pour les cases à cocher simples
-                            selected_value = "Oui" if checked else "Non"
-                        
-                        # Format plat (clé-valeur direct)
-                        form_values[label] = selected_value
-                        
-                        # Organisation par section
-                        if section not in form_sections:
-                            form_sections[section] = {}
-                        
-                        form_sections[section][label] = selected_value
+                    # Utiliser directement les données pré-traitées
+                    if "form_values" in checkbox_results:
+                        form_values = checkbox_results["form_values"]
                     
-                    # Ajouter aux résultats avec des noms plus explicites
-                    structured_data["form_values"] = form_values
-                    structured_data["form_values_by_section"] = form_sections
+                    if "form_sections" in checkbox_results:
+                        form_sections = checkbox_results["form_sections"]
                     
-                    # Maintenir la compatibilité avec les anciens formats
-                    structured_data["checkboxes_by_label"] = form_values
-                    structured_data["checkboxes_by_section"] = form_sections
+                    # Format unifié pour l'exploitation des données
+                    structured_data["form_data"] = {
+                        "values": form_values,
+                        "sections": form_sections
+                    }
+                    
+                    # Conserver les résultats bruts pour les analyses avancées
+                    structured_data["checkboxes_raw"] = checkbox_results.get("checkboxes", [])
                 
                 return structured_data
                 
@@ -370,8 +393,37 @@ async def extract_tables(
                 invoice_processor = components.invoice_processor
                 structured_data = invoice_processor.process(result.tables)
                 logger.info(f"Post-traitement de facture appliqué avec succès")
+                
+                # Intégration des cases à cocher pour les factures
+                if checkbox_results and extract_checkboxes:
+                    structured_data["form_data"] = {
+                        "values": checkbox_results.get("form_values", {}),
+                        "sections": checkbox_results.get("form_sections", {})
+                    }
             except Exception as e:
                 logger.error(f"Erreur lors du post-traitement de facture: {e}")
+                structured_data = {"error": str(e)}
+        
+        # Post-traitement spécifique pour les formulaires
+        elif document_type.lower() in ["form", "formulaire"]:
+            try:
+                # Appliquer le post-traitement pour les formulaires
+                invoice_processor = components.invoice_processor
+                
+                # Utiliser la méthode process_form_data avec les tableaux et les cases à cocher
+                structured_data = invoice_processor.process_form_data(
+                    result.tables,
+                    checkbox_results
+                )
+                
+                # Ajouter des métadonnées
+                structured_data["extraction_id"] = extraction_id
+                structured_data["filename"] = file.filename
+                structured_data["processing_time"] = time.time() - start_time
+                
+                return structured_data
+            except Exception as e:
+                logger.error(f"Erreur lors du post-traitement de formulaire: {e}")
                 structured_data = {"error": str(e)}
         
         # Si download_format est spécifié, générer le fichier à télécharger
@@ -405,51 +457,20 @@ async def extract_tables(
         if structured_data:
             result_dict["structured_data"] = structured_data
             
-        # Formater et ajouter les résultats des cases à cocher si disponibles
+        # AMÉLIORÉ: Intégration standardisée des cases à cocher dans la réponse
         if checkbox_results and extract_checkboxes:
-            # Conserver les résultats bruts pour la compatibilité
-            result_dict["checkboxes_raw"] = checkbox_results
+            # Structure normalisée et plus claire
+            result_dict["checkboxes"] = {
+                "total": len(checkbox_results.get("checkboxes", [])),
+                "items": checkbox_results.get("checkboxes", []),
+                "values": checkbox_results.get("form_values", {}),
+                "sections": checkbox_results.get("form_sections", {})
+            }
             
-            # Créer une structure formatée plus claire pour l'API
-            form_values = {}
-            form_values_by_section = {}
-            
-            # Parcourir les cases à cocher et les organiser
-            for checkbox in checkbox_results.get("checkboxes", []):
-                label = checkbox.get("label", "").strip()
-                value = checkbox.get("value", "").strip()
-                checked = checkbox.get("checked", False)
-                section = checkbox.get("section", "Information").strip()
-                
-                # Ignorer les entrées sans étiquette
-                if not label:
-                    continue
-                
-                # Pour les groupes de cases à cocher "Oui/Non"
-                if value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
-                    # La valeur est explicitement celle qui est cochée
-                    selected_value = value
-                else:
-                    # Pour les cases à cocher simples
-                    selected_value = "Oui" if checked else "Non"
-                
-                # Ajouter au dictionnaire principal (format plat)
-                form_values[label] = selected_value
-                
-                # Organisation par section
-                if section not in form_values_by_section:
-                    form_values_by_section[section] = {}
-                
-                form_values_by_section[section][label] = selected_value
-            
-            # Ajouter aux résultats avec des noms clairs
-            result_dict["form_values"] = form_values  # Format simple [étiquette -> valeur]
-            result_dict["form_values_by_section"] = form_values_by_section  # Organisé par sections
-
-            # Conserver les anciens formats pour la compatibilité
-            result_dict["checkboxes"] = form_values
-            result_dict["checkboxes_by_section"] = form_values_by_section
-            
+            # Ajout des images si demandées
+            if include_checkbox_images and "checkbox_images" in checkbox_results:
+                result_dict["checkboxes"]["images"] = checkbox_results.get("checkbox_images", [])
+        
         # Terminer le suivi des métriques
         processing_time = time.time() - start_time
         metrics.finish_request_tracking(extraction_id)
@@ -556,185 +577,7 @@ async def get_task_status(task_id: str):
             status_code=500,
             detail=f"Erreur lors de la vérification du statut: {str(e)}"
         )
-@router.post("/extract_form", response_model=Union[Dict[str, Any], ErrorResponse])
-async def extract_form(
-    file: UploadFile = File(...),
-    output_format: str = Form("json", description="Format des données dans la réponse"),
-    ocr_enabled: bool = Form(True, description="Activer l'OCR pour les PDF scannés"),
-    ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
-    extract_checkboxes: bool = Form(True, description="Extraire les cases à cocher"),
-    detect_form_type: bool = Form(True, description="Détecter automatiquement le type de formulaire"),
-    components = Depends(get_components)
-):
-    """
-    Extrait et structure les données d'un formulaire PDF.
-    
-    Cette route est spécialisée pour les formulaires et documents structurés avec des cases à cocher.
-    Elle combine l'extraction de tableaux et de cases à cocher pour créer une structure claire et exploitable.
-    
-    - Détection automatique du type de formulaire
-    - Extraction optimisée des cases à cocher
-    - Structure organisée par sections
-    - Format simplifié pour faciliter l'exploitation des données
-    """
-    try:
-        # Mesure des performances
-        extraction_id = str(uuid.uuid4())
-        metrics.start_request_tracking(extraction_id)
-        metrics.increment_counter("form_extractions")
-        start_time = time.time()
-        
-        # Vérification du fichier
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=400, 
-                detail="Le fichier doit être au format PDF"
-            )
-        
-        # Lecture du contenu
-        file_content = await file.read()
-        file_size = len(file_content)
-        file_obj = io.BytesIO(file_content)
-        
-        # Vérification de la taille
-        if file_size > settings.table_extraction.MAX_FILE_SIZE:
-            max_mb = settings.table_extraction.MAX_FILE_SIZE / (1024 * 1024)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Fichier trop volumineux. Taille maximum: {max_mb} Mo"
-            )
-        
-        # Initialisation des composants nécessaires
-        if not hasattr(components, 'table_extraction_pipeline'):
-            table_detector = components.table_detector if hasattr(components, 'table_detector') else None
-            cache_manager = components.cache_manager if hasattr(components, 'cache_manager') else None
-            components._components["table_extraction_pipeline"] = TableExtractionPipeline(
-                cache_manager=cache_manager,
-                table_detector=table_detector
-            )
-        
-        if not hasattr(components, 'invoice_processor'):
-            components._components["invoice_processor"] = InvoiceProcessor()
-        
-        if not hasattr(components, 'checkbox_extractor'):
-            from core.document_processing.table_extraction.checkbox_extractor import CheckboxExtractor
-            components._components["checkbox_extractor"] = CheckboxExtractor()
-        
-        # Configuration OCR
-        ocr_config = {
-            "lang": ocr_language,
-            "enhance_image": True,
-            "deskew": True,
-            "preprocess_type": "thresh",
-            "psm": 6
-        } if ocr_enabled else None
-        
-        # 1. Extraction des tableaux
-        pipeline = components.table_extraction_pipeline
-        table_result = await pipeline.extract_tables(
-            file_obj=file_obj,
-            pages="all",
-            strategy="auto",
-            output_format="pandas",
-            ocr_config=ocr_config,
-            use_cache=True
-        )
-        
-        # 2. Extraction des cases à cocher si demandé
-        checkbox_results = None
-        if extract_checkboxes:
-            try:
-                file_obj.seek(0)
-                checkbox_extractor = components.checkbox_extractor
-                
-                # Tentative principale avec la méthode spécifique pour formulaires
-                checkbox_results = await checkbox_extractor.extract_form_checkboxes(file_obj)
-                
-                # Si peu de cases détectées, essayer avec la méthode standard
-                if len(checkbox_results.get("checkboxes", [])) < 3:
-                    file_obj.seek(0)
-                    std_results = await checkbox_extractor.extract_checkboxes_from_pdf(file_obj)
-                    
-                    # Garder le résultat avec le plus de cases détectées
-                    if len(std_results.get("checkboxes", [])) > len(checkbox_results.get("checkboxes", [])):
-                        checkbox_results = std_results
-                
-                # Extraire les valeurs sélectionnées dans un format plus clair
-                selected_values = checkbox_extractor.extract_selected_values(checkbox_results)
-                checkbox_results["form_values"] = selected_values
-                
-                logger.info(f"Extraction des cases à cocher: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
-            except Exception as e:
-                logger.error(f"Erreur extraction cases à cocher: {e}")
-                checkbox_results = {"error": str(e)}
-        
-        # 3. Détection du type de formulaire si demandé
-        form_type = "generic"
-        if detect_form_type:
-            file_obj.seek(0)
-            invoice_processor = components.invoice_processor
-            form_types = invoice_processor.detect_document_type(file_obj)
-            form_type = max(form_types.items(), key=lambda x: x[1])[0]
-            logger.info(f"Type de formulaire détecté: {form_type}")
-        
-        # 4. Traitement du formulaire avec la structure améliorée
-        invoice_processor = components.invoice_processor
-        form_data = invoice_processor.process_form_data(
-            table_result.tables,
-            checkbox_results
-        )
-        
-        # 5. Construction de la réponse
-        response = {
-            "extraction_id": extraction_id,
-            "filename": file.filename,
-            "file_size": file_size,
-            "processing_time": time.time() - start_time,
-            "form_type": form_type,
-            "form_data": form_data,
-            "checkboxes": checkbox_results.get("form_values", {}) if checkbox_results else {},
-            "tables_count": table_result.tables_count,
-            "status": "completed"
-        }
-        
-        # Ajouter les résultats bruts si demandé (utile pour le débogage)
-        if output_format == "debug":
-            response["raw_tables"] = table_result.to_dict()
-            response["raw_checkboxes"] = checkbox_results
-        
-        metrics.track_search_operation(
-            method="form_extraction",
-            success=True,
-            processing_time=time.time() - start_time,
-            results_count=1
-        )
-        
-        return response
-        
-    except HTTPException:
-        metrics.increment_counter("form_extraction_errors")
-        raise
-    except Exception as e:
-        logger.error(f"Erreur extraction formulaire: {str(e)}", exc_info=True)
-        metrics.increment_counter("form_extraction_errors")
-        
-        # Calculer le temps de traitement même en cas d'erreur
-        processing_time = time.time() - start_time
-        metrics.finish_request_tracking(extraction_id)
-        
-        # Retourner une réponse d'erreur structurée
-        return {
-            "extraction_id": extraction_id,
-            "filename": file.filename if file else "unknown",
-            "file_size": file_size if 'file_size' in locals() else 0,
-            "processing_time": processing_time,
-            "status": "error",
-            "message": f"Erreur lors de l'extraction du formulaire: {str(e)}"
-        }
-    finally:
-        # Nettoyage
-        await file.close()
-        
+     
 @router.get("/download/{filename}")
 async def download_file(filename: str):
     """
