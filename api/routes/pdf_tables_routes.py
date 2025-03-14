@@ -129,59 +129,48 @@ async def extract_tables(
         
         # Détection de document technique/CANAMETAL
         is_technical_form = False
-        if use_technical_extractor or document_type.lower() in ["canametal", "technical", "form_technique"]:
+        if use_technical_extractor:
             is_technical_form = True
         else:
-            # Détection automatique des fiches CANAMETAL
-            with fitz.open(stream=file_content) as doc:
-                if doc.page_count > 0:
-                    first_page_text = doc[0].get_text()
-                    # Motifs spécifiques aux fiches CANAMETAL ou documents techniques
-                    if ("CANAMETAL" in first_page_text or 
-                        "Fiche Affaire" in first_page_text or 
-                        "OSSATURE" in first_page_text or
-                        "LOT" in first_page_text and "ECLISSAGE" in first_page_text):
-                        is_technical_form = True
-                        logger.info("Document technique CANAMETAL détecté, utilisation de l'extracteur spécialisé")
-        
-        # Si c'est un document technique, utiliser l'extracteur spécialisé
-        if is_technical_form:
+            # Créer une copie du contenu pour l'analyse
+            detect_file = io.BytesIO(file_content)
+            
             try:
-                # Initialiser l'extracteur technique
-                if not hasattr(components, 'technical_form_extractor'):
-                    from core.document_processing.table_extraction.technical_form_extractor import TechnicalFormExtractor
-                    components._components["technical_form_extractor"] = TechnicalFormExtractor()
-                
-                tech_extractor = components.technical_form_extractor
-                
-                # Extraction avec l'extracteur spécialisé
-                file_obj.seek(0)
-                technical_data = await tech_extractor.extract_form_data(file_obj)
-                
-                # Ajouter des métadonnées
-                technical_data["extraction_id"] = extraction_id
-                technical_data["filename"] = file.filename
-                technical_data["file_size"] = file_size
-                technical_data["processing_time"] = time.time() - start_time
-                technical_data["status"] = "completed"
-                technical_data["extraction_method"] = "technical_extractor"
-                
-                # Terminer le suivi des métriques
-                processing_time = time.time() - start_time
-                metrics.finish_request_tracking(extraction_id)
-                metrics.track_search_operation(
-                    method="technical_extractor",
-                    success=True,
-                    processing_time=processing_time,
-                    results_count=len(technical_data.get("sections", {}))
-                )
-                
-                # Retourner les données techniques
-                return technical_data
-                
-            except Exception as e:
-                logger.error(f"Erreur extraction technique: {e}")
-                # En cas d'échec, continuer avec l'extraction standard
+                with fitz.open(stream=detect_file.getvalue(), filetype="pdf") as doc:
+                    if doc.page_count > 0:
+                        # Analyser le texte de la première page
+                        first_page_text = doc[0].get_text()
+                        
+                        # Motifs spécifiques aux fiches techniques CANAMETAL
+                        canametal_patterns = [
+                            r'CANAMETAL',
+                            r'Fiche\s+Affaire',
+                            r'OSSATURE',
+                            r'ECLISSAGE',
+                            r'Spécialiste\s+en\s+Structure\s+Acier',
+                            r'N°\s*:\s*A00\d+',
+                            r'Commentaires',
+                            r'Oui\s+Non\s+(?:oui|non)',
+                            r'\d+\/\s*Achats'
+                        ]
+                        
+                        # Vérifier chaque motif
+                        pattern_matches = 0
+                        for pattern in canametal_patterns:
+                            if re.search(pattern, first_page_text, re.IGNORECASE):
+                                pattern_matches += 1
+                        
+                        # Si plusieurs motifs correspondent, c'est probablement un document technique
+                        if pattern_matches >= 2:
+                            is_technical_form = True
+                            logger.info(f"Document technique détecté avec {pattern_matches} motifs correspondants")
+            except Exception as detect_error:
+                logger.warning(f"Erreur lors de la détection du type de document: {detect_error}")
+
+        # Forcer pour les documents qui contiennent explicitement "CANAMETAL"
+        if document_type.lower() in ["canametal", "fiche_technique", "fiche_affaire"]:
+            is_technical_form = True
+            logger.info(f"Extraction technique forcée par le type de document: {document_type}")
         
         # Extraction des cases à cocher si demandé
         checkbox_results = None

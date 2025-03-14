@@ -38,8 +38,25 @@ class TechnicalFormExtractor:
             Dictionnaire des valeurs extraites structurées par sections
         """
         try:
-            # Ouvrir le document PDF
-            with fitz.open(file_path) as pdf_doc:
+            # Ouvrir le document PDF - correction pour gérer correctement BytesIO
+            pdf_doc = None
+            if isinstance(file_path, (str, Path)):
+                pdf_doc = fitz.open(file_path)
+            else:
+                # Pour BytesIO, on doit réinitialiser la position et l'ouvrir comme stream
+                if hasattr(file_path, 'seek'):
+                    file_path.seek(0)
+                    
+                # Lire le contenu du BytesIO
+                if hasattr(file_path, 'read'):
+                    pdf_content = file_path.read()
+                    # Ouvrir à partir du contenu binaire
+                    pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
+            
+            if pdf_doc is None:
+                raise ValueError(f"Impossible d'ouvrir le document PDF: {type(file_path)}")
+            
+            try:
                 # Analyser toutes les pages
                 form_data = {
                     "metadata": self._extract_metadata(pdf_doc),
@@ -65,7 +82,11 @@ class TechnicalFormExtractor:
                 form_data = self._post_process_form_data(form_data)
                 
                 return form_data
-                
+            finally:
+                # Fermer le document PDF proprement
+                if pdf_doc:
+                    pdf_doc.close()
+                    
         except Exception as e:
             self.logger.error(f"Erreur dans l'extraction de la fiche technique: {e}")
             return {"error": str(e)}
@@ -236,22 +257,43 @@ class TechnicalFormExtractor:
             # Créer un rectangle à partir des coordonnées
             rect = fitz.Rect(bbox)
             
+            # Ajuster aux limites de la page pour éviter les erreurs
+            page_rect = page.rect
+            rect = rect.intersect(page_rect)  # S'assurer que le rectangle est dans les limites
+            
+            # Vérifier si le rectangle est valide
+            if rect.is_empty or rect.width < 5 or rect.height < 5:
+                return None
+            
             # Obtenir un pixmap de la région
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
+            try:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
+            except Exception as pix_error:
+                self.logger.debug(f"Erreur lors de la génération du pixmap: {pix_error}")
+                # Essayer avec une matrice plus petite en cas d'erreur
+                pix = page.get_pixmap(matrix=fitz.Matrix(1, 1), clip=rect)
             
-            # Convertir en np.array pour OpenCV
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            
-            # Convertir en niveaux de gris
-            if img.shape[2] == 3 or img.shape[2] == 4:
-                gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = img
+            # Vérifier si le pixmap est valide
+            if pix.width < 1 or pix.height < 1:
+                return None
                 
-            return gray
+            # Convertir en np.array pour OpenCV
+            try:
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                
+                # Convertir en niveaux de gris
+                if img.shape[2] == 3 or img.shape[2] == 4:
+                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                else:
+                    gray = img
+                    
+                return gray
+            except Exception as array_error:
+                self.logger.debug(f"Erreur conversion pixmap en array: {array_error}")
+                return None
         except Exception as e:
             self.logger.debug(f"Erreur récupération image: {e}")
-            return None
+        return None
     
     async def _detect_checkboxes_in_image(self, img: np.ndarray, text: str) -> Dict[str, str]:
         """
