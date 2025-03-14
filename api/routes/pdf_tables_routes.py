@@ -173,7 +173,6 @@ async def extract_tables(
             logger.info(f"Extraction technique forcée par le type de document: {document_type}")
         
         # Extraction des cases à cocher si demandé
-        checkbox_results = None
         if extract_checkboxes:
             try:
                 # Créer une copie du fichier pour l'extraction des cases à cocher
@@ -211,12 +210,12 @@ async def extract_tables(
                     "include_images": include_images
                 }
                 
-                # Utiliser extract_form_checkboxes en priorité
+                # CORRECTION: Passer le paramètre config lors de l'appel à extract_checkboxes_from_pdf
                 checkbox_file.seek(0)
                 form_results = await checkbox_extractor.extract_form_checkboxes(
                     checkbox_file, 
                     page_range=page_range,
-                    config=checkbox_config
+                    config=checkbox_config  # Passer la config
                 )
                 
                 extracted_form_count = len(form_results.get('checkboxes', []))
@@ -228,7 +227,7 @@ async def extract_tables(
                     standard_results = await checkbox_extractor.extract_checkboxes_from_pdf(
                         checkbox_file, 
                         page_range=page_range,
-                        config=checkbox_config
+                        config=checkbox_config  # Passer la config ici aussi
                     )
                     
                     extracted_std_count = len(standard_results.get('checkboxes', []))
@@ -738,7 +737,14 @@ async def process_pdf_in_background(
                     except:
                         page_range = None
                 
-                checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(file_path, page_range)
+                # CORRECTION: Passer la config lors de l'appel de la méthode
+                checkbox_config = params.get("checkbox_config", {})
+                checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(
+                    file_path, 
+                    page_range=page_range,
+                    config=checkbox_config  # Passer la config
+                )
+                
                 logger.info(f"Extraction des cases à cocher terminée: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
                 update_progress(20, f"Extraction des cases à cocher terminée: {len(checkbox_results.get('checkboxes', []))} cases trouvées")
             except Exception as e:

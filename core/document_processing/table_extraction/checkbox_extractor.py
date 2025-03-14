@@ -40,10 +40,69 @@ class CheckboxExtractor:
         self.dpi = 300                 # Résolution pour la conversion en image
         self.cache = {}                # Cache des résultats (pour éviter de refaire l'analyse)
 
+    async def _detect_checkboxes_by_symbols(self, page, text_dict, page_img, page_num):
+        """
+        Détecte les cases à cocher basées sur les symboles spécifiques dans le texte.
+        
+        Args:
+            page: Page PDF (fitz page)
+            text_dict: Dictionnaire de texte extrait
+            page_img: Image de la page convertie en array numpy
+            page_num: Numéro de la page
+            
+        Returns:
+            Liste des cases à cocher détectées
+        """
+        checkboxes = []
+        
+        # Recherche de motifs typiques des cases à cocher dans le texte
+        checkbox_symbols = ["☐", "☑", "☒", "□", "■", "▢", "▣", "▪", "▫"]
+        checkbox_keywords = ["oui", "non", "yes", "no", "cochez", "check"]
+        
+        # Parcourir les blocs de texte
+        for block in text_dict["blocks"]:
+            if block["type"] != 0:  # Ignorer les non-texte
+                continue
+                
+            for line in block["lines"]:
+                line_text = " ".join([span["text"] for span in line["spans"]])
+                
+                # Vérifier si la ligne contient un symbole de case à cocher
+                has_symbol = any(symbol in line_text for symbol in checkbox_symbols)
+                has_keyword = any(keyword in line_text.lower() for keyword in checkbox_keywords)
+                
+                if has_symbol or has_keyword:
+                    # Extraire la région de la ligne
+                    x0, y0, x1, y1 = line["bbox"]
+                    
+                    # Déterminer si la case est cochée (par le contenu du texte pour l'instant)
+                    is_checked = any(checked in line_text for checked in ["☑", "☒", "■"])
+                    
+                    # Extraire l'étiquette (texte sans les symboles)
+                    label = line_text
+                    for symbol in checkbox_symbols:
+                        label = label.replace(symbol, "")
+                    label = label.strip()
+                    
+                    # Créer l'élément case à cocher
+                    checkbox = {
+                        "label": label,
+                        "checked": is_checked,
+                        "bbox": [x0, y0, x1, y1],
+                        "page": page_num,
+                        "type": "symbol",
+                        "confidence": 0.8 if has_symbol else 0.6
+                    }
+                    
+                    checkboxes.append(checkbox)
+        
+        return checkboxes
+
     async def extract_checkboxes_from_pdf(
         self, 
         pdf_path: Union[str, Path, io.BytesIO],
-        page_range: Optional[List[int]] = None
+        page_range: Optional[List[int]] = None,
+        config: Optional[Dict[str, Any]] = None  # Ajout du paramètre config
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extrait les cases à cocher d'un document PDF.
@@ -51,12 +110,16 @@ class CheckboxExtractor:
         Args:
             pdf_path: Chemin ou objet BytesIO du fichier PDF
             page_range: Liste optionnelle des pages à analyser (1-based)
+            config: Configuration optionnelle pour l'extraction
             
         Returns:
             Dictionnaire des résultats avec les sections et leurs cases à cocher
         """
         try:
             with metrics.timer("checkbox_extraction"):
+                # Utiliser la configuration si fournie
+                conf = config or {}
+                
                 # Calcul d'un hash de cache simple
                 if isinstance(pdf_path, (str, Path)):
                     cache_key = f"{pdf_path}:{str(page_range)}"
@@ -88,6 +151,10 @@ class CheckboxExtractor:
                     "sections": {},
                     "checkboxes": []
                 }
+                
+                # Paramètres de config
+                confidence_threshold = conf.get("confidence_threshold", 0.6)
+                enhance_detection = conf.get("enhance_detection", True)
                 
                 # Traiter chaque page
                 for page_idx in page_range:

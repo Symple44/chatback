@@ -324,12 +324,21 @@ class TableExporter:
             def create_zip():
                 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
                     for i, df in enumerate(dataframes):
+                        # CORRECTION: Gestion spécifique des colonnes catégorielles
+                        # Convertir les types catégoriels en str pour éviter les erreurs
+                        df_copy = df.copy()
+                        
+                        # Identifier et convertir les colonnes catégorielles
+                        categorical_columns = df_copy.select_dtypes(include=['category']).columns
+                        for col in categorical_columns:
+                            df_copy[col] = df_copy[col].astype(str)
+                        
                         # Remplacer les NaN par des chaînes vides pour CSV
-                        df = df.fillna('')
+                        df_copy = df_copy.fillna('')
                         
                         # Créer le CSV en mémoire
                         csv_buffer = io.StringIO()
-                        df.to_csv(csv_buffer, index=False)
+                        df_copy.to_csv(csv_buffer, index=False)
                         csv_buffer.seek(0)
                         
                         # Ajouter au ZIP
@@ -338,11 +347,11 @@ class TableExporter:
                     
                     # Ajouter un fichier README.txt avec des informations
                     readme = f"""Tables exportées: {len(dataframes)}
-Date d'exportation: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Format: CSV
-Encodage: UTF-8
-Séparateur: ,
-"""
+    Date d'exportation: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    Format: CSV
+    Encodage: UTF-8
+    Séparateur: ,
+    """
                     zipf.writestr("README.txt", readme)
             
             # Exécuter la création du ZIP dans un thread
@@ -903,6 +912,37 @@ Séparateur: ,
         except Exception as e:
             logger.error(f"Erreur export Markdown: {e}")
             raise
+
+    def _prepare_dataframe_for_export(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prépare un DataFrame pour l'exportation en gérant les types spéciaux.
+        
+        Args:
+            df: DataFrame à préparer
+            
+        Returns:
+            DataFrame préparé pour l'exportation
+        """
+        # Créer une copie pour ne pas modifier l'original
+        df_copy = df.copy()
+        
+        # 1. Convertir les colonnes catégorielles en str
+        categorical_columns = df_copy.select_dtypes(include=['category']).columns
+        for col in categorical_columns:
+            df_copy[col] = df_copy[col].astype(str)
+        
+        # 2. Gérer les NaT dans les colonnes de dates
+        datetime_columns = df_copy.select_dtypes(include=['datetime64']).columns
+        for col in datetime_columns:
+            df_copy[col] = df_copy[col].astype(str)
+        
+        # 3. Gérer les autres types complexes
+        for col in df_copy.columns:
+            # Vérifier si la colonne contient des types complexes (listes, dicts, etc.)
+            if df_copy[col].apply(lambda x: isinstance(x, (list, dict, set, tuple))).any():
+                df_copy[col] = df_copy[col].apply(lambda x: json.dumps(x) if isinstance(x, (list, dict, set, tuple)) else x)
+        
+        return df_copy
     
     async def cleanup_old_exports(self, max_age_hours: int = 24):
         """
