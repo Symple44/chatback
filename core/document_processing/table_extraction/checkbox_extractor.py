@@ -41,16 +41,12 @@ class CheckboxExtractor:
         config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Version optimisée de l'extracteur de cases à cocher avec des seuils plus stricts.
+        Version robuste de l'extracteur de cases à cocher pour éviter les erreurs critiques.
         
         Args:
             pdf_path: Chemin du fichier PDF ou objet BytesIO
             page_range: Liste optionnelle des pages à analyser (1-based)
             config: Configuration pour affiner la détection
-                - confidence_threshold: seuil de confiance (défaut: 0.65)
-                - strict_mode: mode strict pour réduire les faux positifs (défaut: True)
-                - enhance_detection: améliorer la détection (défaut: True)
-                - include_images: inclure les images des cases (défaut: False)
         
         Returns:
             Dictionnaire contenant les cases à cocher détectées et leur état
@@ -59,12 +55,10 @@ class CheckboxExtractor:
             with metrics.timer("checkbox_extraction"):
                 # Préparer la configuration avec des valeurs plus strictes par défaut
                 conf = config or {}
-                confidence_threshold = conf.get("confidence_threshold", 0.65)  # Plus strict
-                strict_mode = conf.get("strict_mode", True)  # Activer par défaut
+                confidence_threshold = conf.get("confidence_threshold", 0.65)
+                strict_mode = conf.get("strict_mode", True)
                 enhance_detection = conf.get("enhance_detection", True)
                 include_images = conf.get("include_images", False)
-                
-                # Cache et ouverture du PDF identiques à l'original
                 
                 # Ouvrir le document PDF
                 pdf_doc = self._open_pdf(pdf_path)
@@ -75,7 +69,7 @@ class CheckboxExtractor:
                     # Normaliser le page_range
                     page_indices = self._normalize_page_range(pdf_doc, page_range)
                     
-                    # Structure des résultats avec information sur le mode strict
+                    # Structure des résultats
                     results = {
                         "metadata": {
                             "filename": self._get_filename(pdf_path),
@@ -96,39 +90,55 @@ class CheckboxExtractor:
                         if page_idx >= len(pdf_doc):
                             continue
                             
-                        page = pdf_doc[page_idx]
-                        page_num = page_idx + 1  # Convertir en 1-based
-                        
-                        # Extraire le texte et convertir en image pour analyse visuelle
-                        page_texts = page.get_text("dict")
-                        page_image = self._convert_page_to_image(page)
-                        
-                        # Détecter les cases à cocher
-                        checkboxes = await self._detect_checkboxes(
-                            page, 
-                            page_texts, 
-                            page_image, 
-                            page_num, 
-                            confidence_threshold,
-                            enhance_detection
-                        )
-                        
-                        # En mode strict, appliquer un traitement post-détection supplémentaire
-                        if strict_mode:
-                            # Limiter le nombre de cases cochées par page (heuristique)
-                            checkboxes = self._apply_strict_filtering(checkboxes, page_num)
-                        
-                        # Ajouter au résultat
-                        results["checkboxes"].extend(checkboxes)
-                        
-                        # Traitement des images inchangé
+                        try:
+                            page = pdf_doc[page_idx]
+                            page_num = page_idx + 1  # Convertir en 1-based
+                            
+                            # Extraire le texte et convertir en image pour analyse visuelle
+                            page_texts = page.get_text("dict")
+                            page_image = self._convert_page_to_image(page)
+                            
+                            # Détecter les cases à cocher
+                            checkboxes = await self._detect_checkboxes(
+                                page, 
+                                page_texts, 
+                                page_image, 
+                                page_num, 
+                                confidence_threshold,
+                                enhance_detection
+                            )
+                            
+                            # En mode strict, appliquer un traitement post-détection
+                            if strict_mode:
+                                try:
+                                    # Limiter le nombre de cases cochées par page
+                                    checkboxes = self._apply_strict_filtering(checkboxes, page_num)
+                                except Exception as e:
+                                    logger.error(f"Erreur lors du filtrage strict page {page_num}: {e}")
+                            
+                            # Ajouter au résultat
+                            results["checkboxes"].extend(checkboxes)
+                            
+                        except Exception as e:
+                            logger.error(f"Erreur traitement page {page_idx+1}: {e}")
+                            # Continuer avec la page suivante
                     
                     # Post-traitement pour organiser les cases à cocher
-                    self._organize_checkboxes(results)
+                    try:
+                        self._organize_checkboxes(results)
+                    except Exception as e:
+                        logger.error(f"Erreur organisation des cases: {e}")
                     
                     # En mode strict, effectuer une validation globale
                     if strict_mode:
-                        self._validate_global_checkbox_results(results)
+                        try:
+                            self._validate_global_checkbox_results(results)
+                        except Exception as e:
+                            logger.error(f"Erreur validation globale: {e}")
+                    
+                    # Vérifier qu'on a des résultats valides
+                    if not results.get("checkboxes") and len(page_indices) > 0:
+                        results["warning"] = "Extraction terminée mais aucune case à cocher détectée"
                     
                     return results
                 
@@ -142,11 +152,11 @@ class CheckboxExtractor:
             return {
                 "error": str(e),
                 "checkboxes": []
-            }
         
     def _validate_global_checkbox_results(self, results: Dict[str, Any]) -> None:
         """
         Valide et corrige les incohérences au niveau global.
+        Version corrigée pour éviter l'erreur numpy.
         
         Args:
             results: Résultats d'extraction à corriger in-place
@@ -157,11 +167,12 @@ class CheckboxExtractor:
         
         # 1. Vérifier le ratio global de cases cochées
         checked_count = sum(1 for cb in checkboxes if cb.get("checked", False))
-        checked_ratio = checked_count / len(checkboxes)
+        total_count = len(checkboxes)
+        checked_ratio = checked_count / total_count if total_count > 0 else 0
         
         # Si plus de 40% des cases sont cochées globalement, c'est suspect
         if checked_ratio > 0.4 and checked_count > 5:
-            logger.warning(f"Trop de cases cochées globalement ({checked_count}/{len(checkboxes)}), "
+            logger.warning(f"Trop de cases cochées globalement ({checked_count}/{total_count}), "
                         f"application d'une correction globale")
             
             # Garder seulement les cases cochées les plus confiantes
@@ -172,40 +183,83 @@ class CheckboxExtractor:
             )
             
             # Calculer un seuil adaptatif basé sur la distribution des confiances
-            confidences = [cb.get("confidence", 0) for cb in sorted_checked]
+            # S'assurer que les confidences sont des nombres flottants simples
+            confidences = [float(cb.get("confidence", 0)) for cb in sorted_checked]
+            
             if confidences:
-                # Utiliser la médiane + écart-type comme seuil adaptatif
-                median_conf = np.median(confidences)
-                std_conf = np.std(confidences) if len(confidences) > 1 else 0.1
-                adaptive_threshold = median_conf + 0.2 * std_conf
+                try:
+                    # Utiliser la médiane + écart-type comme seuil adaptatif
+                    # Calculer manuellement pour éviter les problèmes numpy
+                    confidences.sort()
+                    if len(confidences) % 2 == 0:
+                        median_conf = (confidences[len(confidences)//2-1] + confidences[len(confidences)//2])/2
+                    else:
+                        median_conf = confidences[len(confidences)//2]
+                    
+                    # Calculer l'écart-type manuellement
+                    mean_conf = sum(confidences) / len(confidences)
+                    variance = sum((x - mean_conf) ** 2 for x in confidences) / len(confidences)
+                    std_conf = variance ** 0.5 if variance > 0 else 0.1
+                    
+                    # Seuil adaptatif
+                    adaptive_threshold = median_conf + 0.2 * std_conf
+                    
+                    # Limiter le nombre de cases cochées
+                    max_checked = min(max(3, total_count // 5), 15)  # Entre 3 et 15, ~20% max
+                    
+                    # Deux stratégies : par seuil ou par nombre max
+                    for i, checkbox in enumerate(checkboxes):
+                        if checkbox.get("checked", False):
+                            in_top_n = any(id(checkbox) == id(cb) for cb in sorted_checked[:max_checked])
+                            above_threshold = checkbox.get("confidence", 0) >= adaptive_threshold
+                            
+                            # Si la case ne satisfait ni le classement ni le seuil
+                            if not (in_top_n or above_threshold):
+                                # Modifier l'état
+                                checkbox["checked"] = False
+                                checkbox["auto_corrected"] = True
                 
-                # Marquer comme non cochées les cases sous le seuil
-                for i, checkbox in enumerate(checkboxes):
-                    if (checkbox.get("checked", False) and 
-                        checkbox.get("confidence", 0) < adaptive_threshold):
-                        # Modifier l'état
-                        checkbox["checked"] = False
-                        checkbox["auto_corrected"] = True
+                except Exception as e:
+                    # En cas d'erreur, approche plus simple
+                    logger.warning(f"Erreur dans le calcul adaptatif: {e}, utilisation d'une approche simplifiée")
+                    
+                    # Garder seulement les N cases les plus confiantes
+                    max_checked = min(max(3, total_count // 5), 15)
+                    
+                    # Marquer toutes les cases comme non cochées d'abord
+                    for checkbox in checkboxes:
+                        if checkbox.get("checked", False):
+                            checkbox["checked"] = False
+                            checkbox["auto_corrected"] = True
+                    
+                    # Puis marquer les top N comme cochées
+                    for i, checkbox in enumerate(sorted_checked[:max_checked]):
+                        checkbox["checked"] = True
+                        if "auto_corrected" in checkbox:
+                            del checkbox["auto_corrected"]
         
         # 2. Corriger les incohérences dans les groupes Oui/Non
-        # Regrouper les cases par proximité
-        groups = self._group_checkboxes_by_proximity(checkboxes)
-        
-        for group in groups:
-            # Chercher les paires Oui/Non dans le groupe
-            oui_boxes = [cb for cb in group if cb.get("label", "").lower() in ["oui", "yes"]]
-            non_boxes = [cb for cb in group if cb.get("label", "").lower() in ["non", "no"]]
+        try:
+            # Regrouper les cases par proximité
+            groups = self._group_checkboxes_by_proximity(checkboxes)
             
-            if len(oui_boxes) == 1 and len(non_boxes) == 1:
-                # Si les deux sont cochées, c'est incohérent
-                if oui_boxes[0].get("checked", False) and non_boxes[0].get("checked", False):
-                    # Garder celle avec la plus haute confiance
-                    if oui_boxes[0].get("confidence", 0) > non_boxes[0].get("confidence", 0):
-                        non_boxes[0]["checked"] = False
-                        non_boxes[0]["auto_corrected"] = True
-                    else:
-                        oui_boxes[0]["checked"] = False
-                        oui_boxes[0]["auto_corrected"] = True
+            for group in groups:
+                # Chercher les paires Oui/Non dans le groupe
+                oui_boxes = [cb for cb in group if cb.get("label", "").lower() in ["oui", "yes"]]
+                non_boxes = [cb for cb in group if cb.get("label", "").lower() in ["non", "no"]]
+                
+                if len(oui_boxes) == 1 and len(non_boxes) == 1:
+                    # Si les deux sont cochées, c'est incohérent
+                    if oui_boxes[0].get("checked", False) and non_boxes[0].get("checked", False):
+                        # Garder celle avec la plus haute confiance
+                        if oui_boxes[0].get("confidence", 0) > non_boxes[0].get("confidence", 0):
+                            non_boxes[0]["checked"] = False
+                            non_boxes[0]["auto_corrected"] = True
+                        else:
+                            oui_boxes[0]["checked"] = False
+                            oui_boxes[0]["auto_corrected"] = True
+        except Exception as e:
+            logger.warning(f"Erreur dans la correction des incohérences Oui/Non: {e}")
 
     def _group_checkboxes_by_proximity(self, checkboxes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
         """
@@ -982,8 +1036,8 @@ class CheckboxExtractor:
     
     def _is_checkbox_checked(self, checkbox_img: np.ndarray) -> bool:
         """
-        Version entièrement revue pour déterminer si une case est cochée.
-        Cette méthode réduit considérablement les faux positifs.
+        Version robuste pour déterminer si une case est cochée.
+        Évite les faux positifs et gère mieux les erreurs.
         
         Args:
             checkbox_img: Image de la case à cocher
@@ -1005,134 +1059,86 @@ class CheckboxExtractor:
             # 1. Prétraitement pour améliorer le contraste
             height, width = gray.shape[:2]
             
-            # Redimensionner l'image pour une analyse normalisée si trop petite
-            if height < 10 or width < 10:
+            # Pour les cases trop petites, considérer comme non cochées
+            if height < 8 or width < 8:
+                return False
+            
+            # Redimensionner les très petites images
+            if height < 12 or width < 12:
                 scaled = cv2.resize(gray, (20, 20), interpolation=cv2.INTER_AREA)
             else:
                 scaled = gray
             
-            # Appliquer une égalisation d'histogramme pour améliorer le contraste
-            equalized = cv2.equalizeHist(scaled)
+            # 2. Binarisation avec seuil adaptatif pour gérer les variations d'éclairage
+            # Utiliser une approche plus simple et robuste
+            _, binary = cv2.threshold(scaled, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
-            # 2. Binarisation avec un seuil adaptatif pour gérer les variations d'éclairage
-            binary = cv2.adaptiveThreshold(
-                equalized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY_INV, 11, 2
-            )
-            
-            # 3. Caractéristiques multiples pour la décision
+            # 3. Caractéristiques simples et robustes
             
             # A. Densité des pixels noirs (marques)
             total_pixels = binary.size
             marked_pixels = np.sum(binary > 0)
             fill_ratio = marked_pixels / total_pixels if total_pixels > 0 else 0
             
-            # B. Effacer les bords (qui font parfois partie de la case elle-même)
-            cleaned = binary.copy()
-            border_thickness = max(1, min(width, height) // 10)
+            # B. Mesure simple de la position des marques (centre vs bordure)
+            height, width = binary.shape
+            center_margin = max(2, min(width, height) // 4)
             
-            if width > 2*border_thickness and height > 2*border_thickness:
-                # Créer un masque pour l'intérieur (sans les bords)
-                mask = np.zeros_like(binary)
-                mask[border_thickness:height-border_thickness, border_thickness:width-border_thickness] = 255
+            # Masques pour le centre et les bordures
+            center_mask = np.zeros_like(binary)
+            if width > 2*center_margin and height > 2*center_margin:
+                center_mask[center_margin:height-center_margin, center_margin:width-center_margin] = 1
                 
-                # Calculer la densité sans les bords
-                interior_pixels = np.sum(mask > 0)
-                interior_marked = np.sum(np.logical_and(binary > 0, mask > 0))
-                interior_ratio = interior_marked / interior_pixels if interior_pixels > 0 else 0
+                center_pixels = np.sum(center_mask)
+                center_marked = np.sum(np.logical_and(binary > 0, center_mask > 0))
+                center_ratio = center_marked / center_pixels if center_pixels > 0 else 0
             else:
-                interior_ratio = fill_ratio
+                center_ratio = fill_ratio
             
-            # C. Détection de lignes en X (typiques d'une croix)
+            # C. Critères de décision simplifiés et plus stricts
             
-            # Utiliser Canny pour détecter les contours
-            edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+            # Case densément remplie
+            if fill_ratio > 0.35:
+                return True
             
-            # Chercher des lignes avec HoughLinesP
-            min_line_length = max(3, min(width, height) // 5)
-            lines = cv2.HoughLinesP(
-                edges, 1, np.pi/180, 
-                threshold=max(5, min(width, height) // 6),
-                minLineLength=min_line_length,
-                maxLineGap=max(2, min(width, height) // 10)
-            )
+            # Marques importantes au centre
+            if center_ratio > 0.3:
+                return True
             
-            # Compter les lignes diagonales
-            diag_count = 0
-            has_intersecting_diagonals = False
-            
-            if lines is not None and len(lines) > 0:
-                # Tracer les lignes sur une image vide pour analyser leur disposition
-                line_image = np.zeros_like(binary)
+            # Combinaison de facteurs
+            if fill_ratio > 0.2 and center_ratio > 0.2:
+                return True
                 
-                for line in lines:
-                    x1, y1, x2, y2 = line[0]
-                    # Ne pas considérer les lignes très courtes
-                    line_length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            # Détection basique de lignes (pour les croix)
+            try:
+                # Seulement si l'image est assez grande
+                if min(width, height) > 15:
+                    edges = cv2.Canny(binary, 50, 150, apertureSize=3)
                     
-                    # Calculer l'angle
-                    if x2 != x1:  # Éviter division par zéro
-                        angle_deg = abs(np.arctan((y2-y1)/(x2-x1)) * 180 / np.pi)
-                        
-                        # Les diagonales ont des angles autour de 45° ou 135°
-                        if (20 <= angle_deg <= 70) or (110 <= angle_deg <= 160):
-                            diag_count += 1
-                            # Tracer la ligne
-                            cv2.line(line_image, (x1, y1), (x2, y2), 255, 1)
-                
-                # Analyser l'image des lignes pour voir si elles forment un X
-                # Chercher l'intersection des diagonales (caractéristique d'une croix)
-                if diag_count >= 2:
-                    # Compter les composantes connexes pour voir si les lignes sont connectées
-                    num_labels, labels = cv2.connectedComponents(line_image)
+                    # Paramètres pour la détection de lignes
+                    min_line_length = max(3, min(width, height) // 4)
+                    max_line_gap = max(2, min(width, height) // 10)
                     
-                    # S'il y a une seule composante connexe avec plusieurs lignes, c'est probablement un X
-                    if num_labels == 2:  # 2 car le fond est compté comme une composante
-                        has_intersecting_diagonals = True
-                    elif num_labels == 3 and diag_count >= 3:
-                        # Si 2 composantes mais plusieurs lignes, vérifier leur proximité
-                        has_intersecting_diagonals = True
-            
-            # D. Détection des contours pour analyser les formes
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Les coches ont souvent des contours complexes
-            contour_complexity = 0
-            if contours:
-                # Prendre le contour le plus grand
-                largest_contour = max(contours, key=cv2.contourArea)
-                contour_area = cv2.contourArea(largest_contour)
-                contour_perimeter = cv2.arcLength(largest_contour, True)
+                    lines = cv2.HoughLinesP(
+                        edges, 1, np.pi/180, 
+                        threshold=max(5, min(width, height) // 5),
+                        minLineLength=min_line_length,
+                        maxLineGap=max_line_gap
+                    )
+                    
+                    # Si on a détecté des lignes
+                    if lines is not None and len(lines) >= 2:
+                        return True
+            except Exception:
+                # Ignorer les erreurs dans la détection de lignes
+                pass
                 
-                # Complexité = rapport périmètre/aire (les formes complexes ont un ratio élevé)
-                contour_complexity = contour_perimeter**2 / (4 * np.pi * contour_area) if contour_area > 0 else 0
-            
-            # 4. PRISE DE DÉCISION FINALE avec une approche plus stricte
-            
-            # Caractéristiques primaires d'une case cochée
-            has_clear_mark = interior_ratio > 0.25
-            is_complex_shape = contour_complexity > 1.5
-            
-            # Combinaison de caractéristiques pour réduire les faux positifs
-            if has_intersecting_diagonals:
-                # Un X clair est un indicateur fort
-                return True
-            elif has_clear_mark and is_complex_shape:
-                # Forte densité de marques + forme complexe
-                return True
-            elif interior_ratio > 0.4:
-                # Case très remplie à l'intérieur
-                return True
-            elif diag_count >= 3 and interior_ratio > 0.2:
-                # Plusieurs lignes diagonales + densité modérée
-                return True
-            else:
-                # Par défaut, considérer comme non cochée
-                return False
+            # Par défaut: non cochée
+            return False
         
         except Exception as e:
             logger.debug(f"Erreur analyse case cochée: {e}")
-            return False
+            return False  # Par défaut, considérer comme non cochée
         
     def _deduplicate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
