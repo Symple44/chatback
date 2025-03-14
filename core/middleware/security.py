@@ -187,7 +187,11 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         if self._is_path_excluded(path):
             return await call_next(request)
         
-        # Pour les chemins d'API, toujours vérifier la clé API, même pour les IP de confiance
+        # MODIFICATION: Vérifier d'abord si l'IP est de confiance pour tous les chemins
+        if self._is_ip_trusted(client_ip):
+            return await call_next(request)
+            
+        # Pour les chemins d'API (uniquement quand l'IP n'est pas de confiance)
         if path.startswith("/api/"):
             api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
             
@@ -198,8 +202,8 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Clé API invalide ou manquante"}
                 )
         
-        # Pour les autres chemins non-API, autoriser l'accès pour les IP de confiance ou en mode dev
-        elif self._is_ip_trusted(client_ip) or self.dev_mode:
+        # Pour les autres chemins en mode dev
+        elif self.dev_mode:
             return await call_next(request)
         
         # Pour tout le reste, demander la clé API
