@@ -1,3 +1,23 @@
+from typing import List, Dict, Any, Optional, Union, Tuple
+import re
+import os
+import io
+from pathlib import Path
+from datetime import datetime
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Bibliothèques externes
+import numpy as np
+import cv2
+import fitz  # PyMuPDF
+from PIL import Image, ImageOps, ImageEnhance
+
+# Imports internes
+from core.utils.logger import get_logger
+from core.utils.metrics import metrics
+from core.config.config import settings
+
 class TechnicalFormExtractor:
     """
     Extracteur spécialisé pour les fiches techniques CANAMETAL et documents similaires.
