@@ -265,15 +265,15 @@ class CheckboxExtractor:
         enhance_detection: bool
     ) -> List[Dict[str, Any]]:
         """
-        Détecte les cases à cocher avec une approche hybride avancée.
+        Détecte les cases à cocher avec une approche hybride améliorée.
         
         Args:
             page: Page PDF
-            page_texts: Textes extraits (différents formats)
+            page_texts: Textes extraits
             page_image: Image de la page
             page_num: Numéro de la page
             confidence_threshold: Seuil de confiance
-            enhance_detection: Activer les améliorations de détection
+            enhance_detection: Activer les améliorations
             
         Returns:
             Liste des cases à cocher détectées
@@ -290,35 +290,44 @@ class CheckboxExtractor:
         # 2. Détection visuelle (basée sur l'image)
         visual_checkboxes = self._detect_by_vision(gray, page_num, enhance_detection)
         
-        # 3. Fusionner et dédupliquer les résultats
+        # 3. Fusionner et dédupliquer les résultats avec la méthode améliorée
         merged_checkboxes = self._merge_checkbox_results(symbol_checkboxes, visual_checkboxes)
         
-        # 4. Déterminer l'état de chaque case (cochée ou non)
+        # 4. Déterminer l'état de chaque case (cochée ou non) avec la méthode améliorée
         for checkbox in merged_checkboxes:
             # Si pas déjà déterminé par la détection symbolique
             if "checked" not in checkbox:
                 bbox = checkbox.get("bbox", [0, 0, 0, 0])
                 x, y, x2, y2 = bbox
                 
+                # Ajouter une petite marge pour capturer toute la case
+                margin = 2
+                x = max(0, x - margin)
+                y = max(0, y - margin)
+                x2 = min(gray.shape[1], x2 + margin)
+                y2 = min(gray.shape[0], y2 + margin)
+                
                 # Extraire la région de la case
                 roi = gray[y:y2, x:x2] if 0 <= y < y2 <= gray.shape[0] and 0 <= x < x2 <= gray.shape[1] else None
                 
-                # Déterminer si cochée
+                # Déterminer si cochée avec la méthode améliorée
                 if roi is not None and roi.size > 0:
                     is_checked = self._is_checkbox_checked(roi)
                     checkbox["checked"] = is_checked
                 else:
                     checkbox["checked"] = False
         
-        # 5. Associer les étiquettes aux cases
-        # (Cette étape initiale sera complétée par l'association contextuelle plus tard)
+        # 5. Associer les étiquettes aux cases avec la méthode améliorée
         for checkbox in merged_checkboxes:
             if not checkbox.get("label"):
                 bbox = checkbox.get("bbox", [0, 0, 0, 0])
                 label = self._find_closest_text(page_texts, bbox)
                 checkbox["label"] = label
         
-        # 6. Filtrer par seuil de confiance
+        # 6. Détecter et normaliser les groupes Oui/Non
+        self._normalize_yes_no_groups(merged_checkboxes)
+        
+        # 7. Filtrer par seuil de confiance
         filtered_checkboxes = [
             cb for cb in merged_checkboxes 
             if cb.get("confidence", 0) >= confidence_threshold
@@ -336,6 +345,56 @@ class CheckboxExtractor:
         
         return filtered_checkboxes
     
+    def _normalize_yes_no_groups(self, checkboxes: List[Dict[str, Any]]) -> None:
+        """
+        Identifie et normalise les groupes de cases à cocher Oui/Non.
+        
+        Args:
+            checkboxes: Liste des cases à cocher à normaliser in-place
+        """
+        # Regrouper les cases proches en position y (même ligne ou lignes adjacentes)
+        y_groups = {}
+        
+        for i, checkbox in enumerate(checkboxes):
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            center_y = (bbox[1] + bbox[3]) / 2
+            
+            # Arrondir la position y pour regrouper les cases sur la même ligne approximativement
+            group_y = round(center_y / 20) * 20
+            
+            if group_y not in y_groups:
+                y_groups[group_y] = []
+            
+            y_groups[group_y].append(i)
+        
+        # Pour chaque groupe en y, identifier les paires Oui/Non
+        for group_indices in y_groups.values():
+            if len(group_indices) < 2:
+                continue
+                
+            yes_indices = []
+            no_indices = []
+            
+            # Identifier les cases Oui et Non
+            for idx in group_indices:
+                label = checkboxes[idx].get("label", "").strip().lower()
+                
+                if re.match(r'^oui$|^yes$', label):
+                    yes_indices.append(idx)
+                    checkboxes[idx]["label"] = "Oui"
+                    checkboxes[idx]["value"] = "Oui"
+                elif re.match(r'^non$|^no$', label):
+                    no_indices.append(idx)
+                    checkboxes[idx]["label"] = "Non"
+                    checkboxes[idx]["value"] = "Non"
+            
+            # Si nous avons au moins un Oui et un Non, les marquer comme faisant partie du même groupe
+            if yes_indices and no_indices:
+                group_id = f"group_yes_no_{min(group_indices)}"
+                
+                for idx in yes_indices + no_indices:
+                    checkboxes[idx]["group_id"] = group_id
+
     def _detect_by_symbols(self, page_text: Dict, page_num: int) -> List[Dict[str, Any]]:
         """
         Détecte les cases à cocher basées sur les symboles dans le texte.
@@ -531,42 +590,103 @@ class CheckboxExtractor:
         return intersection / union if union > 0 else 0
     
     def _merge_checkbox_results(self, symbol_checkboxes, visual_checkboxes):
-        """Fusionne les résultats des deux méthodes de détection en évitant les doublons."""
+        """
+        Fusionne les résultats des deux méthodes de détection de manière plus intelligente.
+        
+        Args:
+            symbol_checkboxes: Cases détectées par symboles
+            visual_checkboxes: Cases détectées visuellement
+            
+        Returns:
+            Liste fusionnée de cases à cocher
+        """
         if not symbol_checkboxes:
             return visual_checkboxes
         if not visual_checkboxes:
             return symbol_checkboxes
         
+        # Donner priorité aux cases détectées par symboles (généralement plus précises)
         merged = symbol_checkboxes.copy()
+        symbol_boxes = [cb["bbox"] for cb in symbol_checkboxes]
         
         # Pour chaque case détectée visuellement
         for visual_cb in visual_checkboxes:
             vx1, vy1, vx2, vy2 = visual_cb["bbox"]
+            v_center_x, v_center_y = (vx1 + vx2) / 2, (vy1 + vy2) / 2
             
             # Vérifier si elle chevauche une case déjà détectée par symbole
             is_duplicate = False
-            for symbol_cb in symbol_checkboxes:
-                sx1, sy1, sx2, sy2 = symbol_cb["bbox"]
+            
+            for i, s_bbox in enumerate(symbol_boxes):
+                sx1, sy1, sx2, sy2 = s_bbox
+                s_center_x, s_center_y = (sx1 + sx2) / 2, (sy1 + sy2) / 2
                 
-                # Calcul de chevauchement
-                overlap = self._calculate_overlap(
-                    [vx1, vy1, vx2, vy2],
-                    [sx1, sy1, sx2, sy2]
-                )
+                # Calcul de chevauchement basé sur la distance entre centres
+                center_distance = ((v_center_x - s_center_x) ** 2 + (v_center_y - s_center_y) ** 2) ** 0.5
                 
-                if overlap > 0.3:  # 30% de chevauchement suffit
+                # Si les centres sont proches, c'est probablement la même case
+                max_dimension = max(vx2 - vx1, vy2 - vy1, sx2 - sx1, sy2 - sy1)
+                if center_distance < max_dimension * 0.7:  # Distance inférieure à 70% de la plus grande dimension
                     is_duplicate = True
+                    
+                    # Mettre à jour les informations si la détection visuelle a une meilleure confiance
+                    if visual_cb.get("confidence", 0) > symbol_checkboxes[i].get("confidence", 0) + 0.15:
+                        # Garder les attributs importants de la version symbolique
+                        label = symbol_checkboxes[i].get("label", "")
+                        if label:
+                            visual_cb["label"] = label
+                        
+                        # Remplacer la case détectée par symbole par la version visuelle
+                        merged[i] = visual_cb
+                    
                     break
             
             # Si ce n'est pas un doublon, l'ajouter
             if not is_duplicate:
                 merged.append(visual_cb)
         
-        return merged
+        # Déduplication supplémentaire basée sur la proximité des cases
+        # (pour gérer les cas où deux méthodes détectent la même case avec un léger décalage)
+        final_merged = []
+        used_indices = set()
+        
+        for i, checkbox1 in enumerate(merged):
+            if i in used_indices:
+                continue
+            
+            bbox1 = checkbox1["bbox"]
+            center1_x = (bbox1[0] + bbox1[2]) / 2
+            center1_y = (bbox1[1] + bbox1[3]) / 2
+            
+            duplicates = [i]
+            
+            for j, checkbox2 in enumerate(merged[i+1:], i+1):
+                if j in used_indices:
+                    continue
+                    
+                bbox2 = checkbox2["bbox"]
+                center2_x = (bbox2[0] + bbox2[2]) / 2
+                center2_y = (bbox2[1] + bbox2[3]) / 2
+                
+                # Calculer la distance entre les centres
+                distance = ((center1_x - center2_x) ** 2 + (center1_y - center2_y) ** 2) ** 0.5
+                
+                # Si les centres sont très proches, c'est probablement la même case
+                if distance < 20:  # 20 pixels de seuil
+                    duplicates.append(j)
+            
+            # Prendre la case avec la meilleure confiance
+            best_idx = max(duplicates, key=lambda idx: merged[idx].get("confidence", 0))
+            final_merged.append(merged[best_idx])
+            
+            # Marquer tous les doublons comme utilisés
+            used_indices.update(duplicates)
+        
+        return final_merged
     
     def _is_checkbox_checked(self, checkbox_img: np.ndarray) -> bool:
         """
-        Détermine si une case à cocher est cochée ou non.
+        Détermine si une case à cocher est cochée avec une analyse d'image améliorée.
         
         Args:
             checkbox_img: Image de la case à cocher
@@ -586,7 +706,7 @@ class CheckboxExtractor:
                 gray = checkbox_img
                 
             # 1. Binarisation pour détecter les marques
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            thresh_val, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
             # 2. Calculer différentes métriques pour déterminer si la case est cochée
             
@@ -595,38 +715,170 @@ class CheckboxExtractor:
             marked_pixels = np.sum(binary > 0)
             fill_ratio = marked_pixels / total_pixels if total_pixels > 0 else 0
             
-            # Vérifier si la marque est concentrée au centre (typique d'une coche)
+            # 3. Appliquer une analyse plus sophistiquée pour les cases à cocher
+            
+            # Vérifier la présence de lignes diagonales (typiques d'une croix)
             height, width = binary.shape
+            has_diagonals = False
+            
+            # Utiliser la transformée de Hough pour détecter les lignes
+            if width > 10 and height > 10:  # Éviter les cases trop petites
+                edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+                lines = cv2.HoughLinesP(edges, 1, np.pi/180, 
+                                    threshold=max(5, min(width, height)//3), 
+                                    minLineLength=max(3, min(width, height)//4), 
+                                    maxLineGap=3)
+                
+                if lines is not None and len(lines) > 0:
+                    diag_count = 0
+                    for line in lines:
+                        x1, y1, x2, y2 = line[0]
+                        # Calculer l'angle de la ligne
+                        if x2 != x1:  # Éviter division par zéro
+                            angle = abs(np.arctan((y2-y1)/(x2-x1)) * 180 / np.pi)
+                            # Les diagonales ont des angles entre 30 et 60 degrés
+                            if 30 <= angle <= 60 or 120 <= angle <= 150:
+                                diag_count += 1
+                    
+                    has_diagonals = diag_count >= 2  # Au moins 2 lignes diagonales
+            
+            # 4. Analyse de la distribution spatiale des marques (concentrées au centre ou sur les bords)
             center_margin = max(2, min(width, height) // 4)
+            border_region = np.zeros_like(binary)
+            center_region = np.zeros_like(binary)
             
             if width > 2*center_margin and height > 2*center_margin:
-                # Extraire la région centrale
-                center_binary = binary[
-                    center_margin:height-center_margin, 
-                    center_margin:width-center_margin
-                ]
+                # Définir les régions d'intérêt
+                center_region[center_margin:height-center_margin, center_margin:width-center_margin] = 1
+                border_region = 1 - center_region
                 
-                # Calculer le ratio de remplissage central
-                center_pixels = center_binary.size
-                center_marked = np.sum(center_binary > 0)
-                center_ratio = center_marked / center_pixels if center_pixels > 0 else 0
+                # Calculer les ratios
+                center_marked = np.sum(binary * center_region)
+                border_marked = np.sum(binary * border_region)
                 
-                # Combiner les deux ratios avec plus de poids pour le centre
-                combined_ratio = (fill_ratio + 2 * center_ratio) / 3
+                center_total = np.sum(center_region)
+                border_total = np.sum(border_region)
                 
-                # La case est considérée cochée si le ratio combiné dépasse un seuil
-                return combined_ratio > 0.15
+                center_ratio = center_marked / center_total if center_total > 0 else 0
+                border_ratio = border_marked / border_total if border_total > 0 else 0
+                
+                # Caractéristiques d'une case cochée: remplissage au centre OU présence de diagonales
+                if has_diagonals:
+                    # La présence de diagonales est un fort indicateur
+                    return True
+                elif center_ratio > 0.2:
+                    # Remplissage significatif au centre
+                    return True
+                elif fill_ratio > 0.25:
+                    # Remplissage global élevé
+                    return True
+                else:
+                    return False
             else:
-                # Pour les petites cases, utiliser juste le ratio global
-                return fill_ratio > 0.2
+                # Pour les petites cases, utiliser juste le ratio global et la présence de diagonales
+                return has_diagonals or fill_ratio > 0.22
         
         except Exception as e:
             logger.debug(f"Erreur analyse case cochée: {e}")
             return False
     
+    def _group_checkboxes_by_question(self, checkboxes: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Regroupe les cases à cocher par questions ou sections logiques.
+        
+        Args:
+            checkboxes: Liste des cases à cocher détectées
+            
+        Returns:
+            Dictionnaire groupant les cases par question
+        """
+        # Trier les cases par page puis par position y
+        sorted_checkboxes = sorted(checkboxes, key=lambda cb: (cb.get("page", 0), cb.get("bbox", [0, 0, 0, 0])[1]))
+        
+        # Initialiser les groupes
+        groups = {}
+        current_group = None
+        group_id = 0
+        
+        # Pour garder trace de la dernière position y
+        last_y = None
+        last_page = None
+        
+        # Seuil de distance verticale pour considérer des cases comme faisant partie d'une même question
+        y_threshold = 50  # en pixels
+        
+        for checkbox in sorted_checkboxes:
+            page = checkbox.get("page", 0)
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            y = bbox[1]  # Position y du haut de la case
+            label = checkbox.get("label", "").strip()
+            
+            # Nouvelle page = nouveau groupe
+            if page != last_page:
+                current_group = None
+            
+            # Déterminer si cette case fait partie du groupe courant ou commence un nouveau groupe
+            if current_group is None or (abs(y - last_y) > y_threshold if last_y is not None else True):
+                # Nouveau groupe
+                group_id += 1
+                current_group = f"question_{group_id}"
+                groups[current_group] = []
+            
+            # Ajouter la case au groupe courant
+            groups[current_group].append(checkbox)
+            
+            # Mettre à jour last_y et last_page
+            last_y = y
+            last_page = page
+        
+        # Normaliser les groupes pour un usage pratique
+        normalized_groups = {}
+        
+        for group_id, checkboxes in groups.items():
+            # Identifier les groupes Oui/Non
+            yes_no_labels = [cb for cb in checkboxes if re.search(r'\b(oui|non|yes|no)\b', cb.get("label", "").lower())]
+            
+            if len(yes_no_labels) >= 2:
+                # C'est probablement un groupe de type question avec options Oui/Non
+                question_text = self._extract_question_from_group(checkboxes)
+                if question_text:
+                    normalized_groups[question_text] = checkboxes
+                else:
+                    normalized_groups[group_id] = checkboxes
+            else:
+                # Groupe standard
+                normalized_groups[group_id] = checkboxes
+        
+        return normalized_groups
+    
+    def _extract_question_from_group(self, checkboxes: List[Dict[str, Any]]) -> str:
+        """
+        Tente d'extraire le texte de la question à partir d'un groupe de cases à cocher.
+        
+        Args:
+            checkboxes: Liste des cases à cocher du groupe
+            
+        Returns:
+            Texte de la question ou chaîne vide
+        """
+        # Filtrer les étiquettes qui sont juste "Oui" ou "Non"
+        non_yes_no_labels = []
+        
+        for checkbox in checkboxes:
+            label = checkbox.get("label", "").strip().lower()
+            if label and not re.match(r'^(oui|non|yes|no)$', label):
+                non_yes_no_labels.append(checkbox.get("label", ""))
+        
+        # Si nous avons trouvé des labels qui ne sont pas juste Oui/Non
+        if non_yes_no_labels:
+            # Prendre le plus long comme probable question
+            return max(non_yes_no_labels, key=len)
+        
+        return ""
+
     def _find_closest_text(self, page_text: Dict, bbox: List[int]) -> str:
         """
-        Trouve le texte le plus proche d'une case à cocher avec des améliorations.
+        Trouve le texte le plus proche d'une case à cocher avec des améliorations avancées.
         
         Args:
             page_text: Texte structuré de la page
@@ -645,7 +897,7 @@ class CheckboxExtractor:
         
         closest_text = ""
         min_distance = float('inf')
-        max_distance = 200  # Distance maximale à considérer (augmentée)
+        max_distance = 150  # Distance maximale à considérer
         
         # Pour stocker tous les textes candidats
         candidates = []
@@ -677,45 +929,70 @@ class CheckboxExtractor:
                         candidates.append({
                             "text": cleaned_text,
                             "distance": distance,
-                            "coords": [line_center_x, line_center_y]
+                            "coords": [line_center_x, line_center_y],
+                            "bbox": line_bbox
                         })
 
         # Analyser les candidats en considérant leur position relative
         for candidate in candidates:
             distance = candidate["distance"]
             x, y = candidate["coords"]
+            candidate_bbox = candidate["bbox"]
             
             # Facteurs de pondération selon la position relative
             position_factor = 1.0
             
-            # Privilégier fortement les textes à droite (association classique étiquette-case)
-            if x > checkbox_center_x:
-                # À droite = meilleur candidat
-                position_factor = 0.7
-            elif x < checkbox_center_x and abs(y - checkbox_center_y) < 15:
-                # À gauche sur la même ligne = bon candidat aussi
+            # Mesure de l'alignement horizontal/vertical avec la case
+            h_aligned = abs(y - checkbox_center_y) < 15  # Alignement horizontal
+            v_aligned = abs(x - checkbox_center_x) < 15  # Alignement vertical
+            
+            # Privilégier les textes correctement alignés
+            if h_aligned and x > checkbox_center_x:
+                # Texte à droite sur la même ligne (cas le plus commun)
+                position_factor = 0.5
+            elif h_aligned and x < checkbox_center_x:
+                # Texte à gauche sur la même ligne (cas également commun)
+                position_factor = 0.65
+            elif v_aligned and y < checkbox_center_y:
+                # Texte au-dessus, aligné verticalement (parfois le cas)
                 position_factor = 0.8
+            elif v_aligned and y > checkbox_center_y:
+                # Texte en-dessous, aligné verticalement
+                position_factor = 0.85
             else:
                 # Positions moins probables
-                position_factor = 1.2
+                position_factor = 1.3
+            
+            # Vérifier la taille du texte (préférer les courts textes comme "Oui"/"Non")
+            text = candidate["text"]
+            
+            # Privilégier fortement les "Oui" et "Non" alignés horizontalement
+            if h_aligned and re.search(r'\b(oui|non|yes|no)\b', text.lower()):
+                position_factor *= 0.5
+                
+            # Limiter la longueur des étiquettes (pas de phrases entières)
+            if len(text) > 80:
+                # Tronquer les textes trop longs
+                text = text[:77] + "..."
+                position_factor *= 1.5
+            
+            # Rejeter les étiquettes qui ressemblent à des informations de contact/codes
+            if re.search(r'(\d{2}\s*){3,}|@|www\.|\d+\.\d+\.\d+|\/\d+', text):
+                position_factor *= 2.0
             
             # Appliquer la pondération
             adjusted_distance = distance * position_factor
-            
-            # Vérifier le texte (privilégier les textes courts, probablement des étiquettes)
-            text = candidate["text"]
-            if len(text) < 30:  # Probablement une étiquette
-                adjusted_distance *= 0.9
-            
-            # Les textes contenant "Oui" ou "Non" sont de bons candidats pour les cases à cocher
-            if re.search(r'\b(oui|non|yes|no)\b', text.lower()):
-                adjusted_distance *= 0.8
             
             # Mettre à jour le texte le plus proche
             if adjusted_distance < min_distance:
                 min_distance = adjusted_distance
                 closest_text = text
         
+        # Nettoyage final de l'étiquette
+        if closest_text:
+            # Supprimer les ponctuations en fin de texte
+            closest_text = re.sub(r'[:\.\?;,]+$', '', closest_text)
+            
         return closest_text
     
     def _extract_checkbox_image(self, page: fitz.Page, checkbox: Dict[str, Any], page_image: np.ndarray) -> Optional[str]:
@@ -765,34 +1042,67 @@ class CheckboxExtractor:
     
     def _organize_checkboxes(self, results: Dict[str, Any]) -> None:
         """
-        Organise les cases à cocher par sections et crée les valeurs de formulaire.
+        Organise les cases à cocher par sections et crée des groupes logiques.
         
         Args:
             results: Résultats de l'extraction à modifier in-place
         """
-        # 1. Extraire les valeurs de formulaire
-        results["form_values"] = self.extract_selected_values(results)
+        checkboxes = results.get("checkboxes", [])
         
-        # 2. Organiser par sections
-        sections = {}
+        # 1. Nettoyer et normaliser les étiquettes
+        for checkbox in checkboxes:
+            label = checkbox.get("label", "").strip()
+            
+            # Normaliser les étiquettes Oui/Non
+            if re.match(r'^oui$|^yes$', label, re.IGNORECASE):
+                checkbox["label"] = "Oui"
+                checkbox["value"] = "Oui"
+            elif re.match(r'^non$|^no$', label, re.IGNORECASE):
+                checkbox["label"] = "Non"
+                checkbox["value"] = "Non"
         
-        for checkbox in results.get("checkboxes", []):
-            section = checkbox.get("section", "Information")
+        # 2. Regrouper les cases à cocher par questions
+        groups = self._group_checkboxes_by_question(checkboxes)
+        
+        # 3. Créer une structure plus intuitive pour les résultats
+        structured_results = {
+            "groups": {},
+            "form_values": {}
+        }
+        
+        # Traiter chaque groupe
+        for group_id, group_checkboxes in groups.items():
+            group_info = {
+                "checkboxes": group_checkboxes,
+                "values": {}
+            }
             
-            if section not in sections:
-                sections[section] = {}
+            # Déterminer s'il s'agit d'une question Oui/Non
+            yes_no_boxes = [cb for cb in group_checkboxes if cb.get("label") in ["Oui", "Non"]]
             
-            label = checkbox.get("label", "")
-            if label:
-                value = checkbox.get("value", "")
-                checked = checkbox.get("checked", False)
+            if len(yes_no_boxes) >= 2:
+                # Traiter comme une question Oui/Non
+                question = group_id if isinstance(group_id, str) and not group_id.startswith("question_") else "Question"
                 
-                # Pour les champs de type Oui/Non
-                if value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
-                    if checked:  # Si coché, prendre la valeur explicite
-                        sections[section][label] = value
-                else:
-                    # Pour les cases à cocher simples
-                    sections[section][label] = "Oui" if checked else "Non"
+                checked_values = [cb.get("label") for cb in yes_no_boxes if cb.get("checked", False)]
+                if checked_values:
+                    group_info["values"][question] = checked_values[0]
+                    structured_results["form_values"][question] = checked_values[0]
+            else:
+                # Traiter comme cases à cocher individuelles
+                for checkbox in group_checkboxes:
+                    label = checkbox.get("label", "")
+                    if label and label not in ["Oui", "Non"]:
+                        is_checked = checkbox.get("checked", False)
+                        group_info["values"][label] = "Oui" if is_checked else "Non"
+                        if is_checked:
+                            structured_results["form_values"][label] = "Oui"
+            
+            # Ajouter le groupe aux résultats
+            structured_results["groups"][str(group_id)] = group_info
         
-        results["form_sections"] = sections
+        # 4. Ajouter la structure au résultat final
+        results["structured_checkboxes"] = structured_results
+        
+        # 5. Extraire et mettre à jour les valeurs de formulaire
+        results["form_values"] = structured_results["form_values"]
