@@ -1212,7 +1212,328 @@ class CheckboxExtractor:
                         checkboxes.append(checkbox)
         
         return checkboxes
-    
+    async def _process_checkbox_candidates(self, all_checkboxes, pdf_doc, detect_groups=True):
+        """
+        Post-traitement des cases à cocher candidates pour améliorer la qualité des résultats.
+        
+        Args:
+            all_checkboxes: Liste des cases à cocher détectées
+            pdf_doc: Document PDF
+            detect_groups: Si True, tente de détecter les groupes logiques de cases
+            
+        Returns:
+            Liste des cases à cocher traitées
+        """
+        if not all_checkboxes:
+            return []
+        
+        # 1. Trier les cases par page, puis par position (haut en bas, gauche à droite)
+        all_checkboxes.sort(key=lambda c: (c.get("page", 0), c.get("bbox", [0, 0, 0, 0])[1], c.get("bbox", [0, 0, 0, 0])[0]))
+        
+        # 2. Enrichir les données des cases à cocher
+        enriched_checkboxes = []
+        for checkbox in all_checkboxes:
+            # Extraire les informations de base
+            page_num = checkbox.get("page", 1)
+            label = checkbox.get("label", "")
+            checked = checkbox.get("checked", False)
+            confidence = checkbox.get("confidence", 0.7)
+            
+            # S'assurer que page_num est dans les limites
+            if not 0 < page_num <= len(pdf_doc):
+                continue
+            
+            # Coordonnées de la case
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            x, y, x2, y2 = bbox
+            width = x2 - x
+            height = y2 - y
+            
+            # Analyse supplémentaire du label pour extraire des informations
+            value = ""
+            section = "Information"
+            
+            # Détecter les valeurs implicites (Oui/Non)
+            if "oui" in label.lower() or "yes" in label.lower():
+                value = "Oui"
+            elif "non" in label.lower() or "no" in label.lower():
+                value = "Non"
+            
+            # Détecter la section à partir du contexte ou du préfixe
+            section_prefixes = {
+                "1/": "Achat",
+                "2/": "Technique",
+                "3/": "Livraison",
+                "4/": "Validation",
+                "5/": "Commentaires"
+            }
+            
+            for prefix, section_name in section_prefixes.items():
+                if label.startswith(prefix):
+                    section = section_name
+                    # Nettoyer le préfixe du label
+                    label = label[len(prefix):].strip()
+                    break
+            
+            # Créer un objet case à cocher enrichi
+            enriched_checkbox = {
+                "label": label,
+                "value": value,
+                "checked": checked,
+                "section": section,
+                "page": page_num,
+                "position": {
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(width),
+                    "height": int(height)
+                },
+                "confidence": min(1.0, confidence),
+                "type": checkbox.get("type", "checkbox")
+            }
+            
+            # Ajouter à la liste
+            enriched_checkboxes.append(enriched_checkbox)
+        
+        # 3. Détection et association des groupes si demandé
+        if detect_groups and enriched_checkboxes:
+            # Grouper par page
+            checkboxes_by_page = {}
+            for checkbox in enriched_checkboxes:
+                page = checkbox.get("page", 0)
+                if page not in checkboxes_by_page:
+                    checkboxes_by_page[page] = []
+                checkboxes_by_page[page].append(checkbox)
+            
+            # Traiter chaque page séparément
+            grouped_checkboxes = []
+            for page, page_checkboxes in checkboxes_by_page.items():
+                # Grouper par proximité verticale
+                groups = self._group_checkboxes_by_position(page_checkboxes)
+                
+                # Détecter les groupes Oui/Non et appliquer une logique spécifique
+                processed_groups = self._process_checkbox_groups(groups)
+                
+                # Ajouter les cases traitées
+                grouped_checkboxes.extend(processed_groups)
+            
+            return grouped_checkboxes
+        
+        return enriched_checkboxes
+
+    def _find_nearest_labels(self, checkbox_regions, text_blocks):
+        """
+        Trouve les étiquettes les plus proches pour chaque case à cocher.
+        
+        Args:
+            checkbox_regions: Liste des régions de cases à cocher
+            text_blocks: Blocs de texte extraits
+            
+        Returns:
+            Liste des cases à cocher avec étiquettes associées
+        """
+        if not checkbox_regions or not text_blocks:
+            return []
+        
+        labeled_checkboxes = []
+        
+        # Pour chaque case à cocher
+        for checkbox in checkbox_regions:
+            # Coordonnées de la case
+            x = checkbox.get("x", 0)
+            y = checkbox.get("y", 0)
+            width = checkbox.get("width", 0)
+            height = checkbox.get("height", 0)
+            
+            # Calculer le centre de la case
+            center_x = x + width / 2
+            center_y = y + height / 2
+            
+            # Distance maximale pour la recherche d'étiquettes
+            max_distance = max(100, width * 5)
+            
+            # Rechercher l'étiquette la plus proche
+            nearest_label = ""
+            min_distance = float('inf')
+            
+            for block in text_blocks:
+                # Ignorer les blocs déjà identifiés comme cases à cocher
+                if block.get("type") == "checkbox":
+                    continue
+                    
+                # Coordonnées du bloc
+                block_bbox = block.get("bbox", [0, 0, 0, 0])
+                
+                # Calculer le centre du bloc
+                block_center_x = (block_bbox[0] + block_bbox[2]) / 2
+                block_center_y = (block_bbox[1] + block_bbox[3]) / 2
+                
+                # Calculer la distance
+                distance = ((block_center_x - center_x) ** 2 + (block_center_y - center_y) ** 2) ** 0.5
+                
+                # Privilégier les étiquettes à droite ou en dessous de la case
+                position_factor = 1.0
+                if block_center_x < center_x:  # Étiquette à gauche
+                    position_factor = 1.5
+                
+                adjusted_distance = distance * position_factor
+                
+                # Vérifier si c'est l'étiquette la plus proche
+                if adjusted_distance < min_distance and adjusted_distance < max_distance:
+                    min_distance = adjusted_distance
+                    nearest_label = block.get("text", "").strip()
+            
+            # Nettoyer l'étiquette
+            if nearest_label:
+                # Supprimer les caractères spéciaux ou symboles qui pourraient être présents
+                for symbol in ["•", "○", "◦", "▪", "▫", "◆", "◇", "–", "-", "*", "☐", "☑", "☒", "□", "■", "▢", "▣"]:
+                    nearest_label = nearest_label.replace(symbol, "").strip()
+            
+            # Créer une copie de la case avec l'étiquette associée
+            checkbox_with_label = checkbox.copy()
+            checkbox_with_label["label"] = nearest_label
+            
+            # Déterminer si la case est cochée
+            if "is_checked" not in checkbox_with_label:
+                # La méthode _is_checkbox_checked sera appelée ailleurs
+                checkbox_with_label["checked"] = False
+            else:
+                checkbox_with_label["checked"] = checkbox_with_label.pop("is_checked", False)
+            
+            # Calculer un score de confiance basé sur la distance à l'étiquette
+            if nearest_label:
+                label_confidence = max(0.3, min(1.0, 1.0 - (min_distance / max_distance)))
+                checkbox_with_label["label_confidence"] = label_confidence
+                # Ajuster le score de confiance global
+                checkbox_with_label["confidence"] = min(1.0, (checkbox_with_label.get("confidence", 0.7) + label_confidence) / 2)
+            
+            labeled_checkboxes.append(checkbox_with_label)
+        
+        return labeled_checkboxes
+
+    def _group_checkboxes_by_position(self, checkboxes):
+        """
+        Groupe les cases à cocher par proximité spatiale.
+        
+        Args:
+            checkboxes: Liste des cases à cocher
+            
+        Returns:
+            Liste des groupes de cases à cocher
+        """
+        if not checkboxes:
+            return []
+        
+        # Trier par position Y
+        sorted_boxes = sorted(checkboxes, key=lambda c: c["position"]["y"])
+        
+        # Paramètres pour le regroupement
+        vertical_tolerance = 20  # Tolérance verticale pour considérer les cases sur la même ligne
+        
+        # Initialiser les groupes
+        groups = []
+        current_group = []
+        last_y = -vertical_tolerance * 2
+        
+        # Grouper par proximité verticale
+        for checkbox in sorted_boxes:
+            y = checkbox["position"]["y"]
+            
+            # Si on change de ligne
+            if y > last_y + vertical_tolerance:
+                if current_group:
+                    groups.append(current_group)
+                current_group = [checkbox]
+                last_y = y
+            else:
+                current_group.append(checkbox)
+        
+        # Ajouter le dernier groupe
+        if current_group:
+            groups.append(current_group)
+        
+        # Trier les cases dans chaque groupe par position X
+        for group in groups:
+            group.sort(key=lambda c: c["position"]["x"])
+        
+        return groups
+
+    def _process_checkbox_groups(self, groups):
+        """
+        Traite les groupes de cases à cocher pour détecter les relations logiques.
+        
+        Args:
+            groups: Liste de groupes de cases à cocher
+            
+        Returns:
+            Liste des cases à cocher traitées
+        """
+        if not groups:
+            return []
+        
+        processed_checkboxes = []
+        
+        # Pour chaque groupe
+        for group_id, group in enumerate(groups):
+            # Cas 1: Groupe de 2 cases (probablement Oui/Non)
+            if len(group) == 2:
+                # Analyser les labels pour confirmer
+                labels = [c["label"].lower() for c in group]
+                
+                is_binary_group = False
+                yes_idx = -1
+                no_idx = -1
+                
+                # Rechercher les motifs Oui/Non
+                for i, label in enumerate(labels):
+                    if "oui" in label or "yes" in label:
+                        yes_idx = i
+                    elif "non" in label or "no" in label:
+                        no_idx = i
+                
+                # Si Oui et Non détectés
+                if yes_idx >= 0 and no_idx >= 0:
+                    is_binary_group = True
+                    
+                    # Extraire la partie commune du label (l'étiquette de la question)
+                    question_label = self._extract_common_label(group[yes_idx]["label"], group[no_idx]["label"])
+                    
+                    # Si une étiquette commune est trouvée, mettre à jour les cases
+                    if question_label:
+                        for i, checkbox in enumerate(group):
+                            checkbox["group_id"] = f"group_{group_id}"
+                            checkbox["group_type"] = "binary"
+                            checkbox["question"] = question_label
+                            
+                            # Déterminer la valeur explicite (Oui ou Non)
+                            if i == yes_idx:
+                                checkbox["value"] = "Oui"
+                            elif i == no_idx:
+                                checkbox["value"] = "Non"
+                            
+                            processed_checkboxes.append(checkbox)
+                        
+                        # Passer au groupe suivant
+                        continue
+                
+            # Cas 2: Groupe standard (pas de relation spéciale détectée)
+            for i, checkbox in enumerate(group):
+                # Assigner un ID de groupe
+                checkbox["group_id"] = f"group_{group_id}"
+                
+                # Déterminer le type de groupe
+                if len(group) == 1:
+                    checkbox["group_type"] = "single"
+                elif len(group) == 2:
+                    checkbox["group_type"] = "binary"
+                else:
+                    checkbox["group_type"] = "multiple"
+                
+                # Ajouter à la liste
+                processed_checkboxes.append(checkbox)
+        
+        return processed_checkboxes
+
     def _detect_square_checkboxes(self, binary_img, scale=1.0):
         """
         Détecte les formes carrées qui pourraient être des cases à cocher.
