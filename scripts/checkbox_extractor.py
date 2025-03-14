@@ -89,7 +89,12 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
                 print(f"  État: {'Cochée' if checkbox.get('checked', False) else 'Non cochée'}")
                 print(f"  Page: {checkbox.get('page', '?')}")
                 print(f"  Méthode: {checkbox.get('method', '?')}")
-                print(f"  Confiance: {checkbox.get('confidence', 0):.2f}")
+                
+                # Convertir explicitement la confiance en float simple
+                confidence = checkbox.get('confidence', 0)
+                if hasattr(confidence, 'item'):  # Si c'est un type numpy
+                    confidence = confidence.item()  # Convertir en type Python natif
+                print(f"  Confiance: {float(confidence):.2f}")
                 
                 if "value" in checkbox and checkbox["value"]:
                     print(f"  Valeur: {checkbox['value']}")

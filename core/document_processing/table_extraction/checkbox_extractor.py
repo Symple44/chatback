@@ -1037,8 +1037,8 @@ class CheckboxExtractor:
     
     def _is_checkbox_checked(self, checkbox_img: np.ndarray) -> bool:
         """
-        Version robuste pour déterminer si une case est cochée.
-        Évite les faux positifs et gère mieux les erreurs.
+        Version simplifiée et rigoureuse pour déterminer si une case est cochée.
+        S'appuie sur des critères simples mais efficaces.
         
         Args:
             checkbox_img: Image de la case à cocher
@@ -1057,89 +1057,80 @@ class CheckboxExtractor:
             else:
                 gray = checkbox_img
             
-            # 1. Prétraitement pour améliorer le contraste
-            height, width = gray.shape[:2]
+            # 1. Appliquer une binarisation avec seuil Otsu inversé
+            # Dans cette version, on part du principe que le fond est blanc et les marques sont noires
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
-            # Pour les cases trop petites, considérer comme non cochées
-            if height < 8 or width < 8:
-                return False
-            
-            # Redimensionner les très petites images
-            if height < 12 or width < 12:
-                scaled = cv2.resize(gray, (20, 20), interpolation=cv2.INTER_AREA)
-            else:
-                scaled = gray
-            
-            # 2. Binarisation avec seuil adaptatif pour gérer les variations d'éclairage
-            # Utiliser une approche plus simple et robuste
-            _, binary = cv2.threshold(scaled, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            
-            # 3. Caractéristiques simples et robustes
-            
-            # A. Densité des pixels noirs (marques)
+            # 2. Calculer le taux de remplissage (ratio de pixels noirs)
             total_pixels = binary.size
             marked_pixels = np.sum(binary > 0)
             fill_ratio = marked_pixels / total_pixels if total_pixels > 0 else 0
             
-            # B. Mesure simple de la position des marques (centre vs bordure)
+            # 3. Mesurer la proportion de marques au centre vs bords
             height, width = binary.shape
             center_margin = max(2, min(width, height) // 4)
             
-            # Masques pour le centre et les bordures
-            center_mask = np.zeros_like(binary)
+            # Analyser seulement si l'image est assez grande
             if width > 2*center_margin and height > 2*center_margin:
-                center_mask[center_margin:height-center_margin, center_margin:width-center_margin] = 1
+                # Calculer le ratio de remplissage dans la zone centrale
+                center_pixels = np.sum(binary[center_margin:height-center_margin, center_margin:width-center_margin] > 0)
+                center_area = (height - 2*center_margin) * (width - 2*center_margin)
+                center_fill_ratio = center_pixels / center_area if center_area > 0 else 0
                 
-                center_pixels = np.sum(center_mask)
-                center_marked = np.sum(np.logical_and(binary > 0, center_mask > 0))
-                center_ratio = center_marked / center_pixels if center_pixels > 0 else 0
+                # Le ratio entre remplissage du centre et remplissage global
+                # Plus il est élevé, plus les marques sont concentrées au centre
+                center_concentration = center_fill_ratio / fill_ratio if fill_ratio > 0 else 0
             else:
-                center_ratio = fill_ratio
+                center_concentration = 1.0  # Pour les petites images, pas de distinction
             
-            # C. Critères de décision simplifiés et plus stricts
+            # 4. CRITÈRES DE DÉCISION TRÈS STRICTS
             
-            # Case densément remplie
-            if fill_ratio > 0.35:
+            # A. Cas évidents : case fortement remplie
+            if fill_ratio > 0.4:
                 return True
             
-            # Marques importantes au centre
-            if center_ratio > 0.3:
+            # B. Cas évidents : case pratiquement vide
+            if fill_ratio < 0.05:
+                return False
+            
+            # C. Analyse plus fine
+            if fill_ratio >= 0.2 and center_concentration >= 0.8:
+                # Bon remplissage concentré au centre
                 return True
             
-            # Combinaison de facteurs
-            if fill_ratio > 0.2 and center_ratio > 0.2:
-                return True
+            # D. Recherche de marques claires comme les X et les coches
+            # Pour les cases avec remplissage modéré
+            if 0.1 <= fill_ratio < 0.3:
+                # Réduire le bruit
+                kernel = np.ones((2, 2), np.uint8)
+                cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
                 
-            # Détection basique de lignes (pour les croix)
-            try:
-                # Seulement si l'image est assez grande
-                if min(width, height) > 15:
-                    edges = cv2.Canny(binary, 50, 150, apertureSize=3)
-                    
-                    # Paramètres pour la détection de lignes
-                    min_line_length = max(3, min(width, height) // 4)
-                    max_line_gap = max(2, min(width, height) // 10)
-                    
-                    lines = cv2.HoughLinesP(
-                        edges, 1, np.pi/180, 
-                        threshold=max(5, min(width, height) // 5),
-                        minLineLength=min_line_length,
-                        maxLineGap=max_line_gap
-                    )
-                    
-                    # Si on a détecté des lignes
-                    if lines is not None and len(lines) >= 2:
-                        return True
-            except Exception:
-                # Ignorer les erreurs dans la détection de lignes
-                pass
+                # Détecter les contours importants
+                contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 
-            # Par défaut: non cochée
+                # Filtrer les très petits contours (bruit)
+                significant_contours = [c for c in contours if cv2.contourArea(c) > 9]
+                
+                # Si on a des contours significatifs et pas trop nombreux
+                if 1 <= len(significant_contours) <= 3:
+                    largest_contour = max(significant_contours, key=cv2.contourArea) if significant_contours else None
+                    
+                    if largest_contour is not None:
+                        # Calculer le rapport périmètre/aire (les X ont un rapport élevé)
+                        area = cv2.contourArea(largest_contour)
+                        perimeter = cv2.arcLength(largest_contour, True)
+                        complexity = perimeter**2 / (4 * np.pi * area) if area > 0 else 0
+                        
+                        # Les X et coches ont une forme complexe (non-circulaire)
+                        if complexity > 2.0:
+                            return True
+            
+            # Par défaut : non cochée
             return False
-        
+            
         except Exception as e:
             logger.debug(f"Erreur analyse case cochée: {e}")
-            return False  # Par défaut, considérer comme non cochée
+            return False
         
     def _deduplicate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
