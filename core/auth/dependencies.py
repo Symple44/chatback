@@ -31,42 +31,40 @@ async def get_api_key(
     Raises:
         HTTPException: Si la clé est manquante ou invalide
     """
-    # Vérifier si on est en mode développement
-    if settings.DEBUG:
-        # En développement, vérifier si l'IP est locale
-        client_ip = request.client.host if request.client else "unknown"
-        
-        # Liste des IP et réseaux de confiance
-        trusted_networks = [
-            "127.0.0.1",       # localhost
-            "::1",             # localhost IPv6
-            "192.168.0.0/24",  # Réseau local 192.168.0.x
-            "10.0.0.0/8"       # Réseau privé
-        ]
-        
-        # Vérifier si l'IP est dans un réseau de confiance
-        try:
-            ip_obj = ipaddress.ip_address(client_ip)
-            for network_str in trusted_networks:
-                if "/" in network_str:
-                    # C'est un réseau
-                    network = ipaddress.ip_network(network_str)
-                    if ip_obj in network:
-                        # En mode dev et avec une IP de confiance, on retourne une clé fictive
-                        return "dev_mode_trusted_ip"
-                else:
-                    # C'est une IP unique
-                    if client_ip == network_str:
-                        return "dev_mode_trusted_ip"
-        except ValueError:
-            # IP invalide, continuer avec la vérification normale
-            pass
+    # Vérifier si l'IP est dans un réseau de confiance, indépendamment du mode DEBUG
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Liste des IP et réseaux de confiance
+    trusted_networks = [
+        "127.0.0.1",       # localhost
+        "::1",             # localhost IPv6
+        "192.168.0.0/24",  # Réseau local 192.168.0.x
+        "10.0.0.0/8"       # Réseau privé
+    ]
+    
+    # Vérifier si l'IP est dans un réseau de confiance
+    try:
+        ip_obj = ipaddress.ip_address(client_ip)
+        for network_str in trusted_networks:
+            if "/" in network_str:
+                # C'est un réseau
+                network = ipaddress.ip_network(network_str)
+                if ip_obj in network:
+                    # IP de confiance, on retourne une clé fictive
+                    return "trusted_ip_network_access"
+            else:
+                # C'est une IP unique
+                if client_ip == network_str:
+                    return "trusted_ip_network_access"
+    except ValueError:
+        # IP invalide, continuer avec la vérification normale
+        pass
     
     # Récupérer la clé API (priorité au header)
     key = x_api_key or api_key
     
     if not key:
-        logger.warning(f"Tentative d'accès sans clé API: {request.url.path}")
+        logger.warning(f"Tentative d'accès sans clé API: {request.url.path} depuis {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Clé API manquante"
@@ -74,7 +72,7 @@ async def get_api_key(
     
     # Vérifier la clé API
     if key != settings.security.API_KEY:
-        logger.warning(f"Tentative d'accès avec clé API invalide: {request.url.path}")
+        logger.warning(f"Tentative d'accès avec clé API invalide: {request.url.path} depuis {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Clé API invalide"
