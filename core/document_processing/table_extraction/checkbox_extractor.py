@@ -335,7 +335,7 @@ class CheckboxExtractor:
 
     def _is_checkbox_checked(self, img: np.ndarray, region: Dict[str, Any]) -> bool:
         """
-        Détermine si une case à cocher est cochée avec une méthode améliorée.
+        Détermine si une case à cocher est cochée avec des méthodes optimisées pour les formulaires techniques.
         
         Args:
             img: Image en niveaux de gris
@@ -355,50 +355,84 @@ class CheckboxExtractor:
             if y + h > img.shape[0] or x + w > img.shape[1]:
                 return False
             
+            # Extraire la région de la case
             checkbox_img = img[y:y+h, x:x+w]
             
-            # 1. Binariser l'image de la case
-            _, binary = cv2.threshold(checkbox_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            # 1. Binariser l'image avec différentes méthodes pour une détection plus robuste
+            # Méthode Otsu classique
+            _, binary_otsu = cv2.threshold(checkbox_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
-            # 2. Calculer les ratios de pixels noirs pour différentes régions
+            # Méthode adaptative - souvent meilleure pour les documents numérisés
+            binary_adaptive = cv2.adaptiveThreshold(
+                checkbox_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
+            )
             
-            # Enlever les bordures qui peuvent affecter la détection
+            # 2. Appliquer différentes stratégies de détection
+            
+            # Stratégie 1: Analyse du contenu intérieur (évite de compter la bordure)
             inner_margin = 2
             if w > 2*inner_margin and h > 2*inner_margin:
-                # Créer un masque pour isoler la partie intérieure
-                mask = np.zeros_like(binary)
+                # Masque pour extraire uniquement la partie intérieure
+                mask = np.zeros_like(binary_otsu)
                 mask[inner_margin:-inner_margin, inner_margin:-inner_margin] = 1
-                inner_binary = binary * mask
                 
-                # Calculer le ratio de pixels noirs dans la région intérieure
-                black_pixels_inner = np.sum(inner_binary > 0)
+                # Appliquer le masque aux deux versions binaires
+                inner_binary_otsu = binary_otsu * mask
+                inner_binary_adaptive = binary_adaptive * mask
+                
+                # Calculer les ratios de pixels blancs (potentiellement cochés)
                 inner_area = np.sum(mask)
-                inner_ratio = black_pixels_inner / inner_area if inner_area > 0 else 0
+                ratio_otsu = np.sum(inner_binary_otsu > 0) / inner_area if inner_area > 0 else 0
+                ratio_adaptive = np.sum(inner_binary_adaptive > 0) / inner_area if inner_area > 0 else 0
                 
-                # Calculer le ratio au centre (où une marque serait probablement présente)
+                # Utiliser le ratio le plus élevé des deux méthodes
+                inner_ratio = max(ratio_otsu, ratio_adaptive)
+                
+                # Stratégie 2: Analyse du centre (où se trouve généralement la marque)
                 center_margin = max(inner_margin * 2, min(w, h) // 4)
                 if w > 2*center_margin and h > 2*center_margin:
-                    center_mask = np.zeros_like(binary)
+                    # Masque pour le centre uniquement
+                    center_mask = np.zeros_like(binary_otsu)
                     center_mask[center_margin:-center_margin, center_margin:-center_margin] = 1
-                    center_binary = binary * center_mask
                     
-                    center_pixels = np.sum(center_binary > 0)
+                    # Appliquer aux deux versions
+                    center_binary_otsu = binary_otsu * center_mask
+                    center_binary_adaptive = binary_adaptive * center_mask
+                    
+                    # Calculer les ratios
                     center_area = np.sum(center_mask)
-                    center_ratio = center_pixels / center_area if center_area > 0 else 0
+                    center_ratio_otsu = np.sum(center_binary_otsu > 0) / center_area if center_area > 0 else 0
+                    center_ratio_adaptive = np.sum(center_binary_adaptive > 0) / center_area if center_area > 0 else 0
+                    
+                    # Prendre le ratio le plus élevé
+                    center_ratio = max(center_ratio_otsu, center_ratio_adaptive)
                     
                     # Une case est probablement cochée si le ratio central est élevé
-                    if center_ratio > 0.2:  # Seuil ajusté pour le centre
+                    if center_ratio > 0.15:  # Seuil abaissé pour être plus sensible
                         return True
                 
-                # Évaluer le ratio intérieur
-                return inner_ratio > self.checked_threshold
+                # Stratégie 3: Recherche d'éléments de type "X" ou "✓"
+                # Utiliser des opérations morphologiques pour détecter les structures de type X ou ✓
+                kernel = np.ones((3, 3), np.uint8)
+                eroded = cv2.erode(inner_binary_otsu, kernel, iterations=1)
+                dilated = cv2.dilate(eroded, kernel, iterations=1)
+                
+                # Si après érosion et dilatation on garde une portion significative
+                # c'est probablement une marque comme X ou ✓ plutôt que du bruit
+                structure_ratio = np.sum(dilated > 0) / inner_area if inner_area > 0 else 0
+                
+                # Combinaison des heuristiques avec des seuils optimisés pour les formulaires techniques
+                if inner_ratio > 0.12 or structure_ratio > 0.08:
+                    return True
             
-            # Fallback: ratio global si on ne peut pas isoler l'intérieur
-            black_pixels = np.sum(binary > 0)
-            total_area = binary.size
-            fill_ratio = black_pixels / total_area
+            # Stratégie 4: Analyse globale comme fallback
+            total_pixels = checkbox_img.size
+            global_ratio_otsu = np.sum(binary_otsu > 0) / total_pixels
+            global_ratio_adaptive = np.sum(binary_adaptive > 0) / total_pixels
+            global_ratio = max(global_ratio_otsu, global_ratio_adaptive)
             
-            return fill_ratio > self.checked_threshold * 1.2  # Seuil un peu plus élevé pour le ratio global
+            # Seuil réduit pour être plus sensible aux marques légères
+            return global_ratio > 0.12
             
         except Exception as e:
             logger.error(f"Erreur analyse case cochée: {e}")
@@ -715,7 +749,7 @@ class CheckboxExtractor:
     
     def extract_selected_values(self, results: Dict[str, Any]) -> Dict[str, str]:
         """
-        Extrait uniquement les valeurs sélectionnées (cases cochées).
+        Extrait uniquement les valeurs sélectionnées (cases cochées) dans un format clair.
         
         Args:
             results: Résultats de l'extraction
@@ -727,12 +761,20 @@ class CheckboxExtractor:
         
         # Parcourir tous les checkboxes
         for checkbox in results.get("checkboxes", []):
-            if checkbox.get("checked"):
-                label = checkbox.get("label", "")
-                value = checkbox.get("value", "")
-                
-                if label and value:
+            label = checkbox.get("label", "").strip()
+            value = checkbox.get("value", "").strip()
+            checked = checkbox.get("checked", False)
+            
+            if label:
+                # Pour les groupes "Oui/Non", prendre la valeur explicite
+                if value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
                     selected_values[label] = value
+                # Pour les cases simples
+                elif checked:
+                    selected_values[label] = "Oui"
+                else:
+                    # Optionnel: ne pas inclure les cases non cochées si on ne veut que les options sélectionnées
+                    selected_values[label] = "Non" 
         
         return selected_values
     
