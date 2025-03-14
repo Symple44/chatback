@@ -159,7 +159,13 @@ class InvoiceProcessor:
         
         try:
             # Extraire les métadonnées de base
-            all_text = self._get_combined_text(extracted_tables)
+            all_text = ""
+            for table in extracted_tables:
+                if isinstance(table.get("data"), pd.DataFrame):
+                    df = table["data"]
+                    for _, row in df.iterrows():
+                        all_text += " ".join([str(val) for val in row.values if pd.notna(val)])
+                        all_text += " "
             
             # Recherche de métadonnées communes dans les formulaires
             patterns = {
@@ -176,106 +182,51 @@ class InvoiceProcessor:
                     value = match.group(1).strip()
                     result["metadata"][field] = value
             
-            # Traitement des tableaux principaux
-            for i, table in enumerate(extracted_tables):
-                table_data = table.get("data", None)
-                
-                # Ignorer les tableaux vides
-                if not table_data or not isinstance(table_data, pd.DataFrame) or table_data.empty:
-                    continue
-                
-                # Identifier les sections dans le tableau
-                section_name = f"Section_{i+1}"
-                
-                # Tentative de détection du nom de section
-                if "section" in table:
-                    section_name = table["section"]
-                else:
-                    # Essayer de détecter le nom de section dans le tableau
-                    for col_name in table_data.columns:
-                        if "section" in str(col_name).lower() or "zone" in str(col_name).lower():
-                            section_values = table_data[col_name].unique()
-                            if len(section_values) > 0 and isinstance(section_values[0], str):
-                                section_name = section_values[0]
-                                break
-                
-                # Convertir le DataFrame en dictionnaire pour avoir une structure JSON exploitable
-                fields = {}
-                
-                # Parcourir les lignes et rechercher des champs spécifiques
-                for _, row in table_data.iterrows():
-                    # Chercher des paires label/valeur
-                    for i, col in enumerate(table_data.columns):
-                        cell_value = row[col]
-                        if pd.isna(cell_value) or cell_value == "":
-                            continue
-                        
-                        cell_str = str(cell_value).strip()
-                        
-                        # Si c'est un label potentiel (se termine par :)
-                        if cell_str.endswith(':'):
-                            label = cell_str.rstrip(':')
-                            
-                            # Chercher la valeur dans les colonnes suivantes
-                            for next_col in table_data.columns[i+1:]:
-                                next_value = row[next_col]
-                                if not pd.isna(next_value) and next_value != "":
-                                    fields[label] = str(next_value).strip()
-                                    break
-                        # Sinon, si c'est une colonne clé/valeur typique de formulaire
-                        elif i < len(table_data.columns) - 1:
-                            next_col = table_data.columns[i+1]
-                            next_value = row[next_col]
-                            
-                            if not pd.isna(next_value) and next_value != "":
-                                fields[cell_str] = str(next_value).strip()
-                                
-                # Ajouter à la section appropriée
-                if section_name not in result["sections"]:
-                    result["sections"][section_name] = {}
-                    
-                result["sections"][section_name].update(fields)
-                
-                # Ajouter également au dictionnaire plat pour accès facile
-                result["form_fields"].update(fields)
+            # TRAITEMENT SIMPLIFIÉ: Extraire principalement les cases à cocher
+            # et ignorer le traitement complexe des tableaux pour éviter les erreurs
             
             # Intégrer les données de cases à cocher si disponibles
             if checkbox_data:
-                checkbox_values = {}
+                # Version simplifiée: extraire directement les cases à cocher
+                form_values = {}
+                sections = {}
                 
-                # Format par section
-                if "sections" in checkbox_data:
-                    for section, checkboxes in checkbox_data["sections"].items():
-                        if section not in result["sections"]:
-                            result["sections"][section] = {}
+                # Extraire des cases à cocher dans un format exploitable
+                for checkbox in checkbox_data.get("checkboxes", []):
+                    label = checkbox.get("label", "")
+                    if not label:
+                        continue
                         
-                        for checkbox in checkboxes:
-                            label = checkbox.get("label", "")
-                            value = checkbox.get("value", "")
-                            
-                            if label:
-                                result["sections"][section][label] = value
-                                checkbox_values[label] = value
+                    value = checkbox.get("value", "")
+                    checked = checkbox.get("checked", False)
+                    section = checkbox.get("section", "Information")
+                    
+                    # Pour les champs de type "Oui/Non"
+                    if isinstance(value, str) and value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
+                        selected_value = value
+                    else:
+                        # Pour les cases à cocher simples
+                        selected_value = "Oui" if checked else "Non"
+                    
+                    # Structure plate
+                    form_values[label] = selected_value
+                    
+                    # Organisation par section
+                    if section not in sections:
+                        sections[section] = {}
+                    
+                    sections[section][label] = selected_value
                 
-                # Format plat (liste complète)
-                if "checkboxes" in checkbox_data:
-                    for checkbox in checkbox_data["checkboxes"]:
-                        label = checkbox.get("label", "")
-                        value = checkbox.get("value", "")
-                        
-                        if label:
-                            checkbox_values[label] = value
-                
-                # Format simplifié déjà prêt
-                if "form_values" in checkbox_data:
-                    checkbox_values.update(checkbox_data["form_values"])
-                
-                # Ajouter au dictionnaire plat
-                result["form_fields"].update(checkbox_values)
+                # Ajouter les résultats au formulaire
+                result["form_values"] = form_values
+                result["sections"] = sections
+                result["form_fields"] = form_values
             
             return result
             
         except Exception as e:
+            import logging
+            logger = logging.getLogger("invoice_processor")
             logger.error(f"Erreur lors du traitement des données de formulaire: {e}")
             result["error"] = str(e)
             return result
