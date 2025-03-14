@@ -208,6 +208,10 @@ class ComponentManager:
                     table_exporter = TableExporter()
                     self._components["table_exporter"] = table_exporter
                     logger.info("Exportateur de tableaux initialisé")
+
+                    # Initialisation de l'extraction de cases à cocher
+                    from core.document_processing.table_extraction.checkbox_extractor import CheckboxExtractor
+                    self._components["checkbox_extractor"] = CheckboxExtractor()
                 
                 # Google Drive (optionnel)
                 if settings.document.GOOGLE_DRIVE_CREDENTIALS_PATH:
@@ -276,7 +280,7 @@ class ComponentManager:
             # Ordre explicite de nettoyage - du plus haut niveau au plus bas niveau
             cleanup_order = [
                 "search_manager", "doc_extractor", "pdf_processor",
-                "table_extraction_pipeline", "table_detector","table_exporter",
+                "table_extraction_pipeline", "table_detector","table_exporter","checkbox_extractor",
                 "model", "summarizer", "embedding_manager", "model_manager", 
                 "model_loader", "tokenizer_manager", "cuda_manager", "auth_manager", 
                 "es_client", "pdf_cache", "models_cache", "cache_manager", "redis_cache", 

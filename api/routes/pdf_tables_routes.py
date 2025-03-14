@@ -70,6 +70,8 @@ async def extract_tables(
     download_format: Optional[str] = Form(None, description="Format à télécharger (csv, excel, json, html)"),
     background_processing: bool = Form(False, description="Traiter en arrière-plan (pour les grands PDF)"),
     use_cache: bool = Form(True, description="Utiliser le cache si disponible"),
+    #Traiter les cases à cocher
+    extract_checkboxes: bool = Form(False, description="Extraire également les cases à cocher"),
     components = Depends(get_components)
 ):
     """
