@@ -543,6 +543,15 @@ class CheckboxExtractor:
             for span in nearby_spans:
                 text = span["text"].strip()
                 
+                # CORRECTION: Initialiser les attributs is_value et is_header s'ils n'existent pas
+                if "is_value" not in span:
+                    # Déterminer si c'est une valeur (Oui/Non)
+                    span["is_value"] = any(v in text.lower() for v in ["oui", "non", "yes", "no", "true", "false"])
+                
+                if "is_header" not in span:
+                    # Déterminer si c'est un en-tête de section
+                    span["is_header"] = text.endswith(":") or text.endswith("/")
+                
                 # Détermination du type de texte
                 if span["is_value"]:
                     # C'est une valeur (Oui/Non)
