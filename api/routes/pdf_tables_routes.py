@@ -19,6 +19,7 @@ from core.config.config import settings
 from core.document_processing.table_extraction.pipeline import TableExtractionPipeline
 from core.document_processing.table_extraction.models import ExtractionResult, TableData, ImageData, PDFType
 from core.document_processing.table_extraction.invoice_processor import InvoiceProcessor
+from core.document_processing.table_extraction.technical_form_extractor import TechnicalFormExtractor
 
 logger = get_logger("pdf_tables_routes")
 router = APIRouter(prefix="/pdf/tables", tags=["pdf"])
@@ -56,7 +57,7 @@ async def extract_tables(
     output_format: str = Form("json", description="Format des données dans la réponse"),
     pages: str = Form("all", description="Pages à analyser"),
     # Type de document
-    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, devis, receipt, form, etc.)"),
+    document_type: str = Form("generic", description="Type de document à extraire (generic, invoice, devis, receipt, form, canametal, etc.)"),
     # Paramètres OCR
     ocr_enabled: bool = Form(False, description="Activer l'OCR pour les PDF scannés"),
     ocr_language: str = Form(settings.table_extraction.OCR.TESSERACT_LANG, description="Langues pour l'OCR"),
@@ -70,12 +71,12 @@ async def extract_tables(
     download_format: Optional[str] = Form(None, description="Format à télécharger (csv, excel, json, html)"),
     background_processing: bool = Form(False, description="Traiter en arrière-plan (pour les grands PDF)"),
     use_cache: bool = Form(True, description="Utiliser le cache si disponible"),
-    # NOUVEAUX PARAMÈTRES pour les cases à cocher
+    # Paramètres pour les cases à cocher
     extract_checkboxes: bool = Form(True, description="Extraire également les cases à cocher"),
     checkbox_confidence: float = Form(0.6, description="Seuil de confiance pour les cases à cocher"),
     enhance_checkbox_detection: bool = Form(True, description="Utiliser la détection avancée pour les cases à cocher"),
-    detect_checkbox_groups: bool = Form(True, description="Détecter automatiquement les groupes de cases à cocher (Oui/Non)"),
-    include_checkbox_images: bool = Form(False, description="Inclure les images des cases à cocher détectées"),
+    # Nouveau paramètre pour l'extracteur spécialisé
+    use_technical_extractor: bool = Form(False, description="Utiliser l'extracteur spécialisé pour fiches techniques"),
     components = Depends(get_components)
 ):
     """
@@ -89,7 +90,7 @@ async def extract_tables(
     - Support OCR avancé pour les PDF scannés
     - Validation et optimisation des tableaux extraits
     - Détection et analyse des cases à cocher avec leur état (coché/non coché)
-    - Extraction des groupes de cases à cocher (Oui/Non, etc.)
+    - Extraction spécialisée pour documents techniques (CANAMETAL)
     - Cache configurable pour les extractions répétées
     """
     try:
@@ -126,6 +127,62 @@ async def extract_tables(
                 detail=f"Format de sortie invalide. Formats supportés: {', '.join(settings.table_extraction.SUPPORTED_OUTPUT_FORMATS)}"
             )
         
+        # Détection de document technique/CANAMETAL
+        is_technical_form = False
+        if use_technical_extractor or document_type.lower() in ["canametal", "technical", "form_technique"]:
+            is_technical_form = True
+        else:
+            # Détection automatique des fiches CANAMETAL
+            with fitz.open(stream=file_content) as doc:
+                if doc.page_count > 0:
+                    first_page_text = doc[0].get_text()
+                    # Motifs spécifiques aux fiches CANAMETAL ou documents techniques
+                    if ("CANAMETAL" in first_page_text or 
+                        "Fiche Affaire" in first_page_text or 
+                        "OSSATURE" in first_page_text or
+                        "LOT" in first_page_text and "ECLISSAGE" in first_page_text):
+                        is_technical_form = True
+                        logger.info("Document technique CANAMETAL détecté, utilisation de l'extracteur spécialisé")
+        
+        # Si c'est un document technique, utiliser l'extracteur spécialisé
+        if is_technical_form:
+            try:
+                # Initialiser l'extracteur technique
+                if not hasattr(components, 'technical_form_extractor'):
+                    from core.document_processing.table_extraction.technical_form_extractor import TechnicalFormExtractor
+                    components._components["technical_form_extractor"] = TechnicalFormExtractor()
+                
+                tech_extractor = components.technical_form_extractor
+                
+                # Extraction avec l'extracteur spécialisé
+                file_obj.seek(0)
+                technical_data = await tech_extractor.extract_form_data(file_obj)
+                
+                # Ajouter des métadonnées
+                technical_data["extraction_id"] = extraction_id
+                technical_data["filename"] = file.filename
+                technical_data["file_size"] = file_size
+                technical_data["processing_time"] = time.time() - start_time
+                technical_data["status"] = "completed"
+                technical_data["extraction_method"] = "technical_extractor"
+                
+                # Terminer le suivi des métriques
+                processing_time = time.time() - start_time
+                metrics.finish_request_tracking(extraction_id)
+                metrics.track_search_operation(
+                    method="technical_extractor",
+                    success=True,
+                    processing_time=processing_time,
+                    results_count=len(technical_data.get("sections", {}))
+                )
+                
+                # Retourner les données techniques
+                return technical_data
+                
+            except Exception as e:
+                logger.error(f"Erreur extraction technique: {e}")
+                # En cas d'échec, continuer avec l'extraction standard
+        
         # Extraction des cases à cocher si demandé
         checkbox_results = None
         if extract_checkboxes:
@@ -157,16 +214,16 @@ async def extract_tables(
                 
                 metrics.increment_counter("checkbox_extractions")
                 
-                # Configuration améliorée des paramètres
+                # Configuration des paramètres
                 checkbox_config = {
                     "confidence_threshold": checkbox_confidence,
                     "enhance_detection": enhance_checkbox_detection,
-                    "detect_groups": detect_checkbox_groups,
-                    "include_images": include_checkbox_images
+                    "detect_groups": True,
+                    "include_images": include_images
                 }
                 
-                # AMÉLIORATION: utiliser extract_form_checkboxes en priorité, plus adapté aux formulaires
-                checkbox_file.seek(0)  # Rembobiner le fichier
+                # Utiliser extract_form_checkboxes en priorité
+                checkbox_file.seek(0)
                 form_results = await checkbox_extractor.extract_form_checkboxes(
                     checkbox_file, 
                     page_range=page_range,
@@ -178,7 +235,7 @@ async def extract_tables(
                 
                 # Si peu de résultats avec la méthode formulaire, essayer avec la méthode standard
                 if extracted_form_count < 3:
-                    checkbox_file.seek(0)  # Rembobiner le fichier
+                    checkbox_file.seek(0)
                     standard_results = await checkbox_extractor.extract_checkboxes_from_pdf(
                         checkbox_file, 
                         page_range=page_range,
@@ -196,7 +253,7 @@ async def extract_tables(
                 else:
                     checkbox_results = form_results
                 
-                # POST-TRAITEMENT AVANCÉ: enrichir la structure des résultats
+                # Enrichir la structure des résultats
                 if checkbox_results and len(checkbox_results.get('checkboxes', [])) > 0:
                     # Extraction des valeurs sélectionnées dans un format standardisé
                     form_values = checkbox_extractor.extract_selected_values(checkbox_results)
@@ -266,9 +323,10 @@ async def extract_tables(
                     "checkbox_config": {
                         "confidence_threshold": checkbox_confidence,
                         "enhance_detection": enhance_checkbox_detection,
-                        "detect_groups": detect_checkbox_groups,
-                        "include_images": include_checkbox_images
-                    }
+                        "detect_groups": True,
+                        "include_images": include_images
+                    },
+                    "use_technical_extractor": use_technical_extractor
                 },
                 components=components
             )
@@ -359,7 +417,7 @@ async def extract_tables(
                     structured_data["auto_detected"] = True
                     structured_data["detection_confidence"] = detected_confidence
                 
-                # AMÉLIORÉ: Intégration standardisée des cases à cocher
+                # Intégration des cases à cocher
                 if checkbox_results and extract_checkboxes:
                     # Structure claire des cases à cocher
                     form_values = {}
@@ -457,7 +515,7 @@ async def extract_tables(
         if structured_data:
             result_dict["structured_data"] = structured_data
             
-        # AMÉLIORÉ: Intégration standardisée des cases à cocher dans la réponse
+        # Intégration standardisée des cases à cocher dans la réponse
         if checkbox_results and extract_checkboxes:
             # Structure normalisée et plus claire
             result_dict["checkboxes"] = {
@@ -468,7 +526,7 @@ async def extract_tables(
             }
             
             # Ajout des images si demandées
-            if include_checkbox_images and "checkbox_images" in checkbox_results:
+            if include_images and "checkbox_images" in checkbox_results:
                 result_dict["checkboxes"]["images"] = checkbox_results.get("checkbox_images", [])
         
         # Terminer le suivi des métriques
