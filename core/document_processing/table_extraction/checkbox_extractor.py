@@ -41,109 +41,109 @@ class CheckboxExtractor:
         self.cache = {}                # Cache des résultats (pour éviter de refaire l'analyse)
 
     async def extract_checkboxes_from_pdf(
-    self, 
-    pdf_path: Union[str, Path, io.BytesIO],
-    page_range: Optional[List[int]] = None
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Extrait les cases à cocher d'un document PDF.
-    
-    Args:
-        pdf_path: Chemin ou objet BytesIO du fichier PDF
-        page_range: Liste optionnelle des pages à analyser (1-based)
+        self, 
+        pdf_path: Union[str, Path, io.BytesIO],
+        page_range: Optional[List[int]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Extrait les cases à cocher d'un document PDF.
         
-    Returns:
-        Dictionnaire des résultats avec les sections et leurs cases à cocher
-    """
-    try:
-        with metrics.timer("checkbox_extraction"):
-            # Calcul d'un hash de cache simple
-            if isinstance(pdf_path, (str, Path)):
-                cache_key = f"{pdf_path}:{str(page_range)}"
-                if cache_key in self.cache:
-                    return self.cache[cache_key]
+        Args:
+            pdf_path: Chemin ou objet BytesIO du fichier PDF
+            page_range: Liste optionnelle des pages à analyser (1-based)
             
-            # Ouvrir le document PDF - CORRECTION ICI
-            if isinstance(pdf_path, (str, Path)):
-                pdf_doc = fitz.open(pdf_path)
-            else:
-                # Pour BytesIO, on doit réinitialiser la position et l'ouvrir comme stream
-                pdf_path.seek(0)
-                pdf_doc = fitz.open(stream=pdf_path.read(), filetype="pdf")
-            
-            # Si page_range n'est pas spécifié, analyser tout le document
-            if page_range is None:
-                page_range = list(range(len(pdf_doc)))
-            else:
-                # Convertir page_range de 1-based à 0-based
-                page_range = [p-1 for p in page_range if 0 <= p-1 < len(pdf_doc)]
-            
-            results = {
-                "metadata": {
-                    "filename": getattr(pdf_path, "name", str(pdf_path)) if hasattr(pdf_path, "name") else "unknown",
-                    "page_count": len(pdf_doc),
-                    "processed_pages": len(page_range),
-                    "extraction_date": datetime.now().isoformat()
-                },
+        Returns:
+            Dictionnaire des résultats avec les sections et leurs cases à cocher
+        """
+        try:
+            with metrics.timer("checkbox_extraction"):
+                # Calcul d'un hash de cache simple
+                if isinstance(pdf_path, (str, Path)):
+                    cache_key = f"{pdf_path}:{str(page_range)}"
+                    if cache_key in self.cache:
+                        return self.cache[cache_key]
+                
+                # Ouvrir le document PDF - CORRECTION ICI
+                if isinstance(pdf_path, (str, Path)):
+                    pdf_doc = fitz.open(pdf_path)
+                else:
+                    # Pour BytesIO, on doit réinitialiser la position et l'ouvrir comme stream
+                    pdf_path.seek(0)
+                    pdf_doc = fitz.open(stream=pdf_path.read(), filetype="pdf")
+                
+                # Si page_range n'est pas spécifié, analyser tout le document
+                if page_range is None:
+                    page_range = list(range(len(pdf_doc)))
+                else:
+                    # Convertir page_range de 1-based à 0-based
+                    page_range = [p-1 for p in page_range if 0 <= p-1 < len(pdf_doc)]
+                
+                results = {
+                    "metadata": {
+                        "filename": getattr(pdf_path, "name", str(pdf_path)) if hasattr(pdf_path, "name") else "unknown",
+                        "page_count": len(pdf_doc),
+                        "processed_pages": len(page_range),
+                        "extraction_date": datetime.now().isoformat()
+                    },
+                    "sections": {},
+                    "checkboxes": []
+                }
+                
+                # Traiter chaque page
+                for page_idx in page_range:
+                    page = pdf_doc[page_idx]
+                    
+                    # Étape 1: Extraire le texte de la page pour les étiquettes
+                    page_text = page.get_text("dict")
+                    
+                    # Étape 2: Convertir la page en image pour la détection visuelle
+                    pix = page.get_pixmap(matrix=fitz.Matrix(self.dpi/72, self.dpi/72))
+                    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                    
+                    # Convertir en niveaux de gris si l'image est en couleur
+                    if img.shape[2] == 3 or img.shape[2] == 4:
+                        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                    else:
+                        gray = img
+                    
+                    # Étape 3: Détecter les cases à cocher
+                    checkbox_regions = self._detect_checkboxes(gray)
+                    
+                    # Étape 4: Identifier les étiquettes et déterminer l'état des cases
+                    page_results = self._match_labels_to_checkboxes(
+                        checkbox_regions, page_text, gray, page_idx + 1
+                    )
+                    
+                    # Organiser par section
+                    for item in page_results:
+                        section = item.get("section", "default")
+                        if section not in results["sections"]:
+                            results["sections"][section] = []
+                        
+                        # Ajouter à la section
+                        results["sections"][section].append(item)
+                        
+                        # Ajouter à la liste complète
+                        results["checkboxes"].append(item)
+                
+                # Fermer le document
+                pdf_doc.close()
+                
+                # Mise en cache du résultat
+                if isinstance(pdf_path, (str, Path)):
+                    self.cache[cache_key] = results
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Erreur extraction cases à cocher: {e}")
+            metrics.increment_counter("checkbox_extraction_errors")
+            return {
+                "error": str(e),
                 "sections": {},
                 "checkboxes": []
             }
-            
-            # Traiter chaque page
-            for page_idx in page_range:
-                page = pdf_doc[page_idx]
-                
-                # Étape 1: Extraire le texte de la page pour les étiquettes
-                page_text = page.get_text("dict")
-                
-                # Étape 2: Convertir la page en image pour la détection visuelle
-                pix = page.get_pixmap(matrix=fitz.Matrix(self.dpi/72, self.dpi/72))
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                
-                # Convertir en niveaux de gris si l'image est en couleur
-                if img.shape[2] == 3 or img.shape[2] == 4:
-                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-                else:
-                    gray = img
-                
-                # Étape 3: Détecter les cases à cocher
-                checkbox_regions = self._detect_checkboxes(gray)
-                
-                # Étape 4: Identifier les étiquettes et déterminer l'état des cases
-                page_results = self._match_labels_to_checkboxes(
-                    checkbox_regions, page_text, gray, page_idx + 1
-                )
-                
-                # Organiser par section
-                for item in page_results:
-                    section = item.get("section", "default")
-                    if section not in results["sections"]:
-                        results["sections"][section] = []
-                    
-                    # Ajouter à la section
-                    results["sections"][section].append(item)
-                    
-                    # Ajouter à la liste complète
-                    results["checkboxes"].append(item)
-            
-            # Fermer le document
-            pdf_doc.close()
-            
-            # Mise en cache du résultat
-            if isinstance(pdf_path, (str, Path)):
-                self.cache[cache_key] = results
-            
-            return results
-            
-    except Exception as e:
-        logger.error(f"Erreur extraction cases à cocher: {e}")
-        metrics.increment_counter("checkbox_extraction_errors")
-        return {
-            "error": str(e),
-            "sections": {},
-            "checkboxes": []
-        }
-    
+        
     def _detect_checkboxes(self, img: np.ndarray) -> List[Dict[str, Any]]:
         """
         Détecte les cases à cocher dans une image.
