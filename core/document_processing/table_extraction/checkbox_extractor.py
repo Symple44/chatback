@@ -1278,6 +1278,202 @@ class CheckboxExtractor:
         
         return checkbox_regions
     
+    def _detect_checkboxes_visual(self, page, text_dict, page_img, page_num):
+        """
+        Détecte les cases à cocher visuellement dans l'image de la page.
+        
+        Args:
+            page: Page PDF (fitz page)
+            text_dict: Dictionnaire de texte extrait
+            page_img: Image de la page convertie en array numpy
+            page_num: Numéro de la page
+            
+        Returns:
+            Liste des cases à cocher détectées
+        """
+        checkboxes = []
+        
+        # Vérifier si l'image est valide
+        if page_img is None or page_img.size == 0:
+            return checkboxes
+        
+        # Convertir en niveaux de gris si nécessaire
+        if len(page_img.shape) > 2:
+            gray = cv2.cvtColor(page_img, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = page_img
+        
+        # Binarisation pour la détection de formes
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # 1. Détecter les cases à cocher carrées
+        square_checkboxes = self._detect_square_checkboxes(binary)
+        
+        # 2. Détecter les cases à cocher circulaires (boutons radio)
+        circle_checkboxes = self._detect_circle_checkboxes(binary)
+        
+        # Combiner les deux types de cases
+        all_regions = square_checkboxes + circle_checkboxes
+        
+        # Trier les régions par position (haut en bas, gauche à droite)
+        all_regions.sort(key=lambda r: (r.get("y", 0), r.get("x", 0)))
+        
+        # Associer les cases détectées avec les textes
+        for region in all_regions:
+            # Coordonnées de la région
+            x, y = region.get("x", 0), region.get("y", 0)
+            width, height = region.get("width", 0), region.get("height", 0)
+            
+            # Détecter l'état (cochée ou non)
+            region_img = gray[y:y+height, x:x+width] if 0 <= y < gray.shape[0] and 0 <= x < gray.shape[1] else None
+            is_checked = self._is_checkbox_checked(gray, region) if region_img is not None else False
+            
+            # Chercher l'étiquette associée dans le texte proche
+            label = self._find_nearest_label(x, y, width, height, text_dict)
+            
+            # Ajouter à la liste des cases détectées
+            checkbox = {
+                "label": label,
+                "checked": is_checked,
+                "bbox": [x, y, x+width, y+height],
+                "page": page_num,
+                "confidence": region.get("confidence", 0.7),
+                "type": region.get("type", "visual"),
+                "area": region.get("area", width * height)
+            }
+            
+            checkboxes.append(checkbox)
+        
+        return checkboxes
+
+    def _detect_circle_checkboxes(self, binary_img, scale=1.0):
+        """
+        Détecte les formes circulaires qui pourraient être des boutons radio.
+        
+        Args:
+            binary_img: Image binaire
+            scale: Facteur d'échelle pour les coordonnées
+            
+        Returns:
+            Liste des régions de boutons radio détectées
+        """
+        # Paramètres pour la détection de cercles
+        min_radius = 5
+        max_radius = 15
+        
+        # Détection des cercles avec la transformation de Hough
+        circles = cv2.HoughCircles(
+            binary_img, 
+            cv2.HOUGH_GRADIENT, 
+            dp=1, 
+            minDist=20, 
+            param1=50, 
+            param2=30, 
+            minRadius=min_radius, 
+            maxRadius=max_radius
+        )
+        
+        checkbox_regions = []
+        
+        if circles is not None:
+            # Convertir les coordonnées en entiers
+            circles = np.uint16(np.around(circles))
+            
+            for circle in circles[0, :]:
+                # Extraire les coordonnées et le rayon
+                center_x, center_y, radius = circle
+                
+                # Calculer les coordonnées du rectangle englobant
+                x = int((center_x - radius) / scale)
+                y = int((center_y - radius) / scale)
+                diameter = int(2 * radius / scale)
+                
+                # Ajouter des marges pour capturer un peu plus de contexte
+                margin = max(2, int(diameter * 0.1))
+                x_with_margin = max(0, x - margin)
+                y_with_margin = max(0, y - margin)
+                width_with_margin = diameter + 2 * margin
+                height_with_margin = diameter + 2 * margin
+                
+                # Vérifier si c'est réellement un cercle en examinant le contenu
+                is_circle = True  # On pourrait ajouter une vérification plus poussée ici
+                
+                if is_circle:
+                    checkbox_regions.append({
+                        "x": x,
+                        "y": y,
+                        "width": diameter,
+                        "height": diameter,
+                        "x_with_margin": x_with_margin,
+                        "y_with_margin": y_with_margin,
+                        "width_with_margin": width_with_margin,
+                        "height_with_margin": height_with_margin,
+                        "radius": int(radius / scale),
+                        "type": "circle",
+                        "confidence": 0.7
+                    })
+        
+        return checkbox_regions
+
+    def _find_nearest_label(self, x, y, width, height, text_dict):
+        """
+        Trouve l'étiquette de texte la plus proche d'une case à cocher.
+        
+        Args:
+            x, y, width, height: Coordonnées de la case à cocher
+            text_dict: Dictionnaire de texte extrait
+            
+        Returns:
+            Étiquette trouvée ou chaîne vide
+        """
+        # Calculer le centre de la case à cocher
+        checkbox_center_x = x + width // 2
+        checkbox_center_y = y + height // 2
+        
+        # Distance maximale pour considérer un texte comme étiquette
+        max_distance = 100
+        
+        nearest_text = ""
+        min_distance = float('inf')
+        
+        # Parcourir les blocs de texte
+        for block in text_dict.get("blocks", []):
+            if block.get("type", -1) != 0:  # Ignorer les non-texte
+                continue
+            
+            # Parcourir les lignes du bloc
+            for line in block.get("lines", []):
+                # Récupérer le texte de la ligne
+                line_text = " ".join([span.get("text", "") for span in line.get("spans", [])])
+                line_text = line_text.strip()
+                
+                if not line_text:
+                    continue
+                
+                # Coordonnées du centre de la ligne
+                line_bbox = line.get("bbox", [0, 0, 0, 0])
+                line_center_x = (line_bbox[0] + line_bbox[2]) / 2
+                line_center_y = (line_bbox[1] + line_bbox[3]) / 2
+                
+                # Calculer la distance
+                distance = ((line_center_x - checkbox_center_x) ** 2 + 
+                            (line_center_y - checkbox_center_y) ** 2) ** 0.5
+                
+                # Vérifier si c'est l'étiquette la plus proche
+                if distance < min_distance and distance < max_distance:
+                    # Vérifier que le texte ne contient pas lui-même un symbole de case à cocher
+                    if not any(symbol in line_text for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣"]):
+                        min_distance = distance
+                        nearest_text = line_text
+        
+        # Nettoyer l'étiquette
+        if nearest_text:
+            # Supprimer les caractères spéciaux ou symboles qui pourraient être présents
+            for symbol in ["•", "○", "◦", "▪", "▫", "◆", "◇", "–", "-", "*"]:
+                nearest_text = nearest_text.replace(symbol, "").strip()
+        
+        return nearest_text
+
     def _extract_text_blocks(self, page_text):
         """
         Extrait les blocs de texte depuis le dictionnaire de texte de page.
