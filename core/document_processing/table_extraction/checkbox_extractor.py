@@ -346,10 +346,10 @@ class CheckboxExtractor:
         """
         try:
             # Extraire la région de la case avec marge
-            x = region["x_with_margin"]
-            y = region["y_with_margin"]
-            w = region["width_with_margin"]
-            h = region["height_with_margin"]
+            x = region["x_with_margin"] if "x_with_margin" in region else region["x"]
+            y = region["y_with_margin"] if "y_with_margin" in region else region["y"]
+            w = region["width_with_margin"] if "width_with_margin" in region else region["width"]
+            h = region["height_with_margin"] if "height_with_margin" in region else region["height"]
             
             # S'assurer que les limites sont valides
             if y + h > img.shape[0] or x + w > img.shape[1]:
@@ -357,36 +357,48 @@ class CheckboxExtractor:
             
             checkbox_img = img[y:y+h, x:x+w]
             
-            # Binariser l'image de la case
+            # 1. Binariser l'image de la case
             _, binary = cv2.threshold(checkbox_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             
+            # 2. Calculer les ratios de pixels noirs pour différentes régions
+            
             # Enlever les bordures qui peuvent affecter la détection
-            # Créer un masque intérieur
             inner_margin = 2
             if w > 2*inner_margin and h > 2*inner_margin:
+                # Créer un masque pour isoler la partie intérieure
                 mask = np.zeros_like(binary)
                 mask[inner_margin:-inner_margin, inner_margin:-inner_margin] = 1
-                binary = binary * mask
-            
-            # Calculer le ratio de pixels noirs (contenu) par rapport à l'aire totale de l'intérieur
-            black_pixels = np.sum(binary > 0)
-            masked_area = np.sum(mask) if 'mask' in locals() else binary.size
-            total_area = binary.shape[0] * binary.shape[1]
-            
-            # Le ratio dépend aussi de la densité des pixels noirs dans la région centrale
-            fill_ratio = black_pixels / masked_area if masked_area > 0 else black_pixels / total_area
-            
-            # Analyse de la distribution des pixels noirs
-            # Une case cochée a généralement des pixels plus concentrés au centre
-            if 'mask' in locals() and np.sum(mask) > 0:
-                center_binary = binary[inner_margin*2:-inner_margin*2, inner_margin*2:-inner_margin*2] if w > 4*inner_margin and h > 4*inner_margin else binary
-                center_ratio = np.sum(center_binary > 0) / center_binary.size if center_binary.size > 0 else 0
+                inner_binary = binary * mask
                 
-                # Une case est cochée si le ratio central ou le ratio global dépasse le seuil
-                return center_ratio > self.checked_threshold * 1.2 or fill_ratio > self.checked_threshold
+                # Calculer le ratio de pixels noirs dans la région intérieure
+                black_pixels_inner = np.sum(inner_binary > 0)
+                inner_area = np.sum(mask)
+                inner_ratio = black_pixels_inner / inner_area if inner_area > 0 else 0
+                
+                # Calculer le ratio au centre (où une marque serait probablement présente)
+                center_margin = max(inner_margin * 2, min(w, h) // 4)
+                if w > 2*center_margin and h > 2*center_margin:
+                    center_mask = np.zeros_like(binary)
+                    center_mask[center_margin:-center_margin, center_margin:-center_margin] = 1
+                    center_binary = binary * center_mask
+                    
+                    center_pixels = np.sum(center_binary > 0)
+                    center_area = np.sum(center_mask)
+                    center_ratio = center_pixels / center_area if center_area > 0 else 0
+                    
+                    # Une case est probablement cochée si le ratio central est élevé
+                    if center_ratio > 0.2:  # Seuil ajusté pour le centre
+                        return True
+                
+                # Évaluer le ratio intérieur
+                return inner_ratio > self.checked_threshold
             
-            # Si on ne peut pas analyser le centre, on utilise juste le ratio global
-            return fill_ratio > self.checked_threshold
+            # Fallback: ratio global si on ne peut pas isoler l'intérieur
+            black_pixels = np.sum(binary > 0)
+            total_area = binary.size
+            fill_ratio = black_pixels / total_area
+            
+            return fill_ratio > self.checked_threshold * 1.2  # Seuil un peu plus élevé pour le ratio global
             
         except Exception as e:
             logger.error(f"Erreur analyse case cochée: {e}")
@@ -432,13 +444,16 @@ class CheckboxExtractor:
                             span_center_x = (bbox[0] + bbox[2]) / 2
                             span_center_y = (bbox[1] + bbox[3]) / 2
                             
-                            all_spans.append({
+                            # Ajouter des informations supplémentaires au span
+                            span_info = {
                                 "text": span_text,
                                 "center_x": span_center_x,
                                 "center_y": span_center_y,
                                 "bbox": bbox,
                                 "is_header": span_text.endswith(":") or span_text.endswith("/"),
-                            })
+                                "is_value": span_text.lower() in ["oui", "non", "yes", "no", "true", "false"]
+                            }
+                            all_spans.append(span_info)
         
         # Traiter d'abord les groupes de cases à cocher (Oui/Non)
         for y_key, group in checkbox_groups.items():
@@ -509,6 +524,10 @@ class CheckboxExtractor:
         
         # Structure typique des cases à cocher: "Option Oui Non"
         for region in checkbox_regions:
+            # Vérifier si cette région a déjà été traitée dans un groupe
+            if hasattr(region, "processed") and region["processed"]:
+                continue
+                
             # Coordonnées du centre de la case
             checkbox_center_x = region.get("center_x", region["x"] + region["width"] // 2)
             checkbox_center_y = region.get("center_y", region["y"] + region["height"] // 2)
@@ -542,15 +561,6 @@ class CheckboxExtractor:
             # Analyse des spans proches
             for span in nearby_spans:
                 text = span["text"].strip()
-                
-                # CORRECTION: Initialiser les attributs is_value et is_header s'ils n'existent pas
-                if "is_value" not in span:
-                    # Déterminer si c'est une valeur (Oui/Non)
-                    span["is_value"] = any(v in text.lower() for v in ["oui", "non", "yes", "no", "true", "false"])
-                
-                if "is_header" not in span:
-                    # Déterminer si c'est un en-tête de section
-                    span["is_header"] = text.endswith(":") or text.endswith("/")
                 
                 # Détermination du type de texte
                 if span["is_value"]:
@@ -725,3 +735,152 @@ class CheckboxExtractor:
                     selected_values[label] = value
         
         return selected_values
+    
+    async def extract_form_checkboxes(
+        self, 
+        pdf_path: Union[str, Path, io.BytesIO],
+        page_range: Optional[List[int]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Méthode optimisée pour extraire les cases à cocher des formulaires PDF structurés.
+        Utilise des heuristiques spécifiques aux formulaires pour une meilleure détection.
+        
+        Args:
+            pdf_path: Chemin ou objet BytesIO du fichier PDF
+            page_range: Liste optionnelle des pages à analyser (1-based)
+            
+        Returns:
+            Dictionnaire des résultats avec les cases à cocher
+        """
+        try:
+            with metrics.timer("form_checkbox_extraction"):
+                # Ouvrir le document PDF
+                if isinstance(pdf_path, (str, Path)):
+                    pdf_doc = fitz.open(pdf_path)
+                else:
+                    # Pour BytesIO, on doit réinitialiser la position et l'ouvrir comme stream
+                    pdf_path.seek(0)
+                    pdf_doc = fitz.open(stream=pdf_path.read(), filetype="pdf")
+                
+                # Si page_range n'est pas spécifié, analyser tout le document
+                if page_range is None:
+                    page_range = list(range(len(pdf_doc)))
+                else:
+                    # Convertir page_range de 1-based à 0-based
+                    page_range = [p-1 for p in page_range if 0 <= p-1 < len(pdf_doc)]
+                
+                results = {
+                    "metadata": {
+                        "filename": getattr(pdf_path, "name", str(pdf_path)) if hasattr(pdf_path, "name") else "unknown",
+                        "page_count": len(pdf_doc),
+                        "processed_pages": len(page_range),
+                        "extraction_date": datetime.now().isoformat()
+                    },
+                    "sections": {},
+                    "checkboxes": []
+                }
+                
+                # Recherche de motifs pour détecter les cases cochées
+                oui_checked_patterns = ["☑ Oui", "☒ Oui", "■ Oui", "✓ Oui", "[x] Oui", "[X] Oui"]
+                non_checked_patterns = ["☑ Non", "☒ Non", "■ Non", "✓ Non", "[x] Non", "[X] Non"]
+                
+                # Traiter chaque page
+                for page_idx in page_range:
+                    page = pdf_doc[page_idx]
+                    
+                    # Obtenir le texte structuré de la page
+                    text_dict = page.get_text("dict")
+                    
+                    # Pour chaque bloc de texte
+                    for block in text_dict["blocks"]:
+                        if block["type"] != 0:  # Ignorer les blocs non-textuels
+                            continue
+                        
+                        current_section = "Information"
+                        
+                        # Analyser chaque ligne
+                        for line in block.get("lines", []):
+                            # Reconstruire le texte complet de la ligne
+                            line_text = " ".join([span["text"] for span in line.get("spans", [])])
+                            
+                            # Détecter si c'est un en-tête de section
+                            if line_text.endswith(":") and not any(word in line_text.lower() for word in ["oui", "non"]):
+                                current_section = line_text.rstrip(":")
+                                continue
+                            
+                            # Vérifier si cette ligne contient une paire Oui/Non
+                            if ("Oui" in line_text and "Non" in line_text) or any(pattern in line_text for pattern in oui_checked_patterns + non_checked_patterns):
+                                # Extraire l'étiquette (texte avant les options)
+                                # Méthode 1: Split sur "Oui"
+                                if "Oui" in line_text:
+                                    parts = line_text.split("Oui", 1)
+                                    if len(parts) > 1:
+                                        label = parts[0].strip()
+                                        rest = "Oui" + parts[1]
+                                # Méthode 2: Utiliser les spans
+                                else:
+                                    label_spans = []
+                                    for span in line.get("spans", []):
+                                        span_text = span["text"].strip()
+                                        if not any(pattern in span_text for pattern in ["Oui", "Non", "☑", "☒", "■", "✓"]):
+                                            label_spans.append(span_text)
+                                    
+                                    label = " ".join(label_spans).strip()
+                                
+                                # Si l'étiquette est trop courte ou vide, continuer
+                                if not label or len(label) < 2:
+                                    continue
+                                
+                                # Déterminer quelle option est cochée
+                                is_oui_checked = any(pattern in line_text for pattern in oui_checked_patterns)
+                                is_non_checked = any(pattern in line_text for pattern in non_checked_patterns)
+                                
+                                # Si aucune détection claire par motif, analyser plus en détail
+                                if not is_oui_checked and not is_non_checked:
+                                    # Rechercher des symboles spécifiques près des étiquettes "Oui" et "Non"
+                                    for span in line.get("spans", []):
+                                        span_text = span["text"]
+                                        if "Oui" in span_text and any(c in span_text for c in ["☑", "☒", "■", "✓", "x", "X"]):
+                                            is_oui_checked = True
+                                        if "Non" in span_text and any(c in span_text for c in ["☑", "☒", "■", "✓", "x", "X"]):
+                                            is_non_checked = True
+                                
+                                # Si on a une détection claire
+                                if is_oui_checked or is_non_checked:
+                                    if is_oui_checked and not is_non_checked:
+                                        value = "Oui"
+                                    elif is_non_checked and not is_oui_checked:
+                                        value = "Non"
+                                    else:
+                                        # Cas ambigu - privilégier Oui par défaut
+                                        value = "Oui"
+                                    
+                                    # Créer l'entrée
+                                    checkbox_info = {
+                                        "label": label,
+                                        "value": value,
+                                        "checked": True,
+                                        "section": current_section,
+                                        "page": page_idx + 1,
+                                    }
+                                    
+                                    # Ajouter à la section appropriée
+                                    if current_section not in results["sections"]:
+                                        results["sections"][current_section] = []
+                                    
+                                    results["sections"][current_section].append(checkbox_info)
+                                    results["checkboxes"].append(checkbox_info)
+                
+                # Fermer le document
+                pdf_doc.close()
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Erreur extraction cases à cocher formulaire: {e}")
+            metrics.increment_counter("checkbox_extraction_errors")
+            return {
+                "error": str(e),
+                "sections": {},
+                "checkboxes": []
+            }
