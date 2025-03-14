@@ -384,44 +384,60 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
             return False
             
         # Vérifier que tous les éléments sont bien des types adaptés
-        if not isinstance(header_row, (list, tuple)) or not all(isinstance(row, (list, tuple)) for row in data_rows):
-            logger.warning("Format de données invalide pour l'analyse d'en-tête")
+        if not isinstance(header_row, (list, tuple)):
+            return False
+        
+        if not all(isinstance(row, (list, tuple)) for row in data_rows if row):
             return False
             
-        # Vérifier si l'en-tête contient des chaînes numériques
-        header_numeric = 0
-        for cell in header_row:
-            if isinstance(cell, str) and cell.replace('.', '').isdigit():
-                header_numeric += 1
-            elif isinstance(cell, (int, float)):
-                header_numeric += 1
-        
-        # Échantillon des lignes de données pour vérifier si elles sont numériques
-        sample_size = min(5, len(data_rows))
-        sample_rows = data_rows[:sample_size]
-        
-        numeric_counts = []
-        for row in sample_rows:
-            numeric_count = 0
-            for cell in row:
-                if isinstance(cell, str) and cell.replace('.', '').isdigit():
-                    numeric_count += 1
-                elif isinstance(cell, (int, float)):
-                    numeric_count += 1
-            numeric_counts.append(numeric_count)
-        
-        # Calculer le pourcentage moyen de cellules numériques dans les données
-        # Éviter la division par zéro
-        if sample_size == 0 or len(header_row) == 0:
+        # Éviter les erreurs si les listes sont vides
+        if len(header_row) == 0 or len(data_rows) == 0:
             return False
         
-        avg_numeric_percent = sum(numeric_counts) / (sample_size * len(header_row))
-        
-        # Calculer le pourcentage de numériques dans l'en-tête
-        header_numeric_percent = header_numeric / len(header_row)
-        
-        # Si l'en-tête contient significativement moins de numériques que les données, c'est probablement un en-tête
-        return header_numeric_percent < avg_numeric_percent * 0.5
+        try:
+            # Vérifier si l'en-tête contient des chaînes numériques
+            header_numeric = 0
+            for cell in header_row:
+                if isinstance(cell, str) and cell.replace('.', '').isdigit():
+                    header_numeric += 1
+                elif isinstance(cell, (int, float)):
+                    header_numeric += 1
+            
+            # Échantillon des lignes de données pour vérifier si elles sont numériques
+            sample_size = min(5, len(data_rows))
+            if sample_size == 0:  # Éviter la division par zéro
+                return False
+                
+            sample_rows = data_rows[:sample_size]
+            
+            numeric_counts = []
+            for row in sample_rows:
+                if not row:  # Skip empty rows
+                    continue
+                    
+                numeric_count = 0
+                for cell in row:
+                    if isinstance(cell, str) and cell.replace('.', '').isdigit():
+                        numeric_count += 1
+                    elif isinstance(cell, (int, float)):
+                        numeric_count += 1
+                numeric_counts.append(numeric_count)
+            
+            # Calculer le pourcentage moyen de cellules numériques dans les données
+            # Éviter la division par zéro
+            if not numeric_counts or len(header_row) == 0:
+                return False
+                
+            avg_numeric_percent = sum(numeric_counts) / (len(numeric_counts) * len(header_row))
+            
+            # Calculer le pourcentage de numériques dans l'en-tête
+            header_numeric_percent = header_numeric / len(header_row)
+            
+            # Si l'en-tête contient significativement moins de numériques que les données, c'est probablement un en-tête
+            return header_numeric_percent < avg_numeric_percent * 0.5
+        except Exception as e:
+            logger.debug(f"Erreur lors de l'analyse d'en-tête: {e}")
+            return False
     
     async def _ocr_table_grid_approach(
         self, 
@@ -1542,13 +1558,13 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                 # Initialiser les pondérations selon le type de PDF
                 if context.pdf_type == PDFType.SCANNED:
                     strategies = [
-                        (self.ocr_strategy, "ocr", 1.2, 45.0),  # OCR a besoin de plus de temps
+                        (self.ocr_strategy, "ocr", 1.2, 60.0),  # Augmenter le timeout OCR pour les PDF scannés
                     ]
                     
                     # Ajouter IA si disponible
                     if self.table_detector:
                         ai_strategy = AIDetectionTableStrategy(self.table_detector)
-                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3, 30.0))
+                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3, 40.0))
                 elif context.pdf_type == PDFType.HYBRID:
                     # Pour PDF hybride, essayer plusieurs approches
                     strategies = [
@@ -1556,8 +1572,8 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                         (self.tabula_strategy, "tabula", 0.9, 20.0),
                         (self.pdfplumber_strategy, "pdfplumber", 0.8, 15.0)
                     ]
-                    # Ajouter OCR avec faible pondération
-                    strategies.append((self.ocr_strategy, "ocr", 0.6, 30.0))
+                    # Ajouter OCR avec faible pondération mais timeout plus long
+                    strategies.append((self.ocr_strategy, "ocr", 0.6, 45.0))
                 else:
                     # PDF digital standard
                     strategies = [
