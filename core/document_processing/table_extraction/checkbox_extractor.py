@@ -1278,6 +1278,146 @@ class CheckboxExtractor:
         
         return checkbox_regions
     
+    async def _convert_page_to_image(self, page):
+        """
+        Convertit une page PDF en image pour l'analyse visuelle.
+        
+        Args:
+            page: Page PDF (fitz page)
+            
+        Returns:
+            Image numpy de la page
+        """
+        try:
+            # Créer un pixmap avec une résolution suffisante
+            pix = page.get_pixmap(matrix=fitz.Matrix(self.dpi/72, self.dpi/72))
+            
+            # Convertir en array numpy
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            
+            # Convertir en RGB si nécessaire
+            if pix.n == 4:  # RGBA
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+            elif pix.n == 1:  # Grayscale
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            
+            return img
+        except Exception as e:
+            self.logger.error(f"Erreur conversion page en image: {e}")
+            return None
+
+    def _filter_checkbox_candidates(self, checkbox_regions):
+        """
+        Filtre les candidats de cases à cocher pour éliminer les faux positifs.
+        
+        Args:
+            checkbox_regions: Liste des régions candidates
+            
+        Returns:
+            Liste filtrée des régions de cases à cocher
+        """
+        if not checkbox_regions:
+            return []
+        
+        filtered_regions = []
+        
+        # Trier les régions par score de confiance
+        sorted_regions = sorted(checkbox_regions, key=lambda x: -(x.get("confidence", 0) or 0))
+        
+        # Filtrer les régions qui se chevauchent trop
+        for region in sorted_regions:
+            x1, y1 = region.get("x", 0), region.get("y", 0)
+            w1, h1 = region.get("width", 0), region.get("height", 0)
+            area1 = w1 * h1
+            
+            # Ignorer les régions trop petites ou trop grandes
+            if area1 < self.min_checkbox_area or w1 > self.checkbox_max_size * 2 or h1 > self.checkbox_max_size * 2:
+                continue
+            
+            # Vérifier si cette région chevauche une région déjà acceptée
+            is_overlapping = False
+            for accepted in filtered_regions:
+                x2, y2 = accepted.get("x", 0), accepted.get("y", 0)
+                w2, h2 = accepted.get("width", 0), accepted.get("height", 0)
+                
+                # Calculer le chevauchement
+                x_overlap = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
+                y_overlap = max(0, min(y1 + h1, y2 + h2) - max(y1, y2))
+                overlap_area = x_overlap * y_overlap
+                
+                # Si le chevauchement est significatif
+                if overlap_area > 0.5 * min(area1, w2 * h2):
+                    is_overlapping = True
+                    break
+            
+            if not is_overlapping:
+                # Vérifier le ratio largeur/hauteur pour s'assurer que c'est approximativement carré
+                aspect_ratio = w1 / h1 if h1 > 0 else 0
+                if 0.7 <= aspect_ratio <= 1.3:  # Approximativement carré
+                    region["confidence"] = min(1.0, region.get("confidence", 0.7) * 1.2)  # Bonus de confiance
+                else:
+                    region["confidence"] = max(0.1, region.get("confidence", 0.7) * 0.8)  # Malus de confiance
+                
+                # Ajouter à la liste filtrée
+                filtered_regions.append(region)
+        
+        # Post-traitement: stabiliser les tailles des régions similaires
+        if filtered_regions:
+            # Calculer la taille médiane
+            widths = [r.get("width", 0) for r in filtered_regions]
+            heights = [r.get("height", 0) for r in filtered_regions]
+            median_width = sorted(widths)[len(widths) // 2]
+            median_height = sorted(heights)[len(heights) // 2]
+            
+            # Ajuster les régions proches de la médiane
+            for region in filtered_regions:
+                w, h = region.get("width", 0), region.get("height", 0)
+                
+                # Si la taille est proche de la médiane, l'ajuster pour plus de cohérence
+                if 0.8 * median_width <= w <= 1.2 * median_width and 0.8 * median_height <= h <= 1.2 * median_height:
+                    # Ajuster la taille tout en conservant le centre
+                    x, y = region.get("x", 0), region.get("y", 0)
+                    center_x = x + w / 2
+                    center_y = y + h / 2
+                    
+                    # Définir la nouvelle taille normalisée
+                    new_width = median_width
+                    new_height = median_height
+                    
+                    # Recalculer les coordonnées à partir du centre
+                    region["x"] = max(0, int(center_x - new_width / 2))
+                    region["y"] = max(0, int(center_y - new_height / 2))
+                    region["width"] = new_width
+                    region["height"] = new_height
+        
+        return filtered_regions
+
+    # Méthode supplémentaire pour la détection de checkbox par forme
+    def find_peaks(x, height=None, threshold=None, distance=None):
+        """
+        Version simplifiée de scipy.signal.find_peaks pour détecter les pics dans un histogramme.
+        """
+        results = []
+        if len(x) < 3:
+            return np.array(results), {}
+        
+        # Trouver les maxima locaux
+        for i in range(1, len(x)-1):
+            if x[i-1] < x[i] and x[i] > x[i+1]:
+                # Vérifier le seuil minimal
+                if height is None or x[i] >= height:
+                    results.append(i)
+        
+        # Filtrer par distance si spécifiée
+        if distance is not None and len(results) > 1:
+            filtered = [results[0]]
+            for i in range(1, len(results)):
+                if results[i] - filtered[-1] >= distance:
+                    filtered.append(results[i])
+            results = filtered
+        
+        return np.array(results), {"peak_heights": [x[i] for i in results]}
+
     def _detect_checkboxes_visual(self, page, text_dict, page_img, page_num):
         """
         Détecte les cases à cocher visuellement dans l'image de la page.
