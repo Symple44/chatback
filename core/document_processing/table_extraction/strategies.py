@@ -322,38 +322,60 @@ class PDFPlumberTableStrategy(PDFTableStrategy):
                         page = pdf.pages[page_idx]
                         
                         # Extraction des tableaux
-                        extracted_tables = await loop.run_in_executor(
-                            self.executor,
-                            lambda: page.extract_tables(table_settings)
-                        )
+                        try:
+                            extracted_tables = await loop.run_in_executor(
+                                self.executor,
+                                lambda: page.extract_tables(table_settings)
+                            )
+                        except Exception as e:
+                            logger.warning(f"Erreur extraction tableaux PDFPlumber: {e}")
+                            continue
                         
                         for i, table_data in enumerate(extracted_tables):
                             if not table_data or len(table_data) < 2:  # Au moins une ligne d'en-tête et une ligne de données
                                 continue
                                 
-                            # Vérifications pour éviter l'erreur "arg must be a list, tuple, 1-d array, or Series"
+                            # Vérifications pour éviter les erreurs
                             valid_table = True
                             for row in table_data:
                                 if not isinstance(row, (list, tuple)):
                                     logger.warning(f"Format de ligne non valide dans le tableau PDFPlumber")
                                     valid_table = False
                                     break
+                                
+                                # Vérifier également que tous les éléments de la ligne sont des types valides
+                                for cell in row:
+                                    if not isinstance(cell, (str, int, float, type(None))):
+                                        valid_table = False
+                                        break
                             
                             if not valid_table:
                                 continue
                             
                             # Conversion en DataFrame avec validation supplémentaire
                             try:
+                                # Normalisation plus stricte des données
+                                normalized_rows = []
+                                for row in table_data:
+                                    # Convertir tous les éléments en chaînes
+                                    normalized_row = []
+                                    for cell in row:
+                                        if cell is None:
+                                            normalized_row.append("")
+                                        else:
+                                            normalized_row.append(str(cell).strip())
+                                    normalized_rows.append(normalized_row)
+                                
                                 # Déterminer si la première ligne est un en-tête
-                                is_header = self._is_valid_header(table_data[0], table_data[1:])
+                                is_header = self._is_valid_header(normalized_rows[0], normalized_rows[1:])
                                 
                                 if is_header:
-                                    # Assurer que tous les noms de colonnes sont des chaînes
-                                    header_row = [str(col) if col is not None else f"Col_{j+1}" for j, col in enumerate(table_data[0])]
-                                    df = pd.DataFrame(table_data[1:], columns=header_row)
+                                    # Assurer que tous les noms de colonnes sont des chaînes non vides
+                                    header_row = [col if col else f"Col_{j+1}" for j, col in enumerate(normalized_rows[0])]
+                                    df = pd.DataFrame(normalized_rows[1:], columns=header_row)
                                 else:
-                                    columns = [f"Col_{j+1}" for j in range(len(table_data[0]))]
-                                    df = pd.DataFrame(table_data, columns=columns)
+                                    columns = [f"Col_{j+1}" for j in range(len(normalized_rows[0]))]
+                                    df = pd.DataFrame(normalized_rows, columns=columns)
                                 
                                 # Nettoyage
                                 df = self._process_dataframe(df)
@@ -1209,7 +1231,7 @@ class OCRTableStrategy(PDFTableStrategy):
         psm: int = 6
     ) -> Optional[pd.DataFrame]:
         """
-        Convertit une image de tableau en DataFrame par OCR.
+        Convertit une image de tableau en DataFrame par OCR de manière optimisée.
         
         Args:
             table_img: Image du tableau
@@ -1220,7 +1242,19 @@ class OCRTableStrategy(PDFTableStrategy):
             DataFrame ou None si échec
         """
         try:
-            # Prétraitement amélioré - utiliser la méthode existante sans arguments supplémentaires
+            # Réduire la taille de l'image si elle est trop grande pour accélérer le traitement
+            height, width = table_img.shape[:2]
+            max_size = 1500  # Taille maximale pour l'OCR
+            scale_factor = 1.0
+            
+            if width > max_size or height > max_size:
+                scale_factor = max_size / max(width, height)
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
+                table_img = cv2.resize(table_img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Image redimensionnée: {width}x{height} -> {new_width}x{new_height}")
+            
+            # Prétraitement amélioré
             enhanced_img = await self._enhance_table_image(table_img)
             
             # Application d'un preprocessing spécifique aux tableaux
@@ -1241,19 +1275,33 @@ class OCRTableStrategy(PDFTableStrategy):
                 # Détection des cellules par intersection des lignes
                 cells = self._detect_cells(grid, binary)
                 if cells and len(cells) > 4:  # Au moins quelques cellules
+                    logger.debug(f"Approche cellules détectée: {len(cells)} cellules")
                     return await self._process_cells_to_dataframe(cells, enhanced_img, lang)
             
-            # Si pas de grille ou échec, utiliser l'OCR normal
+            # Si pas de grille ou échec, utiliser l'OCR normal mais avec des optimisations
             loop = asyncio.get_event_loop()
             
             # Configuration OCR optimisée
+            # Utiliser un PSM plus spécifique aux tableaux (PSM 6 = bloc de texte uniforme)
             custom_config = f'--oem 3 --psm {psm} -l {lang} --dpi 300'
             
-            # Exécuter l'OCR
-            text = await loop.run_in_executor(
-                self.executor,
-                lambda: pytesseract.image_to_string(enhanced_img, config=custom_config)
-            )
+            # Exécuter l'OCR avec un timeout interne
+            try:
+                text = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self.executor,
+                        lambda: pytesseract.image_to_string(enhanced_img, config=custom_config)
+                    ),
+                    timeout=30.0  # Timeout interne pour l'OCR
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Timeout interne pour l'OCR, utilisant une approche simplifiée")
+                # Essayer une approche plus simple avec une image davantage réduite
+                smaller_img = cv2.resize(enhanced_img, None, fx=0.7, fy=0.7, interpolation=cv2.INTER_AREA)
+                text = await loop.run_in_executor(
+                    self.executor,
+                    lambda: pytesseract.image_to_string(smaller_img, config='--oem 3 --psm 6 -l fra+eng')
+                )
             
             if not text.strip():
                 logger.warning("Aucun texte détecté par OCR")
@@ -1263,7 +1311,7 @@ class OCRTableStrategy(PDFTableStrategy):
             return await self._parse_ocr_text_to_dataframe(text)
             
         except Exception as e:
-            logger.error(f"Erreur OCR tableau amélioré: {e}")
+            logger.error(f"Erreur OCR tableau: {e}")
             return None
     
     def _detect_separator(self, lines: List[str]) -> str:
@@ -1558,32 +1606,35 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                 # Initialiser les pondérations selon le type de PDF
                 if context.pdf_type == PDFType.SCANNED:
                     strategies = [
-                        (self.ocr_strategy, "ocr", 1.2, 60.0),  # Augmenter le timeout OCR pour les PDF scannés
+                        (self.ocr_strategy, "ocr", 1.2, 90.0),  # Augmenter significativement le timeout OCR pour les PDF scannés
                     ]
                     
                     # Ajouter IA si disponible
                     if self.table_detector:
                         ai_strategy = AIDetectionTableStrategy(self.table_detector)
-                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3, 40.0))
+                        strategies.insert(0, (ai_strategy, "ai-detection", 1.3, 45.0))
                 elif context.pdf_type == PDFType.HYBRID:
-                    # Pour PDF hybride, essayer plusieurs approches
+                    # Pour PDF hybride, essayer plusieurs approches - mais ne pas utiliser OCR automatiquement
+                    # si la complexité est trop élevée
                     strategies = [
-                        (self.camelot_strategy, "camelot", 1.0, 25.0),
-                        (self.tabula_strategy, "tabula", 0.9, 20.0),
-                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 15.0)
+                        (self.camelot_strategy, "camelot", 1.1, 30.0),
+                        (self.tabula_strategy, "tabula", 0.9, 25.0),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 20.0)
                     ]
-                    # Ajouter OCR avec faible pondération mais timeout plus long
-                    strategies.append((self.ocr_strategy, "ocr", 0.6, 45.0))
+                    
+                    # Ajouter OCR seulement si la complexité est raisonnable
+                    if context.complexity_score < 0.6:
+                        strategies.append((self.ocr_strategy, "ocr", 0.7, 60.0))
                 else:
                     # PDF digital standard
                     strategies = [
-                        (self.camelot_strategy, "camelot", 1.1, 20.0),
-                        (self.tabula_strategy, "tabula", 1.0, 15.0),
-                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 10.0)
+                        (self.camelot_strategy, "camelot", 1.1, 25.0),
+                        (self.tabula_strategy, "tabula", 1.0, 20.0),
+                        (self.pdfplumber_strategy, "pdfplumber", 0.8, 15.0)
                     ]
                 
                 # Estimer la complexité du document pour ajuster les timeouts
-                complexity_factor = min(2.0, max(1.0, context.complexity_score * 1.5))
+                complexity_factor = min(2.5, max(1.0, context.complexity_score * 1.8))
                 
                 # Exécuter les stratégies en parallèle avec un timeout pour éviter les blocages
                 tasks = []
@@ -1617,30 +1668,21 @@ class EnhancedHybridStrategy(PDFTableStrategy):
                 
                 if not results:
                     logger.warning("Aucun résultat trouvé avec les stratégies hybrides, tentative avec approche simple")
-                    # Fallback avec stratégie simple - avec timeout pour éviter blocage
+                    # Fallback avec stratégie simple - avec timeout amélioré
                     try:
                         return await asyncio.wait_for(
                             self._run_fallback_extraction(context),
-                            timeout=30.0
+                            timeout=60.0  # Augmenté à 60 secondes
                         )
                     except asyncio.TimeoutError:
                         logger.error("Timeout dépassé pour la stratégie de secours")
                         return []
                 
-                # Fusionner les résultats avec meilleure gestion des tableaux
+                # Fusionner les résultats
                 all_tables = await self._enhanced_merge_tables_results(results, context)
                 
-                # Appliquer une validation finale avec critères de qualité
-                validated_tables = []
-                for table in all_tables:
-                    # Validation personnalisée pour éviter les faux positifs
-                    if self._is_valid_table(table):
-                        # Normaliser le tableau avant de l'ajouter
-                        normalized_table = await self._normalize_table(table)
-                        validated_tables.append(normalized_table)
-                
-                logger.info(f"Hybride amélioré: {len(validated_tables)} tableaux extraits")
-                return validated_tables
+                logger.info(f"Hybride amélioré: {len(all_tables)} tableaux extraits")
+                return all_tables
                 
         except Exception as e:
             logger.error(f"Erreur extraction hybride améliorée: {e}")

@@ -146,7 +146,7 @@ class CheckboxExtractor:
         
     def _detect_checkboxes(self, img: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Détecte les cases à cocher dans une image.
+        Détecte les cases à cocher dans une image avec des algorithmes améliorés.
         
         Args:
             img: Image en niveaux de gris
@@ -154,64 +154,112 @@ class CheckboxExtractor:
         Returns:
             Liste des régions de cases à cocher détectées
         """
-        # Binarisation de l'image
-        _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        # Détection des contours
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        checkbox_regions = []
-        
-        # Analyser chaque contour pour détecter les cases à cocher
-        for contour in contours:
-            # Calculer l'aire et le périmètre
-            area = cv2.contourArea(contour)
-            perimeter = cv2.arcLength(contour, True)
-            
-            # Ignorer les contours trop petits
-            if area < self.min_checkbox_area:
-                continue
-            
-            # Approximer pour obtenir une forme polygonale
-            epsilon = 0.02 * perimeter
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            
-            # Vérifier si c'est un quadrilatère (4 côtés)
-            if len(approx) == 4:
-                x, y, w, h = cv2.boundingRect(approx)
+        try:
+            # Binarisation avec diverses méthodes pour améliorer la détection
+            methods = [
+                # Méthode 1: Binarisation Otsu standard
+                lambda x: cv2.threshold(x, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
                 
-                # Vérifier la taille
-                if (self.checkbox_min_size <= w <= self.checkbox_max_size and 
-                    self.checkbox_min_size <= h <= self.checkbox_max_size):
+                # Méthode 2: Binarisation adaptative
+                lambda x: cv2.adaptiveThreshold(x, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                            cv2.THRESH_BINARY_INV, 11, 2),
+                                            
+                # Méthode 3: Flou puis Otsu
+                lambda x: cv2.threshold(cv2.GaussianBlur(x, (5, 5), 0), 
+                                    0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+            ]
+            
+            all_checkbox_regions = []
+            
+            # Appliquer chaque méthode de binarisation
+            for method_idx, method in enumerate(methods):
+                binary = method(img)
+                
+                # Détection des contours
+                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Analyser chaque contour pour détecter les cases à cocher
+                for contour in contours:
+                    # Calculer l'aire et le périmètre
+                    area = cv2.contourArea(contour)
+                    perimeter = cv2.arcLength(contour, True)
                     
-                    # Vérifier si c'est approximativement carré
-                    aspect_ratio = float(w) / h
-                    if abs(aspect_ratio - 1.0) <= self.checkbox_tolerance:
-                        # C'est probablement une case à cocher
-                        # Ajouter une marge pour l'extraction
-                        margin = 2
-                        x_with_margin = max(0, x - margin)
-                        y_with_margin = max(0, y - margin)
-                        w_with_margin = w + 2 * margin
-                        h_with_margin = h + 2 * margin
+                    # Ignorer les contours trop petits
+                    if area < self.min_checkbox_area:
+                        continue
+                    
+                    # Approximer pour obtenir une forme polygonale
+                    epsilon = 0.05 * perimeter
+                    approx = cv2.approxPolyDP(contour, epsilon, True)
+                    
+                    # Les cases à cocher peuvent être des quadrilatères (4 côtés) ou des cercles
+                    if 4 <= len(approx) <= 8:
+                        x, y, w, h = cv2.boundingRect(approx)
                         
-                        checkbox_regions.append({
-                            "x": x,
-                            "y": y,
-                            "width": w,
-                            "height": h,
-                            "x_with_margin": x_with_margin,
-                            "y_with_margin": y_with_margin,
-                            "width_with_margin": w_with_margin,
-                            "height_with_margin": h_with_margin,
-                            "area": area
-                        })
-        
-        return checkbox_regions
+                        # Vérifier la taille et les proportions
+                        if (self.checkbox_min_size <= w <= self.checkbox_max_size and 
+                            self.checkbox_min_size <= h <= self.checkbox_max_size):
+                            
+                            # Vérifier si c'est approximativement carré ou rond
+                            aspect_ratio = float(w) / h
+                            if abs(aspect_ratio - 1.0) <= self.checkbox_tolerance:
+                                # Calculer un score de confiance basé sur la forme
+                                # Plus la forme est proche d'un carré parfait ou d'un cercle, plus le score est élevé
+                                shape_score = 1.0 - abs(aspect_ratio - 1.0)
+                                
+                                # C'est probablement une case à cocher
+                                # Ajouter une marge pour l'extraction
+                                margin = 2
+                                x_with_margin = max(0, x - margin)
+                                y_with_margin = max(0, y - margin)
+                                w_with_margin = w + 2 * margin
+                                h_with_margin = h + 2 * margin
+                                
+                                checkbox_regions = {
+                                    "x": x,
+                                    "y": y,
+                                    "width": w,
+                                    "height": h,
+                                    "x_with_margin": x_with_margin,
+                                    "y_with_margin": y_with_margin,
+                                    "width_with_margin": w_with_margin,
+                                    "height_with_margin": h_with_margin,
+                                    "area": area,
+                                    "method": method_idx,
+                                    "confidence": shape_score,
+                                    "center_x": x + w // 2,
+                                    "center_y": y + h // 2
+                                }
+                                all_checkbox_regions.append(checkbox_regions)
+            
+            # Filtrer les doublons (cases détectées par plusieurs méthodes)
+            unique_regions = []
+            centers = []
+            
+            for region in sorted(all_checkbox_regions, key=lambda r: -r["confidence"]):
+                center = (region["center_x"], region["center_y"])
+                
+                # Vérifier si c'est un doublon (même centre ou très proche)
+                is_duplicate = False
+                for existing_center in centers:
+                    distance = np.sqrt((center[0] - existing_center[0])**2 + (center[1] - existing_center[1])**2)
+                    if distance < self.checkbox_min_size:
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    unique_regions.append(region)
+                    centers.append(center)
+            
+            return unique_regions
+            
+        except Exception as e:
+            logger.error(f"Erreur détection cases à cocher: {e}")
+            return []
     
     def _is_checkbox_checked(self, img: np.ndarray, region: Dict[str, Any]) -> bool:
         """
-        Détermine si une case à cocher est cochée en analysant son contenu.
+        Détermine si une case à cocher est cochée avec une méthode améliorée.
         
         Args:
             img: Image en niveaux de gris
@@ -220,28 +268,53 @@ class CheckboxExtractor:
         Returns:
             True si la case est cochée, False sinon
         """
-        # Extraire la région de la case avec marge
-        x = region["x_with_margin"]
-        y = region["y_with_margin"]
-        w = region["width_with_margin"]
-        h = region["height_with_margin"]
-        
-        # S'assurer que les limites sont valides
-        if y + h > img.shape[0] or x + w > img.shape[1]:
+        try:
+            # Extraire la région de la case avec marge
+            x = region["x_with_margin"]
+            y = region["y_with_margin"]
+            w = region["width_with_margin"]
+            h = region["height_with_margin"]
+            
+            # S'assurer que les limites sont valides
+            if y + h > img.shape[0] or x + w > img.shape[1]:
+                return False
+            
+            checkbox_img = img[y:y+h, x:x+w]
+            
+            # Binariser l'image de la case
+            _, binary = cv2.threshold(checkbox_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            
+            # Enlever les bordures qui peuvent affecter la détection
+            # Créer un masque intérieur
+            inner_margin = 2
+            if w > 2*inner_margin and h > 2*inner_margin:
+                mask = np.zeros_like(binary)
+                mask[inner_margin:-inner_margin, inner_margin:-inner_margin] = 1
+                binary = binary * mask
+            
+            # Calculer le ratio de pixels noirs (contenu) par rapport à l'aire totale de l'intérieur
+            black_pixels = np.sum(binary > 0)
+            masked_area = np.sum(mask) if 'mask' in locals() else binary.size
+            total_area = binary.shape[0] * binary.shape[1]
+            
+            # Le ratio dépend aussi de la densité des pixels noirs dans la région centrale
+            fill_ratio = black_pixels / masked_area if masked_area > 0 else black_pixels / total_area
+            
+            # Analyse de la distribution des pixels noirs
+            # Une case cochée a généralement des pixels plus concentrés au centre
+            if 'mask' in locals() and np.sum(mask) > 0:
+                center_binary = binary[inner_margin*2:-inner_margin*2, inner_margin*2:-inner_margin*2] if w > 4*inner_margin and h > 4*inner_margin else binary
+                center_ratio = np.sum(center_binary > 0) / center_binary.size if center_binary.size > 0 else 0
+                
+                # Une case est cochée si le ratio central ou le ratio global dépasse le seuil
+                return center_ratio > self.checked_threshold * 1.2 or fill_ratio > self.checked_threshold
+            
+            # Si on ne peut pas analyser le centre, on utilise juste le ratio global
+            return fill_ratio > self.checked_threshold
+            
+        except Exception as e:
+            logger.error(f"Erreur analyse case cochée: {e}")
             return False
-        
-        checkbox_img = img[y:y+h, x:x+w]
-        
-        # Binariser l'image de la case
-        _, binary = cv2.threshold(checkbox_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        # Calculer le ratio de pixels noirs (contenu) par rapport à l'aire totale
-        black_pixels = np.sum(binary > 0)
-        total_pixels = binary.shape[0] * binary.shape[1]
-        fill_ratio = black_pixels / total_pixels
-        
-        # Si le ratio dépasse le seuil, la case est considérée comme cochée
-        return fill_ratio > self.checked_threshold
     
     def _match_labels_to_checkboxes(
         self, 
@@ -251,7 +324,7 @@ class CheckboxExtractor:
         page_num: int
     ) -> List[Dict[str, Any]]:
         """
-        Associe les étiquettes aux cases à cocher et détermine leur état.
+        Associe les étiquettes aux cases à cocher avec une méthode améliorée.
         
         Args:
             checkbox_regions: Régions des cases à cocher détectées
@@ -267,53 +340,85 @@ class CheckboxExtractor:
         # Extraire les blocs de texte
         blocks = page_text.get("blocks", [])
         
+        # Extraire tous les spans de texte avec leurs coordonnées
+        all_spans = []
+        for block in blocks:
+            if block["type"] == 0:  # Type 0 = text block
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        span_text = span.get("text", "").strip()
+                        if span_text:
+                            # Calculer le centre du span
+                            bbox = span.get("bbox", [0, 0, 0, 0])
+                            span_center_x = (bbox[0] + bbox[2]) / 2
+                            span_center_y = (bbox[1] + bbox[3]) / 2
+                            
+                            all_spans.append({
+                                "text": span_text,
+                                "center_x": span_center_x,
+                                "center_y": span_center_y,
+                                "bbox": bbox,
+                                "is_value": span_text.lower() in ["oui", "non", "yes", "no", "true", "false"],
+                                "is_header": span_text.endswith(":") or span_text.endswith("/"),
+                            })
+        
         # Structure typique des cases à cocher: "Option Oui Non"
         for region in checkbox_regions:
             # Coordonnées du centre de la case
-            checkbox_center_x = region["x"] + region["width"] // 2
-            checkbox_center_y = region["y"] + region["height"] // 2
+            checkbox_center_x = region.get("center_x", region["x"] + region["width"] // 2)
+            checkbox_center_y = region.get("center_y", region["y"] + region["height"] // 2)
             
             # Déterminer si la case est cochée
             is_checked = self._is_checkbox_checked(img, region)
             
-            # Rechercher l'étiquette la plus proche et le type (Oui/Non)
+            # Rechercher les spans les plus proches
+            nearby_spans = []
+            for span in all_spans:
+                # Calculer la distance
+                distance = np.sqrt(
+                    (span["center_x"] - checkbox_center_x)**2 + 
+                    (span["center_y"] - checkbox_center_y)**2
+                )
+                
+                if distance < self.label_distance:
+                    nearby_spans.append({
+                        **span,
+                        "distance": distance
+                    })
+            
+            # Trier par distance
+            nearby_spans.sort(key=lambda s: s["distance"])
+            
+            # Valeurs par défaut
             closest_label = None
             closest_value = None
             closest_section = None
-            min_distance = float('inf')
             
-            for block in blocks:
-                if block["type"] == 0:  # Type 0 = text block
-                    for line in block["lines"]:
-                        for span in line["spans"]:
-                            span_text = span["text"].strip()
-                            if not span_text:
-                                continue
-                            
-                            # Coordonnées du span
-                            span_x = (span["bbox"][0] + span["bbox"][2]) / 2
-                            span_y = (span["bbox"][1] + span["bbox"][3]) / 2
-                            
-                            # Calculer la distance
-                            distance = np.sqrt((span_x - checkbox_center_x)**2 + (span_y - checkbox_center_y)**2)
-                            
-                            if distance < self.label_distance and distance < min_distance:
-                                # Détecter si le texte est "Oui" ou "Non"
-                                if span_text.lower() in ["oui", "non"]:
-                                    closest_value = span_text.strip()
-                                    min_distance = distance
-                                else:
-                                    # Chercher une section (entête)
-                                    if span_text.endswith(":") or span_text.endswith("/"):
-                                        closest_section = span_text.strip().rstrip(":/")
-                                    else:
-                                        closest_label = span_text.strip()
+            # Analyse des spans proches
+            for span in nearby_spans:
+                text = span["text"].strip()
+                
+                # Détermination du type de texte
+                if span["is_value"]:
+                    # C'est une valeur (Oui/Non)
+                    if not closest_value:
+                        closest_value = text
+                elif span["is_header"]:
+                    # C'est un en-tête de section
+                    if not closest_section:
+                        closest_section = text.rstrip(":/")
+                else:
+                    # C'est probablement une étiquette
+                    if not closest_label:
+                        closest_label = text
             
             # Si on a trouvé une étiquette et une valeur
             if closest_label and closest_value:
                 # Vérifier que la valeur correspond à l'état de la case
-                value_matches_state = (closest_value.lower() == "oui" and is_checked) or \
-                                      (closest_value.lower() == "non" and not is_checked)
+                value_matches_state = (
+                    (closest_value.lower() in ["oui", "yes", "true"] and is_checked) or 
+                    (closest_value.lower() in ["non", "no", "false"] and not is_checked)
+                )
                 
                 if value_matches_state:
                     checkbox_info = {
@@ -327,10 +432,29 @@ class CheckboxExtractor:
                             "y": region["y"],
                             "width": region["width"],
                             "height": region["height"]
-                        }
+                        },
+                        "confidence": region.get("confidence", 0.6)
                     }
                     results.append(checkbox_info)
             
+            # Si on a juste trouvé une étiquette sans valeur explicite (cas plus simple)
+            elif closest_label and not closest_value:
+                checkbox_info = {
+                    "label": closest_label,
+                    "value": "Coché" if is_checked else "Non coché",
+                    "checked": is_checked,
+                    "section": closest_section or "Information",
+                    "page": page_num,
+                    "position": {
+                        "x": region["x"],
+                        "y": region["y"],
+                        "width": region["width"],
+                        "height": region["height"]
+                    },
+                    "confidence": region.get("confidence", 0.5)
+                }
+                results.append(checkbox_info)
+        
         return results
     
     def format_to_table(self, results: Dict[str, Any]) -> List[Dict[str, str]]:
