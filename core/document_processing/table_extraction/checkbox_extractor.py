@@ -42,7 +42,7 @@ class CheckboxExtractor:
         config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Version robuste de l'extracteur de cases à cocher avec résolution des incohérences.
+        Version robuste et optimisée de l'extracteur de cases à cocher avec résolution avancée des incohérences.
         
         Args:
             pdf_path: Chemin du fichier PDF ou objet BytesIO
@@ -54,12 +54,17 @@ class CheckboxExtractor:
         """
         try:
             with metrics.timer("checkbox_extraction"):
-                # Préparer la configuration avec des valeurs plus strictes par défaut
+                # Réinitialiser le cache pour cette extraction
+                self.cache = {}
+                self._current_page_checkboxes = {}
+                
+                # Préparer la configuration avec des valeurs optimisées
                 conf = config or {}
-                confidence_threshold = conf.get("confidence_threshold", 0.65)
+                confidence_threshold = conf.get("confidence_threshold", 0.60)  # Seuil légèrement abaissé pour plus de sensibilité
                 strict_mode = conf.get("strict_mode", True)
                 enhance_detection = conf.get("enhance_detection", True)
                 include_images = conf.get("include_images", False)
+                adaptive_processing = conf.get("adaptive_processing", True)  # Nouveau paramètre pour traitement adaptatif
                 
                 # Ouvrir le document PDF
                 pdf_doc = self._open_pdf(pdf_path)
@@ -67,6 +72,9 @@ class CheckboxExtractor:
                     return {"error": "Impossible d'ouvrir le PDF", "checkboxes": []}
                 
                 try:
+                    # Stocker temporairement une référence au PDF pour l'extraction contextuelle
+                    self._current_pdf_doc = pdf_doc
+                    
                     # Normaliser le page_range
                     page_indices = self._normalize_page_range(pdf_doc, page_range)
                     
@@ -80,16 +88,42 @@ class CheckboxExtractor:
                             "config": {
                                 "confidence_threshold": confidence_threshold,
                                 "strict_mode": strict_mode,
-                                "enhance_detection": enhance_detection
+                                "enhance_detection": enhance_detection,
+                                "adaptive_processing": adaptive_processing
                             }
                         },
                         "checkboxes": [],
                     }
                     
+                    # Analyse préliminaire pour paramètres adaptatifs
+                    if adaptive_processing and len(page_indices) > 1:
+                        try:
+                            # Échantillonner quelques pages pour estimer les paramètres optimaux
+                            sample_indices = page_indices[:min(3, len(page_indices))]
+                            adaptive_params = await self._analyze_document_structure(pdf_doc, sample_indices)
+                            
+                            # Ajuster les paramètres en fonction de l'analyse
+                            if adaptive_params:
+                                if "min_size" in adaptive_params:
+                                    self.min_size = adaptive_params["min_size"]
+                                if "max_size" in adaptive_params:
+                                    self.max_size = adaptive_params["max_size"]
+                                
+                                logger.info(f"Paramètres adaptatifs appliqués: min_size={self.min_size}, max_size={self.max_size}")
+                                results["metadata"]["adaptive_params"] = adaptive_params
+                        except Exception as e:
+                            logger.warning(f"Erreur dans l'analyse adaptative: {e}, utilisation des paramètres par défaut")
+                    
                     # Traiter chaque page
-                    for page_idx in page_indices:
+                    progress_interval = max(1, len(page_indices) // 10)  # Pour logging
+                    
+                    for idx, page_idx in enumerate(page_indices):
                         if page_idx >= len(pdf_doc):
                             continue
+                        
+                        # Log de progression pour les documents volumineux
+                        if idx % progress_interval == 0:
+                            logger.info(f"Traitement page {page_idx+1}/{len(page_indices)}")
                             
                         try:
                             page = pdf_doc[page_idx]
@@ -99,7 +133,7 @@ class CheckboxExtractor:
                             page_texts = page.get_text("dict")
                             page_image = self._convert_page_to_image(page)
                             
-                            # Détecter les cases à cocher
+                            # Détecter les cases à cocher avec la méthode améliorée
                             checkboxes = await self._detect_checkboxes(
                                 page, 
                                 page_texts, 
@@ -109,13 +143,24 @@ class CheckboxExtractor:
                                 enhance_detection
                             )
                             
-                            # En mode strict, appliquer un traitement post-détection
+                            # En mode strict, appliquer un traitement post-détection par page
                             if strict_mode:
                                 try:
-                                    # Limiter le nombre de cases cochées par page
                                     checkboxes = self._apply_strict_filtering(checkboxes, page_num)
                                 except Exception as e:
                                     logger.error(f"Erreur lors du filtrage strict page {page_num}: {e}")
+                            
+                            # Extraire les images des cases si demandé
+                            if include_images:
+                                for checkbox in checkboxes:
+                                    try:
+                                        checkbox_image = self._extract_checkbox_image(page, checkbox, page_image)
+                                        if checkbox_image:
+                                            if "checkbox_images" not in results:
+                                                results["checkbox_images"] = {}
+                                            results["checkbox_images"][checkbox["id"]] = checkbox_image
+                                    except Exception as e:
+                                        logger.debug(f"Erreur extraction image case: {e}")
                             
                             # Ajouter au résultat
                             results["checkboxes"].extend(checkboxes)
@@ -124,46 +169,67 @@ class CheckboxExtractor:
                             logger.error(f"Erreur traitement page {page_idx+1}: {e}")
                             # Continuer avec la page suivante
                     
-                    # Post-traitement pour organiser les cases à cocher
+                    # Post-traitement global des résultats
                     try:
-                        # Stocker temporairement une référence au PDF pour l'extraction des questions
-                        self._current_pdf_doc = pdf_doc
-                        
-                        # Améliorer les étiquettes et grouper les paires Oui/Non
-                        results["checkboxes"] = self._detect_and_group_yes_no_pairs(results["checkboxes"])
-                        
                         # Filtrer les cases redondantes ou inutiles
                         results["checkboxes"] = self._filter_redundant_checkboxes(results["checkboxes"])
                         
-                        # Essayer la structure avancée avec résolution des incohérences
-                        try:
-                            # Résoudre les incohérences et améliorer la structure
-                            self._enhance_checkbox_structure(results, pdf_doc)
-                        except Exception as e:
-                            logger.error(f"Erreur lors du post-traitement avancé: {e}")
-                            # Fallback sur l'organisation simple
-                            self._organize_checkboxes(results)
+                        # Détecter et grouper les paires Oui/Non
+                        results["checkboxes"] = self._detect_and_group_yes_no_pairs(results["checkboxes"])
                         
-                        # Nettoyer la référence temporaire
-                        if hasattr(self, "_current_pdf_doc"):
-                            delattr(self, "_current_pdf_doc")
+                        # Post-traitement avancé pour résoudre les problèmes restants
+                        results = self._post_process_checkbox_results(results)
+                        
+                        # En mode strict, effectuer une validation globale
+                        if strict_mode:
+                            try:
+                                self._validate_global_checkbox_results(results)
+                            except Exception as e:
+                                logger.error(f"Erreur validation globale: {e}")
+                        
+                        # Organiser la structure finale des résultats
+                        self._enhance_checkbox_structure(results, pdf_doc)
+                        
                     except Exception as e:
-                        logger.error(f"Erreur organisation des cases: {e}")
+                        logger.error(f"Erreur lors du post-traitement global: {e}")
                     
-                    # En mode strict, effectuer une validation globale
-                    if strict_mode:
-                        try:
-                            self._validate_global_checkbox_results(results)
-                        except Exception as e:
-                            logger.error(f"Erreur validation globale: {e}")
-                    
-                    # Vérifier qu'on a des résultats valides
+                    # Vérification finale des résultats
                     if not results.get("checkboxes") and len(page_indices) > 0:
                         results["warning"] = "Extraction terminée mais aucune case à cocher détectée"
                     
+                    # Validation des cases sans étiquette
+                    unlabeled_checked = [cb for cb in results.get("checkboxes", []) 
+                                        if cb.get("checked", False) and not cb.get("label")]
+                    
+                    if unlabeled_checked:
+                        warning_msg = f"{len(unlabeled_checked)} cases cochées sans étiquette détectées"
+                        if "warnings" not in results:
+                            results["warnings"] = [warning_msg]
+                        else:
+                            results["warnings"].append(warning_msg)
+                        
+                        logger.warning(warning_msg)
+                    
+                    # Mesure de qualité
+                    total_boxes = len(results.get("checkboxes", []))
+                    if total_boxes > 0:
+                        avg_confidence = sum(cb.get("confidence", 0) for cb in results.get("checkboxes", [])) / total_boxes
+                        results["metadata"]["quality"] = {
+                            "avg_confidence": round(avg_confidence, 2),
+                            "checked_count": sum(1 for cb in results.get("checkboxes", []) if cb.get("checked", False)),
+                            "unlabeled_count": sum(1 for cb in results.get("checkboxes", []) if not cb.get("label")),
+                            "total_count": total_boxes
+                        }
+                    
                     return results
-                
+                    
                 finally:
+                    # Nettoyage des références temporaires
+                    if hasattr(self, "_current_pdf_doc"):
+                        delattr(self, "_current_pdf_doc")
+                    if hasattr(self, "_current_page_checkboxes"):
+                        delattr(self, "_current_page_checkboxes")
+                        
                     # Fermer le document
                     pdf_doc.close()
                     
@@ -174,6 +240,82 @@ class CheckboxExtractor:
                 "error": str(e),
                 "checkboxes": []
             }
+    
+    async def _analyze_document_structure(self, pdf_doc: fitz.Document, sample_indices: List[int]) -> Dict[str, Any]:
+        """
+        Analyse la structure du document pour déterminer les paramètres optimaux d'extraction.
+        
+        Args:
+            pdf_doc: Document PDF
+            sample_indices: Indices des pages à échantillonner
+            
+        Returns:
+            Dictionnaire des paramètres optimisés
+        """
+        try:
+            # Collecter des statistiques sur les cases potentielles
+            checkbox_sizes = []
+            
+            for page_idx in sample_indices:
+                page = pdf_doc[page_idx]
+                page_image = self._convert_page_to_image(page)
+                
+                # Appliquer une détection basique pour identifier les formes carrées
+                if len(page_image.shape) > 2:
+                    gray = cv2.cvtColor(page_image, cv2.COLOR_RGB2GRAY)
+                else:
+                    gray = page_image
+                    
+                # Détection de bords simple
+                edges = cv2.Canny(gray, 50, 150)
+                contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Analyser chaque contour pour identifier les carrés potentiels
+                for contour in contours:
+                    # Approcher le contour par un polygone
+                    epsilon = 0.04 * cv2.arcLength(contour, True)
+                    approx = cv2.approxPolyDP(contour, epsilon, True)
+                    
+                    # Si c'est approximativement un quadrilatère
+                    if len(approx) == 4:
+                        x, y, w, h = cv2.boundingRect(contour)
+                        aspect_ratio = float(w) / h if h > 0 else 0
+                        
+                        # Si c'est approximativement un carré
+                        if 0.7 <= aspect_ratio <= 1.3:
+                            # Filtrer par taille raisonnable pour des cases à cocher (ni trop petit ni trop grand)
+                            if 5 <= w <= 40 and 5 <= h <= 40:
+                                checkbox_sizes.append(max(w, h))
+            
+            # Si nous avons suffisamment d'échantillons, calculer des paramètres adaptés
+            if len(checkbox_sizes) >= 3:
+                # Trier les tailles
+                checkbox_sizes.sort()
+                
+                # Calcul des percentiles pour éliminer les valeurs aberrantes
+                q25_idx = len(checkbox_sizes) // 4
+                q75_idx = (len(checkbox_sizes) * 3) // 4
+                
+                q25 = checkbox_sizes[max(0, q25_idx)]
+                q75 = checkbox_sizes[min(len(checkbox_sizes) - 1, q75_idx)]
+                
+                # Déterminer les tailles min et max basées sur les quartiles
+                min_size = max(5, q25 - 2)
+                max_size = min(40, q75 + 5)
+                
+                return {
+                    "min_size": min_size,
+                    "max_size": max_size,
+                    "median_size": checkbox_sizes[len(checkbox_sizes) // 2],
+                    "sample_count": len(checkbox_sizes)
+                }
+            
+            # Pas assez d'échantillons, utiliser les valeurs par défaut
+            return {}
+                
+        except Exception as e:
+            logger.warning(f"Erreur dans l'analyse de structure: {e}")
+            return {}
     
     def _find_questions_for_checkboxes(self, pdf_doc: fitz.Document, checkboxes: List[Dict[str, Any]]) -> Dict[str, str]:
         """
@@ -740,6 +882,10 @@ class CheckboxExtractor:
         Returns:
             Liste des cases à cocher détectées
         """
+        # Initialiser le stockage des cases par page si nécessaire
+        if not hasattr(self, "_current_page_checkboxes"):
+            self._current_page_checkboxes = {}
+        
         # Convertir en niveaux de gris pour traitement d'image
         if len(page_image.shape) > 2:
             gray = cv2.cvtColor(page_image, cv2.COLOR_RGB2GRAY)
@@ -749,13 +895,19 @@ class CheckboxExtractor:
         # 1. Détection basée sur le texte (symboles de case à cocher)
         symbol_checkboxes = self._detect_by_symbols(page_texts, page_num)
         
-        # 2. Détection visuelle (basée sur l'image)
+        # 2. Détection visuelle améliorée (basée sur l'image)
         visual_checkboxes = self._detect_by_vision(gray, page_num, enhance_detection)
         
-        # 3. Fusionner et dédupliquer les résultats avec la méthode améliorée
-        merged_checkboxes = self._merge_checkbox_results(symbol_checkboxes, visual_checkboxes)
+        # 3. Détection complémentaire basée sur les intersections de lignes
+        if enhance_detection and len(visual_checkboxes) + len(symbol_checkboxes) < 15:
+            line_checkboxes = self._detect_by_line_intersections(gray, page_image, page_num)
+        else:
+            line_checkboxes = []
         
-        # 4. Déterminer l'état de chaque case (cochée ou non) avec la méthode améliorée
+        # 4. Fusionner et dédupliquer les résultats avec la méthode améliorée
+        merged_checkboxes = self._merge_checkbox_results(symbol_checkboxes, visual_checkboxes + line_checkboxes)
+        
+        # 5. Déterminer l'état de chaque case (cochée ou non) avec la méthode améliorée
         for checkbox in merged_checkboxes:
             # Si pas déjà déterminé par la détection symbolique
             if "checked" not in checkbox:
@@ -774,36 +926,59 @@ class CheckboxExtractor:
                 
                 # Déterminer si cochée avec la méthode améliorée
                 if roi is not None and roi.size > 0:
-                    is_checked = self._is_checkbox_checked(roi)
+                    is_checked, check_confidence = self._is_checkbox_checked(roi)
                     checkbox["checked"] = is_checked
+                    
+                    # Ajuster la confiance globale en fonction de la confiance de détection d'état
+                    checkbox["confidence"] = (checkbox.get("confidence", 0.7) * 0.7 + check_confidence * 0.3)
                 else:
                     checkbox["checked"] = False
         
-        # 5. Associer les étiquettes aux cases avec la méthode améliorée
+        # 6. Associer les étiquettes aux cases avec la méthode avancée
         for checkbox in merged_checkboxes:
             if not checkbox.get("label"):
                 bbox = checkbox.get("bbox", [0, 0, 0, 0])
-                label = self._find_closest_text_improved(page_texts, bbox)
+                
+                # Utiliser la nouvelle méthode avancée
+                label, label_confidence = self._find_closest_text_advanced(page_texts, bbox, page_num)
                 checkbox["label"] = label
+                
+                # Si étiquette trouvée, ajuster la valeur et parfois la confiance
+                if label:
+                    # Normaliser les valeurs pour Oui/Non
+                    if label in ["Oui", "Non"]:
+                        checkbox["value"] = label
+                    
+                    # Bonus de confiance pour étiquettes Oui/Non bien identifiées
+                    if label in ["Oui", "Non"] and label_confidence > 0.8:
+                        checkbox["confidence"] = min(0.95, checkbox.get("confidence", 0.7) + 0.05)
         
-        # 6. Détecter et normaliser les groupes Oui/Non
+        # 7. Détecter et normaliser les groupes Oui/Non
         self._normalize_yes_no_groups(merged_checkboxes)
         
-        # 7. Filtrer par seuil de confiance
+        # 8. Filtrer par seuil de confiance
         filtered_checkboxes = [
             cb for cb in merged_checkboxes 
             if cb.get("confidence", 0) >= confidence_threshold
         ]
         
-        # Ajouter un identifiant unique à chaque case
+        # 9. Ajouter un identifiant unique à chaque case
         for i, checkbox in enumerate(filtered_checkboxes):
             checkbox["id"] = f"checkbox_{page_num}_{i}"
             
             # Assurer la présence des champs essentiels
-            if "value" not in checkbox:
-                checkbox["value"] = ""
+            if "value" not in checkbox and checkbox.get("label"):
+                # Pour les cases non Oui/Non, la valeur est définie par l'état
+                checkbox["value"] = "Oui" if checkbox.get("checked", False) else "Non"
             if "section" not in checkbox:
                 checkbox["section"] = "Information"
+        
+        # 10. Post-traitement avancé pour les paires Oui/Non
+        # Vérifier qu'il n'y a pas de cases Oui et Non cochées dans la même paire
+        filtered_checkboxes = self._resolve_conflicting_checkboxes(filtered_checkboxes)
+        
+        # 11. Stocker les cases détectées pour cette page (pour analyse contextuelle ultérieure)
+        self._current_page_checkboxes[page_num] = filtered_checkboxes
         
         return filtered_checkboxes
     
@@ -2686,6 +2861,622 @@ class CheckboxExtractor:
         # Aucun candidat adéquat
         return ""
 
+    def _find_closest_text_advanced(self, page_text: Dict, bbox: List[int], page_num: int) -> Tuple[str, float]:
+        """
+        Version considérablement améliorée pour trouver le texte associé à une case à cocher.
+        Utilise des paramètres contextuels et une analyse de position plus sophistiquée.
+        
+        Args:
+            page_text: Texte structuré de la page
+            bbox: Rectangle englobant de la case [x1, y1, x2, y2]
+            page_num: Numéro de la page
+            
+        Returns:
+            Tuple (texte associé, score de confiance)
+        """
+        if not page_text or "blocks" not in page_text:
+            return "", 0.0
+        
+        # 1. Coordonnées et dimensions de la case
+        x1, y1, x2, y2 = bbox
+        checkbox_center_x = (x1 + x2) / 2
+        checkbox_center_y = (y1 + y2) / 2
+        checkbox_width = x2 - x1
+        checkbox_height = y2 - y1
+        
+        # 2. Stratégie multi-zone pour la recherche de texte
+        # Définir des zones d'intérêt avec des priorités différentes
+        zones = [
+            {
+                # Zone 1: Droite immédiate (forte priorité pour les libellés)
+                "x_min": x2,
+                "x_max": x2 + 150,
+                "y_min": y1 - 10,
+                "y_max": y2 + 10,
+                "priority": 10
+            },
+            {
+                # Zone 2: Gauche immédiate (priorité moyenne)
+                "x_min": max(0, x1 - 150),
+                "x_max": x1,
+                "y_min": y1 - 10,
+                "y_max": y2 + 10,
+                "priority": 7
+            },
+            {
+                # Zone 3: Au-dessus (priorité haute pour questions)
+                "x_min": max(0, x1 - 200),
+                "x_max": x2 + 200,
+                "y_min": max(0, y1 - 80),
+                "y_max": y1,
+                "priority": 8
+            },
+            {
+                # Zone 4: En-dessous (priorité basse)
+                "x_min": max(0, x1 - 100),
+                "x_max": x2 + 100,
+                "y_min": y2,
+                "y_max": y2 + 40,
+                "priority": 5
+            }
+        ]
+        
+        # 3. Collecte des candidats par zone
+        all_candidates = []
+        
+        for zone in zones:
+            # Extraire les candidats de la zone
+            zone_candidates = self._extract_candidates_from_zone(
+                page_text, zone, checkbox_center_x, checkbox_center_y
+            )
+            
+            # Attribuer la priorité de la zone
+            for candidate in zone_candidates:
+                candidate["zone_priority"] = zone["priority"]
+                all_candidates.append(candidate)
+        
+        # 4. Filtrage préliminaire
+        filtered_candidates = []
+        
+        for candidate in all_candidates:
+            text = candidate["text"].strip()
+            
+            # Ignorer les textes trop courts ou inutiles
+            if len(text) < 2 and text.lower() not in ["oui", "non", "yes", "no"]:
+                continue
+                
+            # Ignorer les textes de pagination, dates, etc.
+            if re.match(r'^\d+\s*\/\s*\d+$|^\d{1,2}:\d{2}$|^\d{1,2}/\d{1,2}/\d{2,4}$', text):
+                continue
+            
+            # Normaliser Oui/Non
+            if text.lower() in ["oui", "yes"]:
+                candidate["text"] = "Oui"
+                candidate["is_yes_no"] = True
+            elif text.lower() in ["non", "no"]:
+                candidate["text"] = "Non"
+                candidate["is_yes_no"] = True
+            else:
+                candidate["is_yes_no"] = False
+            
+            filtered_candidates.append(candidate)
+        
+        # 5. Calcul des scores adaptés au contexte
+        for candidate in filtered_candidates:
+            text = candidate["text"]
+            distance = candidate["distance"]
+            dx = candidate["dx"]
+            dy = candidate["dy"]
+            zone_priority = candidate["zone_priority"]
+            is_yes_no = candidate["is_yes_no"]
+            
+            # Score de base: distance inversée pondérée (plus proche = meilleur)
+            base_score = 100 / (1 + distance * 0.05)
+            
+            # Facteur de position (orientation)
+            position_factor = 1.0
+            
+            # Bonus pour texte à droite ou à gauche selon la distance
+            if 5 < dx < 100:  # Droite proche
+                position_factor *= 1.3
+            elif -100 < dx < -5:  # Gauche proche
+                position_factor *= 1.1
+            
+            # Bonus pour alignement vertical
+            if abs(dy) < 10:  # Alignement presque parfait
+                position_factor *= 1.4
+            elif abs(dy) < 20:  # Bon alignement
+                position_factor *= 1.2
+            
+            # Facteur de contenu
+            content_factor = 1.0
+            
+            # Fort bonus pour Oui/Non
+            if is_yes_no:
+                content_factor *= 1.5
+            
+            # Bonus pour questions
+            if "?" in text:
+                content_factor *= 1.2
+            
+            # Pénalité pour textes très longs
+            if len(text) > 100:
+                content_factor *= 0.7
+            
+            # Score composite
+            final_score = base_score * position_factor * content_factor * (zone_priority / 10)
+            
+            # Stocker le score
+            candidate["score"] = final_score
+        
+        # 6. Détection spéciale des paires Oui/Non
+        yes_no_pairs = self._detect_yes_no_pairs(filtered_candidates, checkbox_center_x, checkbox_center_y)
+        
+        if yes_no_pairs:
+            # Trouver la paire la plus proche
+            closest_pair = min(yes_no_pairs, key=lambda p: p["distance"])
+            
+            # Déterminer si notre case appartient au "Oui" ou au "Non"
+            if closest_pair["yes_dx"] < closest_pair["no_dx"]:
+                # Oui à gauche, Non à droite (configuration typique)
+                if abs(checkbox_center_x - closest_pair["yes_x"]) < abs(checkbox_center_x - closest_pair["no_x"]):
+                    return "Oui", 0.9
+                else:
+                    return "Non", 0.9
+            else:
+                # Non à gauche, Oui à droite
+                if abs(checkbox_center_x - closest_pair["yes_x"]) < abs(checkbox_center_x - closest_pair["no_x"]):
+                    return "Oui", 0.9
+                else:
+                    return "Non", 0.9
+        
+        # 7. Sélection du meilleur candidat
+        if filtered_candidates:
+            # Trier par score décroissant
+            filtered_candidates.sort(key=lambda c: c["score"], reverse=True)
+            
+            best_candidate = filtered_candidates[0]
+            
+            # Convertir le score en confiance (0-1)
+            confidence = min(0.95, best_candidate["score"] / 100)
+            
+            return best_candidate["text"], confidence
+        
+        # 8. Analyse contextuelle des cases voisines
+        # Si aucun texte trouvé, examiner les cases voisines pour déduire Oui/Non
+        nearby_yes_no = self._analyze_nearby_checkboxes(bbox, page_num)
+        if nearby_yes_no:
+            return nearby_yes_no, 0.7
+        
+        return "", 0.0
+
+    def _extract_candidates_from_zone(self, page_text: Dict, zone: Dict, center_x: float, center_y: float) -> List[Dict]:
+        """
+        Extrait les candidats textuels d'une zone spécifique.
+        
+        Args:
+            page_text: Texte structuré de la page
+            zone: Définition de la zone {x_min, x_max, y_min, y_max, priority}
+            center_x: Coordonnée X du centre de la case
+            center_y: Coordonnée Y du centre de la case
+            
+        Returns:
+            Liste des candidats dans la zone
+        """
+        candidates = []
+        
+        for block in page_text.get("blocks", []):
+            if block.get("type", -1) != 0:  # Ignorer les blocs non-textuels
+                continue
+                
+            for line in block.get("lines", []):
+                line_bbox = line.get("bbox", [0, 0, 0, 0])
+                line_center_x = (line_bbox[0] + line_bbox[2]) / 2
+                line_center_y = (line_bbox[1] + line_bbox[3]) / 2
+                
+                # Vérifier si le texte est dans la zone définie
+                if (zone["x_min"] <= line_center_x <= zone["x_max"] and
+                    zone["y_min"] <= line_center_y <= zone["y_max"]):
+                    
+                    # Récupérer le texte
+                    line_text = " ".join([span.get("text", "") for span in line.get("spans", [])])
+                    
+                    # Nettoyer le texte
+                    cleaned_text = line_text.strip()
+                    for symbol in ["☐", "☑", "☒", "□", "■", "▢", "▣", "▪", "▫"]:
+                        cleaned_text = cleaned_text.replace(symbol, "").strip()
+                    
+                    if cleaned_text:
+                        # Calculer distance et direction
+                        dx = line_center_x - center_x
+                        dy = line_center_y - center_y
+                        distance = (dx**2 + dy**2)**0.5
+                        
+                        candidates.append({
+                            "text": cleaned_text,
+                            "distance": distance,
+                            "dx": dx,
+                            "dy": dy,
+                            "bbox": line_bbox
+                        })
+        
+        return candidates
+    
+    def _detect_yes_no_pairs(self, candidates: List[Dict], center_x: float, center_y: float) -> List[Dict]:
+        """
+        Détecte les paires Oui/Non parmi les candidats textuels.
+        
+        Args:
+            candidates: Liste des candidats textuels
+            center_x: Coordonnée X du centre de la case
+            center_y: Coordonnée Y du centre de la case
+            
+        Returns:
+            Liste des paires Oui/Non détectées
+        """
+        # Filtrer les candidats Oui et Non
+        yes_candidates = [c for c in candidates if c["text"] == "Oui"]
+        no_candidates = [c for c in candidates if c["text"] == "Non"]
+        
+        if not yes_candidates or not no_candidates:
+            return []
+        
+        # Rechercher des paires proches en Y
+        pairs = []
+        
+        for yes_cand in yes_candidates:
+            yes_bbox = yes_cand["bbox"]
+            yes_center_y = (yes_bbox[1] + yes_bbox[3]) / 2
+            yes_center_x = (yes_bbox[0] + yes_bbox[2]) / 2
+            
+            for no_cand in no_candidates:
+                no_bbox = no_cand["bbox"]
+                no_center_y = (no_bbox[1] + no_bbox[3]) / 2
+                no_center_x = (no_bbox[0] + no_bbox[2]) / 2
+                
+                # Vérifier si les Y sont proches (même ligne ou presque)
+                if abs(yes_center_y - no_center_y) < 30:
+                    # Distance moyenne de la paire à la case
+                    avg_x = (yes_center_x + no_center_x) / 2
+                    avg_y = (yes_center_y + no_center_y) / 2
+                    distance = ((avg_x - center_x)**2 + (avg_y - center_y)**2)**0.5
+                    
+                    pairs.append({
+                        "yes_x": yes_center_x,
+                        "no_x": no_center_x,
+                        "avg_y": avg_y,
+                        "distance": distance,
+                        "yes_dx": yes_center_x - center_x,
+                        "no_dx": no_center_x - center_x
+                    })
+        
+        return pairs
+
+    def _analyze_nearby_checkboxes(self, bbox: List[int], page_num: int) -> str:
+        """
+        Analyse les cases à cocher voisines pour déduire Oui/Non par contexte.
+        Utilise les cases précédemment détectées stockées temporairement.
+        
+        Args:
+            bbox: Rectangle englobant de la case [x1, y1, x2, y2]
+            page_num: Numéro de la page
+            
+        Returns:
+            "Oui", "Non" ou chaîne vide
+        """
+        # Nécessite une référence aux cases déjà identifiées sur la page
+        # Cette référence devrait être ajoutée au début de la méthode principale
+        if not hasattr(self, "_current_page_checkboxes") or page_num not in self._current_page_checkboxes:
+            return ""
+        
+        x1, y1, x2, y2 = bbox
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        
+        # Récupérer les cases déjà identifiées sur cette page
+        page_checkboxes = self._current_page_checkboxes[page_num]
+        
+        # Chercher des paires Oui/Non proches
+        oui_boxes = [cb for cb in page_checkboxes if cb.get("label") == "Oui"]
+        non_boxes = [cb for cb in page_checkboxes if cb.get("label") == "Non"]
+        
+        if not oui_boxes or not non_boxes:
+            return ""
+        
+        # Trouver la paire la plus proche
+        closest_pair = None
+        min_distance = float('inf')
+        
+        for oui_box in oui_boxes:
+            oui_bbox = oui_box.get("bbox", [0, 0, 0, 0])
+            oui_center_x = (oui_bbox[0] + oui_bbox[2]) / 2
+            oui_center_y = (oui_bbox[1] + oui_bbox[3]) / 2
+            
+            for non_box in non_boxes:
+                non_bbox = non_box.get("bbox", [0, 0, 0, 0])
+                non_center_x = (non_bbox[0] + non_bbox[2]) / 2
+                non_center_y = (non_bbox[1] + non_bbox[3]) / 2
+                
+                # Vérifier s'ils sont alignés horizontalement (même ligne)
+                if abs(oui_center_y - non_center_y) < 30:
+                    # Distance moyenne de notre case à cette paire
+                    avg_y = (oui_center_y + non_center_y) / 2
+                    vertical_dist = abs(center_y - avg_y)
+                    
+                    if vertical_dist < min_distance:
+                        min_distance = vertical_dist
+                        closest_pair = {
+                            "oui_x": oui_center_x,
+                            "non_x": non_center_x,
+                            "avg_y": avg_y
+                        }
+        
+        # Si une paire proche a été trouvée et notre case est alignée verticalement
+        if closest_pair and min_distance < 60:
+            # Déterminer si notre case est plus proche du Oui ou du Non
+            if abs(center_x - closest_pair["oui_x"]) < abs(center_x - closest_pair["non_x"]):
+                return "Oui"
+            else:
+                return "Non"
+        
+        return ""
+    
+    def _post_process_checkbox_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Post-traitement avancé des résultats pour corriger les incohérences 
+        et compléter les informations manquantes.
+        
+        Args:
+            results: Résultats de l'extraction
+            
+        Returns:
+            Résultats améliorés
+        """
+        checkboxes = results.get("checkboxes", [])
+        if not checkboxes:
+            return results
+        
+        # 1. Compléter les étiquettes manquantes pour les cases cochées
+        # Cela est particulièrement important pour l'interprétation des données
+        unlabeled_checked = [cb for cb in checkboxes if cb.get("checked", False) and not cb.get("label")]
+        
+        if unlabeled_checked:
+            # Chercher les paires Oui/Non pour inférer les étiquettes manquantes
+            inferred_count = 0
+            
+            for checkbox in unlabeled_checked:
+                # Obtenir les informations de position
+                bbox = checkbox.get("bbox", [0, 0, 0, 0])
+                page = checkbox.get("page", 0)
+                center_x = (bbox[0] + bbox[2]) / 2
+                center_y = (bbox[1] + bbox[3]) / 2
+                
+                # Chercher des cases étiquetées proches (horizontalement)
+                neighbors = []
+                
+                for cb in checkboxes:
+                    if cb.get("label") and cb.get("page") == page:
+                        cb_bbox = cb.get("bbox", [0, 0, 0, 0])
+                        cb_center_x = (cb_bbox[0] + cb_bbox[2]) / 2
+                        cb_center_y = (cb_bbox[1] + cb_bbox[3]) / 2
+                        
+                        # Si même ligne (approximativement)
+                        if abs(cb_center_y - center_y) < 30:
+                            dist_x = abs(cb_center_x - center_x)
+                            neighbors.append({
+                                "checkbox": cb,
+                                "distance": dist_x
+                            })
+                
+                # Si des voisins étiquetés trouvés
+                if neighbors:
+                    # Trier par proximité
+                    neighbors.sort(key=lambda n: n["distance"])
+                    closest = neighbors[0]["checkbox"]
+                    
+                    # Si le voisin le plus proche est Oui/Non
+                    label = closest.get("label", "")
+                    if label in ["Oui", "Non"]:
+                        # Attribuer l'étiquette opposée (car les cases Oui/Non vont par paires)
+                        checkbox["label"] = "Non" if label == "Oui" else "Oui"
+                        checkbox["value"] = checkbox["label"]
+                        checkbox["inferred"] = True
+                        inferred_count += 1
+            
+            if inferred_count > 0:
+                logger.info(f"Post-traitement: {inferred_count} étiquettes inférées pour des cases cochées sans libellé")
+        
+        # 2. Validation globale des groupes Oui/Non
+        # Détecter et résoudre les incohérences
+        oui_non_groups = {}
+        
+        # Grouper les cases par position Y approximative (même question)
+        for checkbox in checkboxes:
+            page = checkbox.get("page", 0)
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            center_y = (bbox[1] + bbox[3]) / 2
+            label = checkbox.get("label", "")
+            
+            if label in ["Oui", "Non"]:
+                # Clé de groupe: page_yArrondi
+                group_key = f"{page}_{int(center_y / 20) * 20}"
+                
+                if group_key not in oui_non_groups:
+                    oui_non_groups[group_key] = []
+                    
+                oui_non_groups[group_key].append(checkbox)
+        
+        # Analyser chaque groupe
+        resolved_conflicts = 0
+        
+        for group_key, group_boxes in oui_non_groups.items():
+            # Si le groupe contient au moins 2 cases
+            if len(group_boxes) >= 2:
+                # Chercher Oui et Non
+                oui_boxes = [cb for cb in group_boxes if cb.get("label") == "Oui"]
+                non_boxes = [cb for cb in group_boxes if cb.get("label") == "Non"]
+                
+                # Si on a au moins un Oui et un Non
+                if oui_boxes and non_boxes:
+                    # Vérifier les cas où plusieurs cases sont cochées
+                    checked_oui = [cb for cb in oui_boxes if cb.get("checked", False)]
+                    checked_non = [cb for cb in non_boxes if cb.get("checked", False)]
+                    
+                    # Conflit: Oui et Non cochés simultanément
+                    if checked_oui and checked_non:
+                        # Résoudre en gardant l'option avec la plus haute confiance
+                        best_oui = max(checked_oui, key=lambda cb: cb.get("confidence", 0))
+                        best_non = max(checked_non, key=lambda cb: cb.get("confidence", 0))
+                        
+                        if best_oui.get("confidence", 0) > best_non.get("confidence", 0):
+                            # Garder Oui, décocher Non
+                            for cb in checked_non:
+                                cb["checked"] = False
+                                cb["auto_corrected"] = True
+                        else:
+                            # Garder Non, décocher Oui
+                            for cb in checked_oui:
+                                cb["checked"] = False
+                                cb["auto_corrected"] = True
+                        
+                        resolved_conflicts += 1
+        
+        if resolved_conflicts > 0:
+            logger.info(f"Post-traitement: {resolved_conflicts} conflits Oui/Non résolus")
+        
+        # 3. Associer les questions aux paires Oui/Non
+        self._enhance_question_association(results)
+        
+        return results
+
+    def _enhance_question_association(self, results: Dict[str, Any]) -> None:
+        """
+        Améliore l'association des questions aux paires Oui/Non
+        en utilisant des heuristiques plus avancées.
+        
+        Args:
+            results: Résultats de l'extraction à modifier in-place
+        """
+        # Accéder aux questions déjà identifiées
+        structured_results = results.get("structured_results", {})
+        questions = structured_results.get("questions", [])
+        
+        # Si pas de structure ou pas de questions, rien à faire
+        if not structured_results or not questions:
+            return
+        
+        # Collecter les contextes de page
+        page_contexts = {}
+        
+        # Accéder au document PDF via l'attribut temporaire
+        if hasattr(self, "_current_pdf_doc"):
+            pdf_doc = self._current_pdf_doc
+            
+            # Extraire le texte de chaque page concernée
+            for question in questions:
+                page_num = question.get("page", 0)
+                
+                if page_num not in page_contexts and page_num > 0 and page_num <= len(pdf_doc):
+                    try:
+                        # Extraire tout le texte de la page
+                        page = pdf_doc[page_num - 1]  # Conversion 1-indexed à 0-indexed
+                        page_contexts[page_num] = page.get_text("dict")
+                    except Exception as e:
+                        logger.error(f"Erreur extraction texte page {page_num}: {e}")
+            
+            # Pour chaque question sans texte ou avec texte générique
+            for i, question in enumerate(questions):
+                question_text = question.get("text", "")
+                
+                # Si texte manquant ou générique (ex: "Question 1")
+                if not question_text or re.match(r"^Question\s+\d+$", question_text):
+                    page_num = question.get("page", 0)
+                    checkboxes = question.get("checkboxes", [])
+                    
+                    if page_num in page_contexts and len(checkboxes) >= 2:
+                        # Calculer la position moyenne des cases
+                        avg_y = sum(
+                            (cb.get("bbox", [0, 0, 0, 0])[1] + cb.get("bbox", [0, 0, 0, 0])[3]) / 2
+                            for cb in checkboxes
+                        ) / len(checkboxes)
+                        
+                        # Chercher le meilleur texte au-dessus
+                        better_text = self._find_question_above(page_contexts[page_num], avg_y, 100)
+                        
+                        if better_text:
+                            # Mettre à jour le texte de la question
+                            questions[i]["text"] = better_text
+                            
+                            # Mettre également à jour form_values si nécessaire
+                            form_values = results.get("form_values", {})
+                            if question_text in form_values:
+                                answer = form_values.pop(question_text)
+                                form_values[better_text] = answer
+                                results["form_values"] = form_values
+
+    def _find_question_above(self, page_text: Dict, y_position: float, max_distance: float) -> str:
+        """
+        Trouve le texte qui ressemble le plus à une question au-dessus d'une position donnée.
+        
+        Args:
+            page_text: Texte structuré de la page
+            y_position: Position Y de référence
+            max_distance: Distance verticale maximale à considérer
+            
+        Returns:
+            Texte de la question ou chaîne vide
+        """
+        candidates = []
+        
+        for block in page_text.get("blocks", []):
+            if block.get("type", -1) != 0:  # Ignorer les blocs non-textuels
+                continue
+                
+            for line in block.get("lines", []):
+                line_bbox = line.get("bbox", [0, 0, 0, 0])
+                line_bottom_y = line_bbox[3]  # Bas de la ligne
+                
+                # Si la ligne est au-dessus de notre position de référence
+                if line_bottom_y < y_position:
+                    # Calculer la distance verticale
+                    distance = y_position - line_bottom_y
+                    
+                    if distance <= max_distance:
+                        # Récupérer le texte
+                        line_text = " ".join([span.get("text", "") for span in line.get("spans", [])])
+                        cleaned_text = line_text.strip()
+                        
+                        # Ignorer les textes trop courts ou inutiles
+                        if len(cleaned_text) < 5 or cleaned_text.lower() in ["oui", "non", "yes", "no"]:
+                            continue
+                            
+                        # Calculer un score de pertinence
+                        score = 100 - distance  # Distance inversée
+                        
+                        # Bonus pour les caractéristiques de question
+                        if cleaned_text.endswith("?"):
+                            score += 50
+                        elif "?" in cleaned_text:
+                            score += 30
+                        elif re.search(r'[:;]$', cleaned_text):
+                            score += 20
+                        
+                        # Bonus pour longueur appropriée
+                        if 20 <= len(cleaned_text) <= 100:
+                            score += 20
+                        
+                        candidates.append({
+                            "text": cleaned_text,
+                            "score": score,
+                            "distance": distance
+                        })
+        
+        # Trier par score et retourner le meilleur
+        if candidates:
+            candidates.sort(key=lambda c: c["score"], reverse=True)
+            return candidates[0]["text"]
+        
+        return ""
 
     def _detect_and_group_yes_no_pairs(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
