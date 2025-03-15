@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 import logging
+import numpy as np
 
 # Configurer le logging
 logging.basicConfig(
@@ -90,11 +91,11 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
                 print(f"  Page: {checkbox.get('page', '?')}")
                 print(f"  Méthode: {checkbox.get('method', '?')}")
                 
-                # Convertir explicitement la confiance en float simple
+                # Convertir explicitement la confiance en float Python natif
                 confidence = checkbox.get('confidence', 0)
-                if hasattr(confidence, 'item'):  # Si c'est un type numpy
-                    confidence = confidence.item()  # Convertir en type Python natif
-                print(f"  Confiance: {float(confidence):.2f}")
+                if isinstance(confidence, (np.float16, np.float32, np.float64)):
+                    confidence = float(confidence)
+                print(f"  Confiance: {confidence:.2f}")
                 
                 if "value" in checkbox and checkbox["value"]:
                     print(f"  Valeur: {checkbox['value']}")
@@ -105,8 +106,11 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
             if not include_images and "checkbox_images" in results:
                 del results["checkbox_images"]
                 
+            # Convertir les types NumPy en types Python natifs avant sérialisation
+            results_clean = convert_numpy_types(results)
+                
             with open(output, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
+                json.dump(results_clean, f, ensure_ascii=False, indent=2)
             print(f"\nRésultats enregistrés dans {output}")
         
         # Mode debug simple (sans matplotlib)
@@ -116,8 +120,12 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
             
             # Enregistrer les résultats détaillés en JSON
             debug_json = os.path.join(debug_dir, "debug_checkboxes.json")
+            
+            # Convertir les types NumPy avant sérialisation
+            results_clean = convert_numpy_types(results)
+            
             with open(debug_json, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
+                json.dump(results_clean, f, ensure_ascii=False, indent=2)
             
             print(f"\nDétails de débogage enregistrés dans {debug_json}")
             
@@ -151,6 +159,50 @@ async def test_checkbox_extractor(pdf_path, verbose=False, include_images=False,
         logger.error(f"Erreur lors du test: {e}")
         raise
 
+def convert_numpy_types(obj):
+    """
+    Convertit récursivement les types NumPy en types Python natifs.
+    
+    Args:
+        obj: Objet à convertir (peut être un dict, list, ou valeur simple)
+        
+    Returns:
+        Objet avec types Python natifs
+    """
+    import numpy as np
+    
+    if isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
+    
+class NumPyJSONEncoder(json.JSONEncoder):
+    """
+    Encodeur JSON personnalisé pour gérer les types NumPy.
+    """
+    def default(self, obj):
+        # Conversion des types NumPy en types Python natifs
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        # Gérer d'autres types spéciaux si nécessaire
+        return super(NumPyJSONEncoder, self).default(obj)
+    
 def main():
     """Fonction principale."""
     parser = argparse.ArgumentParser(description="Test d'extraction de cases à cocher")
@@ -168,7 +220,7 @@ def main():
         return 1
     
     try:
-        asyncio.run(test_checkbox_extractor(
+        results = asyncio.run(test_checkbox_extractor(
             args.pdf_path,
             verbose=args.verbose,
             include_images=args.images,
@@ -176,10 +228,14 @@ def main():
             output=args.output,
             debug=args.debug
         ))
+        
+        # Utiliser l'encodeur personnalisé pour la sortie JSON
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(results, f, ensure_ascii=False, indent=2, cls=NumPyJSONEncoder)
+                print(f"\nRésultats enregistrés dans {args.output}")
+                
         return 0
     except Exception as e:
         print(f"Erreur: {e}")
         return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
