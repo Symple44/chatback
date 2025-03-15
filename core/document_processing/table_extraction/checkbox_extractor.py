@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 import re
 import json
+import math
 
 from core.utils.logger import get_logger
 from core.utils.metrics import metrics
@@ -938,24 +939,46 @@ class CheckboxExtractor:
         try:
             checkboxes = []
             
-            # 1. Prétraitement pour améliorer la détection des bords
-            # Appliquer un filtre bilatéral pour réduire le bruit tout en préservant les bords
-            smooth = cv2.bilateralFilter(gray_img, 9, 75, 75)
+            # 1. Prétraitement multi-étapes pour améliorer la détection des bords
+            # Amélioration 1: Égalisation d'histogramme adaptative
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            equalized = clahe.apply(gray_img)
             
-            # 2. Détection des bords avec Canny
-            edges = cv2.Canny(smooth, 50, 150)
+            # Filtre bilatéral amélioré (paramètres ajustés)
+            smooth = cv2.bilateralFilter(equalized, 7, 100, 100)
             
-            # 3. Fermeture morphologique pour connecter les contours interrompus
+            # 2. Détection des bords avec Canny modifié
+            # Calculer les seuils adaptatifs basés sur l'histogramme de l'image
+            med_val = np.median(smooth)
+            sigma = 0.33
+            lower = int(max(0, (1.0 - sigma) * med_val))
+            upper = int(min(255, (1.0 + sigma) * med_val))
+            
+            edges = cv2.Canny(smooth, lower, upper)
+            
+            # 3. Amélioration: Détecter les lignes horizontales et verticales séparément
+            horizontal = self._detect_lines(smooth.copy(), True, enhance)
+            vertical = self._detect_lines(smooth.copy(), False, enhance)
+            
+            # Combiner les lignes détectées avec les bords
+            combined_edges = cv2.bitwise_or(edges, cv2.bitwise_or(horizontal, vertical))
+            
+            # 4. Fermeture morphologique pour connecter les contours interrompus
+            # Kernel plus grand pour mieux connecter les contours
             kernel = np.ones((3, 3), np.uint8)
-            closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+            closed = cv2.morphologyEx(combined_edges, cv2.MORPH_CLOSE, kernel)
             
-            # 4. Détection des contours
-            contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            # 5. Détection des contours avec hiérarchie
+            contours, hierarchy = cv2.findContours(closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
             
-            # 5. Filtrer les contours pour trouver les cases à cocher potentielles
-            for contour in contours:
-                # Approcher le contour par un polygone
-                epsilon = 0.04 * cv2.arcLength(contour, True)
+            # 6. Filtrer les contours pour trouver les cases à cocher potentielles
+            for i, contour in enumerate(contours):
+                # Amélioration: Utiliser la hiérarchie des contours
+                # Les cases à cocher ont souvent un contour parent (externe)
+                has_parent = hierarchy[0][i][3] != -1
+                
+                # Approcher le contour par un polygone avec précision améliorée
+                epsilon = 0.03 * cv2.arcLength(contour, True)  # Précision accrue
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 
                 # Vérifier si c'est un quadrilatère (4 côtés comme un carré/rectangle)
@@ -964,43 +987,83 @@ class CheckboxExtractor:
                 # Récupérer le rectangle englobant
                 x, y, w, h = cv2.boundingRect(contour)
                 
-                # Calculer l'aire et le rapport d'aspect
+                # Calculer diverses caractéristiques
                 area = cv2.contourArea(contour)
                 rect_area = w * h
                 aspect_ratio = float(w) / h if h > 0 else 0
                 
-                # Filtres combinés pour identifier les cases à cocher
-                # 1. Taille appropriée
-                valid_size = self.min_size <= w <= self.max_size and self.min_size <= h <= self.max_size
-                # 2. Forme carrée ou presque
-                is_square_like = 0.7 <= aspect_ratio <= 1.3
-                # 3. Remplissage approprié (pour éliminer les formes pleines qui ne sont pas des cases)
-                valid_area = area > 0 and rect_area > 0
-                # 4. Solidité (proportion de l'aire du contour par rapport à son enveloppe convexe)
-                solidity = float(area) / rect_area if rect_area > 0 else 0
-                is_solid = 0.4 <= solidity <= 0.95  # Pas trop plein ni trop vide
+                # Amélioration: Filtres plus précis
+                # 1. Taille appropriée avec plage étendue
+                valid_size = self.min_size-2 <= w <= self.max_size+2 and self.min_size-2 <= h <= self.max_size+2
                 
-                # Combiner tous les filtres
-                if valid_size and is_square_like and valid_area and is_solid:
+                # 2. Forme carrée ou presque avec tolérance ajustée
+                is_square_like = 0.7 <= aspect_ratio <= 1.3
+                
+                # 3. Remplissage approprié (amélioré)
+                fill_ratio = float(area) / rect_area if rect_area > 0 else 0
+                valid_fill = 0.4 <= fill_ratio <= 0.98
+                
+                # 4. Analyse des angles pour détecter les formes rectangulaires
+                corners_ok = is_quadrilateral
+                if not is_quadrilateral and len(approx) > 4:
+                    # Chercher des points qui forment approximativement des angles droits
+                    angles = []
+                    for i in range(len(approx)):
+                        pt1 = approx[i][0]
+                        pt2 = approx[(i+1) % len(approx)][0]
+                        pt3 = approx[(i+2) % len(approx)][0]
+                        
+                        # Calculer les vecteurs
+                        v1 = [pt2[0] - pt1[0], pt2[1] - pt1[1]]
+                        v2 = [pt3[0] - pt2[0], pt3[1] - pt2[1]]
+                        
+                        # Calculer l'angle (produit scalaire)
+                        dot = v1[0]*v2[0] + v1[1]*v2[1]
+                        mag1 = (v1[0]**2 + v1[1]**2)**0.5
+                        mag2 = (v2[0]**2 + v2[1]**2)**0.5
+                        
+                        if mag1 * mag2 > 0:
+                            cos_angle = dot / (mag1 * mag2)
+                            cos_angle = max(-1, min(1, cos_angle))  # Assurer que c'est dans [-1, 1]
+                            angle = math.acos(cos_angle) * 180 / math.pi
+                            angles.append(angle)
+                    
+                    # Compter les angles proches de 90°
+                    right_angles = sum(1 for angle in angles if 80 <= angle <= 100)
+                    corners_ok = right_angles >= 2
+                
+                # Amélioration: combiner tous les critères avec pondération
+                # Certains critères sont plus importants que d'autres
+                if valid_size and is_square_like and valid_fill:
                     # Calculer un score de confiance basé sur plusieurs facteurs
                     square_factor = 1 - abs(aspect_ratio - 1) / 0.3  # 1 pour un carré parfait
                     
-                    # Vérifier si le contour est visuellement une case à cocher (analyse plus poussée)
+                    # Amélioration: Analyse détaillée de la région
                     region = gray_img[y:y+h, x:x+w]
-                    is_checkbox_like = self._analyze_visual_checkbox(region)
+                    is_checkbox_like, region_score = self._analyze_visual_checkbox_improved(region)
                     
-                    # Score combiné
-                    confidence_score = (square_factor * 0.4 + solidity * 0.3 + is_checkbox_like * 0.3)
+                    # Score combiné avec pondération ajustée
+                    base_score = (
+                        square_factor * 0.3 + 
+                        fill_ratio * 0.2 + 
+                        region_score * 0.3 + 
+                        (0.2 if corners_ok else 0.0)
+                    )
                     
+                    # Bonus pour caractéristiques spécifiques
                     # Bonus pour les quadrilatères
                     if is_quadrilateral:
-                        confidence_score *= 1.2
+                        base_score *= 1.1
                     
-                    # Limiter à 0.9 pour ne pas surpasser la détection symbolique
-                    confidence_score = min(0.9, confidence_score)
+                    # Bonus pour les formes qui ressemblent vraiment à des cases
+                    if is_checkbox_like:
+                        base_score *= 1.2
                     
-                    # Ajouter si la confiance est suffisante
-                    if confidence_score >= 0.6:
+                    # Limiter à 0.95 (garder en dessous de la détection symbolique)
+                    confidence_score = min(0.95, base_score)
+                    
+                    # Ajouter seulement si la confiance est suffisante
+                    if confidence_score >= 0.55:  # Seuil légèrement abaissé pour augmenter la détection
                         checkbox = {
                             "bbox": [x, y, x+w, y+h],
                             "page": page_num,
@@ -1009,48 +1072,297 @@ class CheckboxExtractor:
                         }
                         checkboxes.append(checkbox)
             
-            # 6. Détection complémentaire basée sur les lignes (pour les cases mal formées)
-            if enhance and len(checkboxes) < 10:  # Si peu de cases détectées
-                horizontal_lines = self._detect_lines(gray_img, True)
-                vertical_lines = self._detect_lines(gray_img, False)
-                
-                # Combiner
-                combined = cv2.bitwise_or(horizontal_lines, vertical_lines)
-                
-                # Dilation pour connecter les intersections
-                dilated = cv2.dilate(combined, kernel, iterations=1)
-                
-                # Trouver les contours des intersections potentielles
-                contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                for contour in contours:
-                    x, y, w, h = cv2.boundingRect(contour)
-                    
-                    # Filtres similaires à ceux ci-dessus
-                    if (self.min_size <= w <= self.max_size and 
-                        self.min_size <= h <= self.max_size and
-                        0.7 <= float(w) / h <= 1.3):
-                        
-                        # Déduplication avec les cases déjà détectées
-                        is_duplicate = any(
-                            self._calculate_overlap([x, y, x+w, y+h], cb["bbox"]) > 0.3 
-                            for cb in checkboxes
-                        )
-                        
-                        if not is_duplicate:
-                            checkbox = {
-                                "bbox": [x, y, x+w, y+h],
-                                "page": page_num,
-                                "confidence": 0.65,  # Confiance modérée
-                                "method": "lines"
-                            }
-                            checkboxes.append(checkbox)
+            # 7. Détection complémentaire basée sur les intersections de lignes
+            if enhance and len(checkboxes) < 15:  # Augmenté pour être plus inclusif
+                line_checkboxes = self._detect_by_line_intersections(smooth, gray_img, page_num)
+                checkboxes.extend(line_checkboxes)
             
-            # 7. Appliquer une déduplication finale
-            return self._deduplicate_checkboxes(checkboxes)
+            # 8. Appliquer une déduplication améliorée
+            return self._deduplicate_checkboxes_improved(checkboxes)
             
         except Exception as e:
             logger.error(f"Erreur détection visuelle: {e}")
+            return []
+        
+    def _deduplicate_checkboxes_improved(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Version améliorée de la déduplication des cases détectées.
+        
+        Args:
+            checkboxes: Liste des cases à cocher détectées
+            
+        Returns:
+            Liste dédupliquée des cases à cocher
+        """
+        if not checkboxes:
+            return []
+        
+        # 1. Trier par confiance décroissante
+        sorted_boxes = sorted(checkboxes, key=lambda cb: cb.get("confidence", 0), reverse=True)
+        
+        # 2. Utiliser un algorithme de clustering pour regrouper les détections similaires
+        # Initialiser les groupes
+        groups = []
+        
+        for checkbox in sorted_boxes:
+            bbox = checkbox.get("bbox", [0, 0, 0, 0])
+            center_x = (bbox[0] + bbox[2]) / 2
+            center_y = (bbox[1] + bbox[3]) / 2
+            
+            # Vérifier si la case appartient à un groupe existant
+            found_group = False
+            
+            for group in groups:
+                # Calculer la distance moyenne aux cases du groupe
+                distances = []
+                for existing in group:
+                    ex_bbox = existing.get("bbox", [0, 0, 0, 0])
+                    ex_center_x = (ex_bbox[0] + ex_bbox[2]) / 2
+                    ex_center_y = (ex_bbox[1] + ex_bbox[3]) / 2
+                    
+                    # Distance euclidienne
+                    distance = ((center_x - ex_center_x) ** 2 + (center_y - ex_center_y) ** 2) ** 0.5
+                    distances.append(distance)
+                
+                avg_distance = sum(distances) / len(distances) if distances else float('inf')
+                
+                # Si la distance moyenne est inférieure au seuil, ajouter au groupe
+                if avg_distance < 20:  # Seuil de 20 pixels
+                    group.append(checkbox)
+                    found_group = True
+                    break
+            
+            # Si aucun groupe existant ne convient, créer un nouveau groupe
+            if not found_group:
+                groups.append([checkbox])
+        
+        # 3. Sélectionner la meilleure case de chaque groupe
+        deduplicated = []
+        
+        for group in groups:
+            if len(group) == 1:
+                # Groupe avec une seule case, l'ajouter directement
+                deduplicated.append(group[0])
+            else:
+                # Filtrer d'abord par méthode: privilégier les méthodes plus fiables
+                symbol_candidates = [cb for cb in group if cb.get("method") == "symbol"]
+                if symbol_candidates:
+                    # Priorité aux détections par symbole
+                    best_candidate = max(symbol_candidates, key=lambda cb: cb.get("confidence", 0))
+                else:
+                    # Choisir la meilleure détection visuelle
+                    best_candidate = max(group, key=lambda cb: cb.get("confidence", 0))
+                
+                deduplicated.append(best_candidate)
+        
+        return deduplicated
+            
+    def _analyze_visual_checkbox_improved(self, region: np.ndarray) -> Tuple[bool, float]:
+        """
+        Analyse améliorée pour déterminer si une région ressemble à une case à cocher.
+        
+        Args:
+            region: Image de la région à analyser
+            
+        Returns:
+            Tuple (est_une_case, score)
+        """
+        try:
+            if region is None or region.size == 0 or region.shape[0] < 5 or region.shape[1] < 5:
+                return False, 0.3
+            
+            # 1. Prétraitement de l'image
+            # Égalisation d'histogramme pour améliorer le contraste
+            if region.shape[0] > 10 and region.shape[1] > 10:
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+                enhanced = clahe.apply(region)
+            else:
+                enhanced = cv2.equalizeHist(region)
+            
+            # 2. Calculer les gradients
+            sobelx = cv2.Sobel(enhanced, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(enhanced, cv2.CV_64F, 0, 1, ksize=3)
+            gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+            
+            # 3. Amélioration: Détecter les bords avec Canny
+            edges = cv2.Canny(enhanced, 50, 150)
+            
+            # 4. Caractéristiques d'une case à cocher
+            h, w = region.shape[:2]
+            
+            # A. Définir les masques pour bords et centre de manière plus précise
+            # Calculer border_width adaptatif
+            border_width = max(1, min(w, h) // 5)
+            
+            # Créer les masques
+            border_mask = np.zeros_like(region)
+            border_mask[:border_width, :] = 1  # Haut
+            border_mask[-border_width:, :] = 1  # Bas
+            border_mask[:, :border_width] = 1  # Gauche
+            border_mask[:, -border_width:] = 1  # Droite
+            
+            center_mask = 1 - border_mask
+            
+            # B. Caractéristiques de bord-centre améliorées
+            # Gradient moyen sur les bords
+            border_gradient = np.mean(gradient_magnitude * border_mask)
+            # Gradient moyen au centre
+            center_gradient = np.mean(gradient_magnitude * center_mask)
+            # Intensité moyenne du centre et des bords
+            border_intensity = np.mean(enhanced * border_mask)
+            center_intensity = np.mean(enhanced * center_mask)
+            
+            # C. Calculer le contraste bord/centre (important pour les cases à cocher vides)
+            # Pour les cases vides, le centre est généralement plus clair que les bords
+            intensity_ratio = center_intensity / border_intensity if border_intensity > 0 else 1
+            gradient_ratio = border_gradient / center_gradient if center_gradient > 0 else 10
+            
+            # D. Analyse d'histogramme améliorée
+            # Histogramme à plus haute résolution pour mieux capturer la bimodalité
+            hist = cv2.calcHist([enhanced], [0], None, [64], [0, 256])
+            hist_normalized = hist / np.sum(hist)
+            
+            # Détection plus sophistiquée des pics et creux
+            peaks = []
+            valleys = []
+            
+            for i in range(1, len(hist_normalized)-1):
+                if hist_normalized[i] > hist_normalized[i-1] and hist_normalized[i] > hist_normalized[i+1]:
+                    peaks.append((i, hist_normalized[i][0]))
+                if hist_normalized[i] < hist_normalized[i-1] and hist_normalized[i] < hist_normalized[i+1]:
+                    valleys.append((i, hist_normalized[i][0]))
+            
+            # Trier par hauteur
+            peaks.sort(key=lambda x: x[1], reverse=True)
+            
+            # Calculer les caractéristiques de l'histogramme
+            bimodality_score = 0.0
+            if len(peaks) >= 2:
+                # Distance entre les deux pics principaux
+                peak_distance = abs(peaks[0][0] - peaks[1][0]) / 64
+                peak_heights = peaks[0][1] + peaks[1][1]
+                
+                # La bimodalité est élevée si les pics sont éloignés et prononcés
+                bimodality_score = peak_distance * peak_heights * 2.0
+            
+            # 5. Détecter les contours dans l'image binaire
+            _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 6. Analyser les formes détectées
+            contour_score = 0.0
+            if contours:
+                # Trouver le contour principal
+                main_contour = max(contours, key=cv2.contourArea)
+                contour_area = cv2.contourArea(main_contour)
+                rect_area = w * h
+                
+                # Calculer la solidité (remplissage)
+                solidity = contour_area / rect_area if rect_area > 0 else 0
+                
+                # Les cases à cocher ont souvent une solidité modérée (ni trop pleine ni trop vide)
+                if 0.2 <= solidity <= 0.9:
+                    contour_score = 0.5 + (0.5 - abs(solidity - 0.5)) * 0.8
+                else:
+                    contour_score = 0.3
+                
+                # Vérifier si le contour est approximativement rectangulaire
+                epsilon = 0.04 * cv2.arcLength(main_contour, True)
+                approx = cv2.approxPolyDP(main_contour, epsilon, True)
+                if len(approx) == 4:
+                    contour_score += 0.3
+            
+            # 7. Calculer un score combiné avec des pondérations améliorées
+            edge_score = min(1.0, np.sum(edges > 0) / (edges.size * 0.2))
+            gradient_score = min(1.0, gradient_ratio / 15.0)
+            intensity_score = min(1.0, intensity_ratio if intensity_ratio < 1.2 else 2.4 - intensity_ratio)
+            
+            # 8. Score final combinant tous les indicateurs
+            final_score = (
+                edge_score * 0.2 +
+                gradient_score * 0.25 +
+                intensity_score * 0.2 +
+                bimodality_score * 0.15 +
+                contour_score * 0.2
+            )
+            
+            # Déterminer si c'est vraiment une case à cocher
+            is_checkbox = final_score > 0.5
+            
+            return is_checkbox, min(1.0, final_score)
+        
+        except Exception as e:
+            logger.debug(f"Erreur analyse visuelle case: {e}")
+            return False, 0.3
+    
+    def _detect_by_line_intersections(self, gray_img: np.ndarray, orig_img: np.ndarray, page_num: int) -> List[Dict[str, Any]]:
+        """
+        Nouvelle méthode de détection basée sur les intersections de lignes.
+        Utile pour les cases à cocher qui sont formées par des lignes perpendiculaires.
+        
+        Args:
+            gray_img: Image prétraitée en niveaux de gris
+            orig_img: Image originale
+            page_num: Numéro de la page
+            
+        Returns:
+            Liste des cases à cocher détectées
+        """
+        try:
+            # 1. Détecter séparément les lignes horizontales et verticales
+            horizontal = self._detect_lines(gray_img, True, True)
+            vertical = self._detect_lines(gray_img, False, True)
+            
+            # 2. Trouver les points d'intersection
+            intersections = cv2.bitwise_and(horizontal, vertical)
+            
+            # 3. Dilatation pour renforcer les intersections
+            kernel = np.ones((3, 3), np.uint8)
+            intersections = cv2.dilate(intersections, kernel, iterations=1)
+            
+            # 4. Détecter les composantes connexes dans l'image d'intersection
+            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(intersections)
+            
+            checkboxes = []
+            
+            # 5. Analyser chaque composante connexe
+            for i in range(1, num_labels):  # Commencer à 1 pour sauter le fond
+                # Récupérer les statistiques de la composante
+                x = stats[i, cv2.CC_STAT_LEFT]
+                y = stats[i, cv2.CC_STAT_TOP]
+                w = stats[i, cv2.CC_STAT_WIDTH]
+                h = stats[i, cv2.CC_STAT_HEIGHT]
+                area = stats[i, cv2.CC_STAT_AREA]
+                
+                # Filtrer par taille
+                if self.min_size-2 <= max(w, h) <= self.max_size+5 and self.min_size-2 <= min(w, h):
+                    # Calculer un score de confiance basé sur la forme
+                    aspect_ratio = float(w) / h if h > 0 else 0
+                    
+                    # Les cases carrées ont un meilleur score
+                    square_factor = 1 - min(0.8, abs(aspect_ratio - 1))
+                    
+                    # Analyser la région pour confirmer qu'il s'agit d'une case
+                    region = orig_img[y:y+h, x:x+w]
+                    is_checkbox, region_score = self._analyze_visual_checkbox_improved(region)
+                    
+                    # Score combiné
+                    confidence = (square_factor * 0.4 + region_score * 0.6) * 0.9  # 0.9 pour rester sous la détection symbolique
+                    
+                    # Ajouter si score suffisant
+                    if confidence >= 0.55 and is_checkbox:
+                        checkbox = {
+                            "bbox": [x, y, x+w, y+h],
+                            "page": page_num,
+                            "confidence": confidence,
+                            "method": "lines"
+                        }
+                        checkboxes.append(checkbox)
+            
+            return checkboxes
+        
+        except Exception as e:
+            logger.error(f"Erreur détection par intersections: {e}")
             return []
     
     def _analyze_visual_checkbox(self, region: np.ndarray) -> float:
@@ -1140,18 +1452,60 @@ class CheckboxExtractor:
             logger.debug(f"Erreur analyse visuelle case: {e}")
             return 0.5  # Score neutre en cas d'erreur
 
-    def _detect_lines(self, binary_img: np.ndarray, is_horizontal: bool) -> np.ndarray:
-        """Détecte les lignes horizontales ou verticales."""
-        # Adapter le noyau selon l'orientation
+    def _detect_lines(self, binary_img: np.ndarray, is_horizontal: bool, enhanced: bool) -> np.ndarray:
+        """
+        Version améliorée pour détecter les lignes horizontales ou verticales.
+        
+        Args:
+            binary_img: Image binaire
+            is_horizontal: True pour lignes horizontales, False pour verticales
+            enhanced: Activer les améliorations supplémentaires
+            
+        Returns:
+            Image binaire avec les lignes détectées
+        """
+        # Paramètres améliorés pour la détection des lignes
         if is_horizontal:
-            kernel_length = binary_img.shape[1] // 30
+            # Pour les lignes horizontales
+            if enhanced:
+                # Utiliser une longueur adaptative plus fine
+                kernel_length = max(5, binary_img.shape[1] // 25)
+            else:
+                kernel_length = binary_img.shape[1] // 30
+            
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_length, 1))
         else:
-            kernel_length = binary_img.shape[0] // 30
+            # Pour les lignes verticales
+            if enhanced:
+                # Utiliser une longueur adaptative plus fine
+                kernel_length = max(5, binary_img.shape[0] // 25)
+            else:
+                kernel_length = binary_img.shape[0] // 30
+                
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_length))
         
-        # Appliquer les opérations morphologiques
-        detected = cv2.morphologyEx(binary_img, cv2.MORPH_OPEN, kernel)
+        # Amélioration: prétraitement de l'image
+        # Appliquer un seuil adaptatif pour améliorer la détection des lignes fines
+        if enhanced:
+            # Réduction du bruit
+            denoised = cv2.GaussianBlur(binary_img, (3, 3), 0)
+            
+            # Seuil adaptatif pour mieux extraire les structures
+            thresh = cv2.adaptiveThreshold(
+                denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 11, 2
+            )
+        else:
+            # Version simplifiée
+            _, thresh = cv2.threshold(binary_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Appliquer l'opération morphologique d'ouverture
+        detected = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        
+        # Dilatation légère pour améliorer la connexion
+        if enhanced:
+            detected = cv2.dilate(detected, np.ones((2, 2), np.uint8), iterations=1)
+        
         return detected
     
     def _calculate_overlap(self, bbox1, bbox2):
@@ -1267,21 +1621,21 @@ class CheckboxExtractor:
         
         return final_merged
     
-    def _is_checkbox_checked(self, checkbox_img: np.ndarray) -> bool:
+    def _is_checkbox_checked(self, checkbox_img: np.ndarray) -> Tuple[bool, float]:
         """
-        Version simplifiée et rigoureuse pour déterminer si une case est cochée.
-        S'appuie sur des critères simples mais efficaces.
+        Version améliorée pour déterminer si une case est cochée,
+        avec retour de la confiance de la détection.
         
         Args:
             checkbox_img: Image de la case à cocher
             
         Returns:
-            True si la case est cochée, False sinon
+            Tuple (is_checked, confidence_score)
         """
         try:
             # S'assurer que l'image n'est pas vide
             if checkbox_img is None or checkbox_img.size == 0:
-                return False
+                return False, 0.0
             
             # Si l'image est en couleur, la convertir en niveaux de gris
             if len(checkbox_img.shape) > 2:
@@ -1289,80 +1643,130 @@ class CheckboxExtractor:
             else:
                 gray = checkbox_img
             
-            # 1. Appliquer une binarisation avec seuil Otsu inversé
-            # Dans cette version, on part du principe que le fond est blanc et les marques sont noires
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            # Amélioration 1: Prétraitement avec réduction de bruit et amélioration de contraste
+            # Appliquer une égalisation d'histogramme locale pour améliorer le contraste
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
             
-            # 2. Calculer le taux de remplissage (ratio de pixels noirs)
-            total_pixels = binary.size
-            marked_pixels = np.sum(binary > 0)
-            fill_ratio = marked_pixels / total_pixels if total_pixels > 0 else 0
+            # Réduction de bruit avec filtre bilatéral (préserve les bords)
+            denoised = cv2.bilateralFilter(enhanced, 5, 75, 75)
             
-            # 3. Mesurer la proportion de marques au centre vs bords
-            height, width = binary.shape
+            # Amélioration 2: Utiliser plusieurs méthodes de binarisation et les combiner
+            # Binarisation avec Otsu (inversé)
+            _, binary_otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            
+            # Binarisation adaptative, plus sensible aux marques locales
+            binary_adaptive = cv2.adaptiveThreshold(
+                denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
+            )
+            
+            # Amélioration 3: Combiner les résultats des deux méthodes de binarisation
+            # Intersection des deux méthodes pour les marques solides
+            binary_solid = cv2.bitwise_and(binary_otsu, binary_adaptive)
+            
+            # Union pour capturer les marques plus faibles mais consistantes
+            binary_all = cv2.bitwise_or(binary_otsu, binary_adaptive)
+            
+            # Paramètres pour l'analyse
+            height, width = binary_solid.shape
+            total_pixels = height * width
+            
+            # Amélioration 4: Analyse multi-échelle de la densité des marques
+            
+            # Analyse globale: ratio de pixels noirs
+            solid_fill_ratio = np.sum(binary_solid > 0) / total_pixels if total_pixels > 0 else 0
+            all_fill_ratio = np.sum(binary_all > 0) / total_pixels if total_pixels > 0 else 0
+            
+            # Analyse du centre: définir une région centrale
             center_margin = max(2, min(width, height) // 4)
             
-            # Analyser seulement si l'image est assez grande
+            # Si l'image est assez grande pour l'analyse par régions
             if width > 2*center_margin and height > 2*center_margin:
-                # Calculer le ratio de remplissage dans la zone centrale
-                center_pixels = np.sum(binary[center_margin:height-center_margin, center_margin:width-center_margin] > 0)
+                # Analyser le centre
+                center_region = binary_solid[
+                    center_margin:height-center_margin, 
+                    center_margin:width-center_margin
+                ]
                 center_area = (height - 2*center_margin) * (width - 2*center_margin)
-                center_fill_ratio = center_pixels / center_area if center_area > 0 else 0
+                center_fill_ratio = np.sum(center_region > 0) / center_area if center_area > 0 else 0
                 
-                # Le ratio entre remplissage du centre et remplissage global
-                # Plus il est élevé, plus les marques sont concentrées au centre
-                center_concentration = center_fill_ratio / fill_ratio if fill_ratio > 0 else 0
+                # Calculer la concentration au centre
+                center_concentration = center_fill_ratio / solid_fill_ratio if solid_fill_ratio > 0 else 0
             else:
-                center_concentration = 1.0  # Pour les petites images, pas de distinction
+                center_concentration = 1.0
+                center_fill_ratio = solid_fill_ratio
             
-            # 4. CRITÈRES DE DÉCISION TRÈS STRICTS
+            # Amélioration 5: Analyse morphologique des formes
+            # Détecter les contours importants
+            contours, _ = cv2.findContours(binary_all, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            # A. Cas évidents : case fortement remplie
-            if fill_ratio > 0.4:
-                return True
+            # Filtrer les contours insignifiants
+            min_contour_area = total_pixels * 0.01  # 1% de la surface totale
+            significant_contours = [c for c in contours if cv2.contourArea(c) > min_contour_area]
             
-            # B. Cas évidents : case pratiquement vide
-            if fill_ratio < 0.05:
-                return False
-            
-            # C. Analyse plus fine
-            if fill_ratio >= 0.2 and center_concentration >= 0.8:
-                # Bon remplissage concentré au centre
-                return True
-            
-            # D. Recherche de marques claires comme les X et les coches
-            # Pour les cases avec remplissage modéré
-            if 0.1 <= fill_ratio < 0.3:
-                # Réduire le bruit
-                kernel = np.ones((2, 2), np.uint8)
-                cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-                
-                # Détecter les contours importants
-                contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Filtrer les très petits contours (bruit)
-                significant_contours = [c for c in contours if cv2.contourArea(c) > 9]
-                
-                # Si on a des contours significatifs et pas trop nombreux
-                if 1 <= len(significant_contours) <= 3:
-                    largest_contour = max(significant_contours, key=cv2.contourArea) if significant_contours else None
+            # Analyser la forme des contours
+            shape_score = 0.0
+            if significant_contours:
+                for contour in significant_contours:
+                    area = cv2.contourArea(contour)
+                    perimeter = cv2.arcLength(contour, True)
                     
-                    if largest_contour is not None:
-                        # Calculer le rapport périmètre/aire (les X ont un rapport élevé)
-                        area = cv2.contourArea(largest_contour)
-                        perimeter = cv2.arcLength(largest_contour, True)
-                        complexity = perimeter**2 / (4 * np.pi * area) if area > 0 else 0
-                        
-                        # Les X et coches ont une forme complexe (non-circulaire)
-                        if complexity > 2.0:
-                            return True
+                    # Calculer la circularité (1 pour un cercle parfait, valeurs plus grandes pour formes complexes)
+                    circularity = (perimeter**2) / (4 * np.pi * area) if area > 0 else 0
+                    
+                    # Les croix et les coches ont une circularité élevée (forme complexe)
+                    if circularity > 2.0:
+                        shape_score += min(1.0, circularity / 10)
             
-            # Par défaut : non cochée
-            return False
+            # Normaliser le score de forme
+            shape_score = min(1.0, shape_score)
+            
+            # Amélioration 6: Calcul de score composite
+            # Pondérer les différents indicateurs
+            checked_score = (
+                solid_fill_ratio * 0.3 +           # Remplissage solide
+                all_fill_ratio * 0.1 +             # Remplissage total
+                center_fill_ratio * 0.2 +          # Densité au centre
+                center_concentration * 0.2 +       # Concentration au centre
+                shape_score * 0.2                  # Complexité des formes
+            )
+            
+            # Amélioration 7: Détection adaptative basée sur l'intensité globale
+            # Calculer l'intensité moyenne pour ajuster le seuil
+            mean_intensity = np.mean(gray) / 255.0
+            
+            # Ajuster les seuils selon la clarté générale de l'image
+            # Cas clairs: besoin de moins de marques pour être considéré comme coché
+            # Cas sombres: besoin de plus de marques
+            intensity_factor = 1.0 + (0.5 - mean_intensity) * 0.5
+            
+            # Définition dynamique du seuil selon la clarté
+            threshold_base = 0.25
+            threshold = threshold_base * intensity_factor
+            
+            # Ajustement final de la confiance
+            confidence = min(1.0, checked_score * 1.5)
+            
+            # Amélioration 8: Détection binaire avec décision optimisée
+            is_checked = checked_score >= threshold
+            
+            # Cas spéciaux: fortes indications malgré un score global sous le seuil
+            if not is_checked:
+                # Forte complexité de forme + remplissage central
+                if shape_score > 0.5 and center_fill_ratio > 0.15:
+                    is_checked = True
+                    confidence = max(confidence, 0.65)
+                
+                # Ou remplissage central très fort
+                elif center_fill_ratio > 0.3:
+                    is_checked = True
+                    confidence = max(confidence, 0.7)
+            
+            return is_checked, confidence
             
         except Exception as e:
             logger.debug(f"Erreur analyse case cochée: {e}")
-            return False
+            return False, 0.0
         
     def _deduplicate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
