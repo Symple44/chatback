@@ -1,1287 +1,1073 @@
-# core/document_processing/invoice_processor.py
+from typing import List, Dict, Any, Optional, Union
+import os
+import numpy as np
 import re
 import pandas as pd
-import numpy as np
 from datetime import datetime
-import dateutil.parser
 import json
-import os
-import io
-import tempfile
-import fitz  # PyMuPDF
-import logging
-from typing import Dict, List, Any, Optional, Union, Tuple
-import asyncio
+import uuid
 
+from core.utils.logger import get_logger
 
-logger = logging.getLogger("invoice_processor")
+logger = get_logger("invoice_processor")
 
 class InvoiceProcessor:
     """
-    Processeur spécialisé pour améliorer l'extraction des factures.
-    Post-traite les tableaux extraits pour mieux structurer les données.
+    Processeur qui analyse et structure les données extraites de factures et documents techniques.
+    
+    Cette classe intègre les capacités d'extraction de tableaux avec 
+    les fonctionnalités de détection de cases à cocher pour une analyse
+    de document complète.
     """
     
     def __init__(self):
         """Initialise le processeur de factures."""
-        # Patterns réguliers pour l'identification des champs
-        self.patterns = {
-            'invoice_number': r'(?i)facture\s*:?\s*([A-Z0-9\/-]+)',
-            'date': r'(?i)date\s*:?\s*(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4})',
-            'total': r'(?i)total.*?(\d+[,\.\s]\d+)',
-            'vat_number': r'(?i)TVA\s*n[o°]?\.*\s*:?\s*([A-Z0-9]+)',
-            'email': r'(?i)e-?mail\s*:?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
-        }
+        pass
     
-    def process(self, extracted_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def process(self, tables: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Traite les tableaux extraits pour en faire une structure de facture.
+        Traite les tableaux extraits d'une facture.
         
         Args:
-            extracted_tables: Liste des tableaux extraits
+            tables: Liste des tableaux extraits
             
         Returns:
-            Structure de facture enrichie
+            Données structurées de la facture
         """
-        if not extracted_tables:
-            return {"error": "Aucun tableau trouvé"}
-        
-        # Structure de résultat
-        result = {
-            "invoice_info": {},
-            "customer_info": {},
-            "line_items": [],
-            "totals": {},
-            "metadata": {
-                "processor_version": "1.0",
-                "processing_date": datetime.utcnow().isoformat(),
-                "confidence": 0.0
-            }
-        }
-        
         try:
-            # Traitement du premier tableau (souvent le principal dans une facture)
-            first_table = extracted_tables[0]
-            raw_data = first_table.get("data", [])
+            # Initialiser la structure de données
+            result = {
+                "id": str(uuid.uuid4()),
+                "type": "invoice",
+                "processing_date": datetime.now().isoformat(),
+                "status": "processed",
+                "metadata": {},
+                "tables_count": len(tables),
+                "header": {},
+                "line_items": [],
+                "totals": {},
+                "payment_info": {},
+                "additional_info": {}
+            }
             
-            # Conversion du format de données si nécessaire
-            data = []
-            if isinstance(raw_data, pd.DataFrame):
-                # Convertir DataFrame en liste de dictionnaires
-                data = raw_data.to_dict(orient='records')
-            elif isinstance(raw_data, str):
-                # Tenter de parser JSON ou CSV
-                try:
-                    import json
-                    data = json.loads(raw_data)
-                    if not isinstance(data, list):
-                        data = [{"content": raw_data}]
-                except json.JSONDecodeError:
-                    # Si ce n'est pas du JSON, essayer CSV
-                    try:
-                        import csv
-                        import io
-                        reader = csv.DictReader(io.StringIO(raw_data))
-                        data = list(reader)
-                    except:
-                        # Fallback si aucun format n'est reconnu
-                        data = [{"content": raw_data}]
-            elif isinstance(raw_data, list):
-                # Vérifier que les éléments sont des dictionnaires
-                data = []
-                for item in raw_data:
-                    if isinstance(item, dict):
-                        data.append(item)
-                    else:
-                        data.append({"value": str(item)})
-            else:
-                # Fallback pour tout autre type
-                data = [{"content": str(raw_data)}]
+            if not tables:
+                result["status"] = "no_tables_found"
+                return result
             
-            # Extraction des informations de base
-            self._extract_basic_info(data, result)
+            # Détecter les différents types de tableaux
+            header_table = None
+            line_items_table = None
+            totals_table = None
             
-            # Extraction des lignes de facture
-            self._extract_line_items(data, result)
+            for table in tables:
+                table_type = self._identify_table_type(table)
+                
+                if table_type == "header":
+                    header_table = table
+                elif table_type == "line_items":
+                    line_items_table = table
+                elif table_type == "totals":
+                    totals_table = table
             
-            # Extraction des totaux
-            self._extract_totals(data, result)
+            # Traiter l'en-tête de la facture
+            if header_table:
+                result["header"] = self._process_header_table(header_table)
             
-            # Nettoyage et formatage des valeurs
-            self._cleanup_values(result)
+            # Traiter les éléments de ligne
+            if line_items_table:
+                result["line_items"] = self._process_line_items_table(line_items_table)
             
-            # Calculs de validation (vérifier que le total correspond à la somme des lignes, etc.)
-            confidence = self._validate_and_calculate_confidence(result)
-            result["metadata"]["confidence"] = confidence
+            # Traiter les totaux
+            if totals_table:
+                result["totals"] = self._process_totals_table(totals_table)
             
-            # Identification du type de facture
-            result["metadata"]["document_subtype"] = self._determine_document_subtype(result)
+            # Calculer des statistiques
+            if result["line_items"]:
+                result["metadata"]["items_count"] = len(result["line_items"])
+                result["metadata"]["total_amount"] = sum(item.get("total", 0) for item in result["line_items"])
             
             return result
             
         except Exception as e:
-            logger.error(f"Erreur lors du traitement de la facture: {e}")
+            logger.error(f"Erreur traitement facture: {e}")
             return {
-                "error": f"Erreur de traitement: {str(e)}",
-                "invoice_info": result.get("invoice_info", {}),
-                "metadata": {
-                    "processor_version": "1.0",
-                    "processing_date": datetime.utcnow().isoformat(),
-                    "confidence": 0.0,
-                    "error": True
-                }
+                "id": str(uuid.uuid4()),
+                "type": "invoice",
+                "processing_date": datetime.now().isoformat(),
+                "status": "error",
+                "error": str(e)
             }
-        
-    def process_form_data(self, extracted_tables: List[Dict[str, Any]], checkbox_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    
+    def process_technical_invoice(self, tables: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Traite les données de formulaire pour créer une structure plus claire et exploitable.
+        Traite les tableaux extraits d'un devis technique.
         
         Args:
-            extracted_tables: Liste des tableaux extraits
-            checkbox_data: Données des cases à cocher extraites (optionnel)
+            tables: Liste des tableaux extraits
             
         Returns:
-            Structure de données de formulaire enrichie
+            Données structurées du devis technique
         """
-        # Structure de résultat
-        result = {
-            "type_document": "formulaire",
-            "metadata": {
-                "reference": None,
-                "date": None,
-                "titre": None,
-                "processor_version": "1.0",
-                "processing_date": datetime.utcnow().isoformat()
-            },
-            "sections": {},
-            "form_fields": {}
-        }
-        
         try:
-            # Extraire les métadonnées de base
-            all_text = ""
-            for table in extracted_tables:
-                if isinstance(table.get("data"), pd.DataFrame):
-                    df = table["data"]
-                    for _, row in df.iterrows():
-                        all_text += " ".join([str(val) for val in row.values if pd.notna(val)])
-                        all_text += " "
-            
-            # Recherche de métadonnées communes dans les formulaires
-            patterns = {
-                'reference': r'(?i)(?:Réf|N°)[\.:\s]*([A-Z0-9\/-]+)',
-                'date': r'(?i)(?:Le|Date|Edité le)[\s:]*(\d{1,2}[\s/.-]+\w+[\s/.-]+\d{4}|\d{1,2}[\s/.-]\d{1,2}[\s/.-]\d{2,4})',
-                'client': r'(?i)(?:Client|Adress)[\.:\s]*([^\n.]+)',
-                'titre': r'(?i)(?:Fiche|Formulaire|Affaire)[\.:\s]*([^\n.]+)',
+            # Initialiser la structure de données
+            result = {
+                "id": str(uuid.uuid4()),
+                "type": "technical_invoice",
+                "processing_date": datetime.now().isoformat(),
+                "status": "processed",
+                "metadata": {},
+                "reference": "",
+                "client_info": {},
+                "sections": [],
+                "products": [],
+                "services": [],
+                "options": [],
+                "totals": {},
+                "terms_conditions": []
             }
             
-            # Extraction des métadonnées avec les patterns spécifiques
-            for field, pattern in patterns.items():
-                match = re.search(pattern, all_text)
-                if match:
-                    value = match.group(1).strip()
-                    result["metadata"][field] = value
+            if not tables:
+                result["status"] = "no_tables_found"
+                return result
             
-            # TRAITEMENT SIMPLIFIÉ: Extraire principalement les cases à cocher
-            # et ignorer le traitement complexe des tableaux pour éviter les erreurs
+            # Traiter chaque tableau
+            for table in tables:
+                table_type = self._identify_technical_table_type(table)
+                
+                if table_type == "client_info":
+                    result["client_info"] = self._process_client_info_table(table)
+                elif table_type == "products":
+                    products = self._process_products_table(table)
+                    result["products"].extend(products)
+                elif table_type == "services":
+                    services = self._process_services_table(table)
+                    result["services"].extend(services)
+                elif table_type == "options":
+                    options = self._process_options_table(table)
+                    result["options"].extend(options)
+                elif table_type == "totals":
+                    result["totals"] = self._process_technical_totals_table(table)
+                elif table_type == "terms":
+                    terms = self._process_terms_table(table)
+                    result["terms_conditions"].extend(terms)
             
-            # Intégrer les données de cases à cocher si disponibles
-            if checkbox_data:
-                # Version simplifiée: extraire directement les cases à cocher
-                form_values = {}
-                sections = {}
-                
-                # Extraire des cases à cocher dans un format exploitable
-                for checkbox in checkbox_data.get("checkboxes", []):
-                    label = checkbox.get("label", "")
-                    if not label:
-                        continue
-                        
-                    value = checkbox.get("value", "")
-                    checked = checkbox.get("checked", False)
-                    section = checkbox.get("section", "Information")
-                    
-                    # Pour les champs de type "Oui/Non"
-                    if isinstance(value, str) and value.lower() in ["oui", "yes", "true", "non", "no", "false"]:
-                        selected_value = value
-                    else:
-                        # Pour les cases à cocher simples
-                        selected_value = "Oui" if checked else "Non"
-                    
-                    # Structure plate
-                    form_values[label] = selected_value
-                    
-                    # Organisation par section
-                    if section not in sections:
-                        sections[section] = {}
-                    
-                    sections[section][label] = selected_value
-                
-                # Ajouter les résultats au formulaire
-                result["form_values"] = form_values
-                result["sections"] = sections
-                result["form_fields"] = form_values
+            # Calculer des métadonnées
+            result["metadata"]["products_count"] = len(result["products"])
+            result["metadata"]["services_count"] = len(result["services"])
+            result["metadata"]["options_count"] = len(result["options"])
+            
+            # Extraire la référence du document
+            result["reference"] = self._extract_reference(tables)
             
             return result
             
         except Exception as e:
-            import logging
-            logger = logging.getLogger("invoice_processor")
-            logger.error(f"Erreur lors du traitement des données de formulaire: {e}")
-            result["error"] = str(e)
-            return result
+            logger.error(f"Erreur traitement devis technique: {e}")
+            return {
+                "id": str(uuid.uuid4()),
+                "type": "technical_invoice",
+                "processing_date": datetime.now().isoformat(),
+                "status": "error",
+                "error": str(e)
+            }
     
-    def _extract_basic_info(self, data: List[Dict[str, Any]], result: Dict[str, Any]):
-        """Extrait les informations de base de la facture."""
-        # Fusion de toutes les valeurs textuelles pour chercher les patterns
-        all_text = " ".join([
-            " ".join(str(value) for value in row.values() if value) 
-            for row in data
-        ])
+    def process_form_data(self, tables: List[Dict[str, Any]], checkbox_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Traite les données de formulaire en combinant tables et cases à cocher.
         
-        # Extraction avec les patterns réguliers
-        for field, pattern in self.patterns.items():
-            match = re.search(pattern, all_text)
-            if match:
-                value = match.group(1).strip()
-                if field == 'invoice_number':
-                    result["invoice_info"]["number"] = value
-                elif field == 'date':
-                    try:
-                        # Tentative de parsing et formatage de la date
-                        parsed_date = dateutil.parser.parse(value, dayfirst=True)
-                        result["invoice_info"]["date"] = parsed_date.strftime("%Y-%m-%d")
-                    except:
-                        result["invoice_info"]["date"] = value
-                elif field == 'vat_number':
-                    result["invoice_info"]["vat_number"] = value
-                elif field == 'email':
-                    result["customer_info"]["email"] = value
-        
-        # Recherche du vendeur et client dans les premières lignes
-        vendor_detected = False
-        address_lines = []
-        
-        for i, row in enumerate(data[:6]):  # Les premières lignes contiennent souvent ces infos
-            # Parcourir chaque colonne
-            for col_name, value in row.items():
-                if not value or not isinstance(value, str):
-                    continue
+        Args:
+            tables: Liste des tableaux extraits
+            checkbox_data: Données des cases à cocher extraites
+            
+        Returns:
+            Données structurées du formulaire
+        """
+        try:
+            # Initialiser la structure de données
+            result = {
+                "id": str(uuid.uuid4()),
+                "type": "form",
+                "processing_date": datetime.now().isoformat(),
+                "status": "processed",
+                "metadata": {},
+                "form_sections": {},
+                "table_data": [],
+                "checkbox_data": {},
+                "merged_data": {}
+            }
+            
+            # Traiter les tableaux
+            if tables:
+                for table in tables:
+                    table_data = self._process_form_table(table)
+                    result["table_data"].append(table_data)
+            
+            # Traiter les données de cases à cocher
+            if checkbox_data:
+                # Organiser les cases à cocher par section
+                sections = checkbox_data.get("form_sections", {})
+                values = checkbox_data.get("form_values", {})
+                checkboxes = checkbox_data.get("checkboxes", [])
+                
+                # Ajouter les sections de formulaire
+                for section_name, checkbox_ids in sections.items():
+                    if section_name not in result["form_sections"]:
+                        result["form_sections"][section_name] = {
+                            "type": "checkbox_group",
+                            "items": []
+                        }
                     
-                value = value.strip()
+                    # Ajouter les cases à cocher de cette section
+                    for checkbox_id in checkbox_ids:
+                        # Trouver la case à cocher correspondante
+                        checkbox = next((cb for cb in checkboxes if cb.get("id") == checkbox_id), None)
+                        if checkbox:
+                            result["form_sections"][section_name]["items"].append({
+                                "id": checkbox.get("id"),
+                                "label": checkbox.get("label", ""),
+                                "value": checkbox.get("is_checked", False),
+                                "field_name": checkbox.get("field_name", "")
+                            })
                 
-                # Détection du nom de l'entreprise (Volotea, Air France, etc.)
-                if not vendor_detected and re.search(r'(?i)(VOLOTEA|AIR\s+FRANCE|SNCF|ENGIE|EDF)', value):
-                    vendor_name = re.search(r'(?i)(VOLOTEA|AIR\s+FRANCE|SNCF|ENGIE|EDF)', value).group(1).upper()
-                    result["invoice_info"]["vendor"] = vendor_name
-                    vendor_detected = True
-                
-                # Détection d'adresse
-                if any(x in value.lower() for x in ["aéroport", "rue", "avenue", "boulevard", "cedex"]):
-                    address_lines.append(value)
-                
-                # Détection de TVA intracommunautaire
-                vat_match = re.search(r'(?i)TVA\s*(?:intra)?.*:\s*([A-Z0-9]+)', value)
-                if vat_match:
-                    result["invoice_info"]["vat_number"] = vat_match.group(1)
-                
-                # Détection de SIRET ou SIREN
-                siret_match = re.search(r'(?i)SIRET\s*:?\s*(\d[\s\d]{13,})', value)
-                if siret_match:
-                    result["invoice_info"]["siret"] = siret_match.group(1).replace(" ", "")
-                
-                # Détection d'e-mail
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', value)
-                if email_match:
-                    result["customer_info"]["email"] = email_match.group(0)
-        
-        # Ajouter l'adresse si trouvée
-        if address_lines:
-            result["invoice_info"]["address"] = address_lines
+                # Ajouter les valeurs de formulaire
+                result["checkbox_data"] = values
+            
+            # Fusionner les données des tableaux et des cases à cocher
+            merged_data = {}
+            
+            # Ajouter les données des tableaux
+            if result["table_data"]:
+                for table_entry in result["table_data"]:
+                    if "data" in table_entry and isinstance(table_entry["data"], list):
+                        for row in table_entry["data"]:
+                            if isinstance(row, dict):
+                                for key, value in row.items():
+                                    # Nettoyer les noms de clés
+                                    clean_key = self._normalize_key(key)
+                                    if clean_key:
+                                        merged_data[clean_key] = value
+            
+            # Ajouter les données des cases à cocher
+            if result["checkbox_data"]:
+                for key, value in result["checkbox_data"].items():
+                    # Nettoyer les noms de clés
+                    clean_key = self._normalize_key(key)
+                    if clean_key:
+                        merged_data[clean_key] = value
+            
+            result["merged_data"] = merged_data
+            result["metadata"]["table_count"] = len(tables) if tables else 0
+            result["metadata"]["checkbox_count"] = len(checkboxes) if checkbox_data and "checkboxes" in checkbox_data else 0
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erreur traitement formulaire: {e}")
+            return {
+                "id": str(uuid.uuid4()),
+                "type": "form",
+                "processing_date": datetime.now().isoformat(),
+                "status": "error",
+                "error": str(e)
+            }
     
-    def _extract_line_items(self, data: List[Dict[str, Any]], result: Dict[str, Any]):
-        """Extrait les lignes de facture."""
+    def detect_document_type(self, file_obj: Union[str, bytes, object]) -> Dict[str, float]:
+        """
+        Détecte le type du document.
+        
+        Args:
+            file_obj: Fichier à analyser
+            
+        Returns:
+            Dictionnaire des probabilités par type de document
+        """
+        # Implémentation simple (à améliorer avec une IA dédiée)
+        # Retourne un dictionnaire de probabilités
+        return {
+            "invoice": 0.25,
+            "technical_invoice": 0.25,
+            "form": 0.25,
+            "generic": 0.25
+        }
+    
+    def _identify_table_type(self, table: Dict[str, Any]) -> str:
+        """
+        Identifie le type de tableau dans une facture.
+        
+        Args:
+            table: Tableau à identifier
+            
+        Returns:
+            Type du tableau ("header", "line_items", "totals", "unknown")
+        """
+        if not table or "data" not in table:
+            return "unknown"
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return "unknown"
+        
+        # Vérifier les colonnes pour déterminer le type
+        columns = [str(col).lower() for col in data.columns]
+        
+        # Vérifier si c'est un tableau d'en-tête
+        header_keywords = ["facture", "invoice", "client", "date", "numéro", "number", "adresse", "address"]
+        if any(keyword in ' '.join(columns) for keyword in header_keywords) and len(data) < 5:
+            return "header"
+        
+        # Vérifier si c'est un tableau d'éléments de ligne
+        line_item_keywords = ["description", "quantité", "quantity", "prix", "price", "montant", "amount", "total"]
+        if sum(1 for keyword in line_item_keywords if any(keyword in col for col in columns)) >= 2:
+            return "line_items"
+        
+        # Vérifier si c'est un tableau de totaux
+        total_keywords = ["total", "sous-total", "subtotal", "tva", "vat", "tax", "ttc", "ht"]
+        if any(keyword in ' '.join(columns) for keyword in total_keywords) and len(data) < 10:
+            return "totals"
+        
+        return "unknown"
+    
+    def _identify_technical_table_type(self, table: Dict[str, Any]) -> str:
+        """
+        Identifie le type de tableau dans un devis technique.
+        
+        Args:
+            table: Tableau à identifier
+            
+        Returns:
+            Type du tableau
+        """
+        if not table or "data" not in table:
+            return "unknown"
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return "unknown"
+        
+        # Vérifier les colonnes pour déterminer le type
+        columns = [str(col).lower() for col in data.columns]
+        
+        # Vérifier si c'est un tableau d'information client
+        client_keywords = ["client", "nom", "name", "adresse", "address", "contact", "tel", "email"]
+        if any(keyword in ' '.join(columns) for keyword in client_keywords) and len(data) < 5:
+            return "client_info"
+        
+        # Vérifier si c'est un tableau de produits
+        product_keywords = ["produit", "product", "référence", "reference", "modèle", "model"]
+        if any(keyword in ' '.join(columns) for keyword in product_keywords):
+            return "products"
+        
+        # Vérifier si c'est un tableau de services
+        service_keywords = ["service", "prestation", "intervention", "maintenance", "support"]
+        if any(keyword in ' '.join(columns) for keyword in service_keywords):
+            return "services"
+        
+        # Vérifier si c'est un tableau d'options
+        option_keywords = ["option", "accessoire", "accessory", "supplément", "add-on"]
+        if any(keyword in ' '.join(columns) for keyword in option_keywords):
+            return "options"
+        
+        # Vérifier si c'est un tableau de totaux
+        total_keywords = ["total", "sous-total", "subtotal", "tva", "vat", "tax", "ttc", "ht"]
+        if any(keyword in ' '.join(columns) for keyword in total_keywords) and len(data) < 10:
+            return "totals"
+        
+        # Vérifier si c'est un tableau de conditions
+        terms_keywords = ["condition", "term", "clause", "garantie", "warranty", "livraison", "delivery"]
+        if any(keyword in ' '.join(columns) for keyword in terms_keywords):
+            return "terms"
+        
+        return "unknown"
+    
+    def _process_header_table(self, table: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Traite un tableau d'en-tête de facture.
+        
+        Args:
+            table: Tableau d'en-tête
+            
+        Returns:
+            Informations d'en-tête structurées
+        """
+        header = {}
+        
+        if not table or "data" not in table:
+            return header
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return header
+        
+        # Extraire les informations clés
+        # Pour un tableau d'en-tête, nous convertissons les colonnes en un dictionnaire plat
+        for col in data.columns:
+            col_lower = str(col).lower()
+            
+            # Identifier des champs spécifiques
+            if "facture" in col_lower or "invoice" in col_lower:
+                header["invoice_number"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "date" in col_lower:
+                header["invoice_date"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "client" in col_lower or "customer" in col_lower:
+                header["client_name"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "adresse" in col_lower or "address" in col_lower:
+                header["client_address"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "échéance" in col_lower or "due" in col_lower:
+                header["due_date"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            else:
+                # Champs génériques
+                header[col] = str(data[col].iloc[0]) if not data[col].empty else ""
+        
+        return header
+    
+    def _process_line_items_table(self, table: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Traite un tableau d'éléments de ligne de facture.
+        
+        Args:
+            table: Tableau d'éléments de ligne
+            
+        Returns:
+            Liste des éléments de ligne structurés
+        """
         line_items = []
-        in_items_section = False
         
-        for i, row in enumerate(data):
-            # Reconstruire le texte complet de la ligne en joignant toutes les colonnes
-            line_text = " ".join(str(value) for value in row.values() if value)
+        if not table or "data" not in table:
+            return line_items
             
-            # Détection des lignes de détail de vol
-            if re.search(r'\d{2}/\d{2}/\d{4}', line_text) and ("-" in line_text or any(city in line_text for city in ["Montpellier", "Nantes", "Paris", "Lyon", "Bordeaux"])):
-                in_items_section = True
-                
-                # Extraction des parties
-                date_match = re.search(r'(\d{2}/\d{2}/\d{4})', line_text)
-                date = date_match.group(1) if date_match else ""
-                
-                # Extraction du trajet
-                route_match = re.search(r'([A-Za-zÀ-ÖØ-öø-ÿ]+\s*-\s*[A-Za-zÀ-ÖØ-öø-ÿ]+)', line_text)
-                route = route_match.group(1) if route_match else ""
-                
-                # Extraction du passager
-                passenger_match = re.search(r'([A-Za-zÀ-ÖØ-öø-ÿ]+\s+[A-Za-zÀ-ÖØ-öø-ÿ]+)(?=\s+\d)', line_text)
-                passenger = passenger_match.group(1) if passenger_match else ""
-                
-                # Extraction du montant (en recherchant des chiffres séparés par des espaces à la fin)
-                amount_match = re.search(r'(\d+\s+\d+(?:\s+\d+)?)$', line_text)
-                amount = amount_match.group(1).replace(" ", ".") if amount_match else ""
-                
-                line_items.append({
-                    "date": date,
-                    "route": route,
-                    "passenger": passenger,
-                    "amount": self._clean_numeric(amount),
-                    "type": "flight"
-                })
-            
-            # Détection des réductions
-            elif ("Réductions" in line_text or "réduction" in line_text.lower()) and in_items_section:
-                amount_match = re.search(r'(-\d+[\s,\.]\d+)', line_text)
-                amount = amount_match.group(1).replace(" ", ".") if amount_match else ""
-                
-                line_items.append({
-                    "type": "discount",
-                    "description": "Réduction",
-                    "amount": self._clean_numeric(amount)
-                })
-                
-            # Détection d'autres types de services (assurance, bagages, etc.)
-            elif any(service in line_text.lower() for service in ["assurance", "bagages", "service", "supplément"]) and in_items_section:
-                # Extraction du type de service
-                service_type = "other"
-                for s_type in ["assurance", "bagages", "supplément"]:
-                    if s_type in line_text.lower():
-                        service_type = s_type
-                        break
-                
-                # Extraction du montant
-                amount_match = re.search(r'(\d+[\s,\.]\d+)(?:\s+€)?$', line_text)
-                amount = amount_match.group(1).replace(" ", ".") if amount_match else ""
-                
-                line_items.append({
-                    "type": service_type,
-                    "description": line_text.strip(),
-                    "amount": self._clean_numeric(amount),
-                })
+        data = table["data"]
         
-        result["line_items"] = line_items
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return line_items
+        
+        # Normaliser les noms de colonnes
+        column_mapping = {}
+        for col in data.columns:
+            col_lower = str(col).lower()
+            if "description" in col_lower or "produit" in col_lower or "service" in col_lower:
+                column_mapping[col] = "description"
+            elif "quantité" in col_lower or "quantity" in col_lower or "qty" in col_lower:
+                column_mapping[col] = "quantity"
+            elif "prix" in col_lower or "price" in col_lower or "unit" in col_lower:
+                column_mapping[col] = "price"
+            elif "total" in col_lower or "montant" in col_lower or "amount" in col_lower:
+                column_mapping[col] = "total"
+            elif "tva" in col_lower or "vat" in col_lower or "tax" in col_lower:
+                column_mapping[col] = "tax"
+            else:
+                column_mapping[col] = col_lower
+        
+        # Renommer les colonnes
+        data_renamed = data.rename(columns=column_mapping)
+        
+        # Convertir en liste de dictionnaires
+        for _, row in data_renamed.iterrows():
+            item = {}
+            for col in data_renamed.columns:
+                value = row[col]
+                
+                # Convertir les colonnes numériques
+                if col in ["quantity", "price", "total", "tax"]:
+                    try:
+                        if pd.notna(value):
+                            # Si c'est une chaîne, nettoyer et convertir
+                            if isinstance(value, str):
+                                # Supprimer les caractères non numériques sauf le point décimal
+                                value = re.sub(r'[^\d.,]', '', value)
+                                value = value.replace(',', '.')
+                            item[col] = float(value)
+                        else:
+                            item[col] = 0.0
+                    except (ValueError, TypeError):
+                        item[col] = 0.0
+                else:
+                    item[col] = str(value) if pd.notna(value) else ""
+            
+            line_items.append(item)
+        
+        return line_items
     
-    def _extract_totals(self, data: List[Dict[str, Any]], result: Dict[str, Any]):
-        """Extrait les totaux de la facture."""
+    def _process_totals_table(self, table: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Traite un tableau de totaux de facture.
+        
+        Args:
+            table: Tableau de totaux
+            
+        Returns:
+            Informations de totaux structurées
+        """
         totals = {}
         
-        for row in data:
-            # Reconstruire le texte complet de la ligne
-            line_text = " ".join(str(value) for value in row.values() if value)
+        if not table or "data" not in table:
+            return totals
             
-            # Subtotal
-            if "Subtotal" in line_text or "sous-total" in line_text.lower():
-                amount_match = re.search(r'(\d+[\s,\.]\d+)', line_text)
-                if amount_match:
-                    totals["subtotal"] = self._clean_numeric(amount_match.group(1))
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return totals
+        
+        # Extraire les informations de totaux
+        for _, row in data.iterrows():
+            row_dict = row.to_dict()
+            label = None
+            value = None
             
-            # Base d'imposition
-            elif "Base d'imposition" in line_text:
-                if "assujettie" in line_text:
-                    amount_match = re.search(r'(\d+[\s,\.]\d+)', line_text)
-                    if amount_match:
-                        totals["taxable_base"] = self._clean_numeric(amount_match.group(1))
-                elif "non assujettie" in line_text:
-                    amount_match = re.search(r'(\d+[\s,\.]\d+)', line_text)
-                    if amount_match:
-                        totals["non_taxable_base"] = self._clean_numeric(amount_match.group(1))
-            
-            # TVA
-            elif "TVA" in line_text:
-                rate_match = re.search(r'TVA\s*\((\d+)\s*%\)', line_text)
-                amount_match = re.search(r'(\d+[\s,\.]\d+)', line_text)
+            # Trouver la colonne de label et la colonne de valeur
+            for col, val in row_dict.items():
+                col_str = str(col).lower()
+                val_str = str(val).lower() if pd.notna(val) else ""
                 
-                if amount_match:
-                    amount = self._clean_numeric(amount_match.group(1))
-                    
-                    if rate_match:
-                        rate = rate_match.group(1)
-                        if "vat" not in totals:
-                            totals["vat"] = []
-                        
-                        totals["vat"].append({
-                            "rate": f"{rate}%",
-                            "amount": amount
-                        })
-                    else:
-                        # Si pas de taux spécifié, on met dans le total TVA
-                        totals["vat_total"] = amount
+                # Si la colonne ou la valeur contient un mot-clé de total
+                if any(keyword in col_str for keyword in ["total", "sous", "sub", "tva", "vat", "tax", "ht", "ttc"]):
+                    label = col
+                elif any(keyword in val_str for keyword in ["total", "sous", "sub", "tva", "vat", "tax", "ht", "ttc"]):
+                    label = val
+                elif re.search(r'\d+[,.]\d+', str(val)):
+                    # Si la valeur ressemble à un montant (chiffres avec virgule/point)
+                    value = val
             
-            # Total
-            elif "TOTAL" in line_text.upper():
-                currency_match = re.search(r'\((.*?)\)', line_text)
-                amount_match = re.search(r'(?:TOTAL(?:\s+\(.*?\))?\s*|^)(\d+[\s,\.]\d+)(?:\s*€)?$', line_text)
+            if label and value:
+                # Nettoyer le label
+                label_clean = str(label).lower().strip()
                 
-                if amount_match:
-                    totals["total"] = self._clean_numeric(amount_match.group(1))
-                    if currency_match:
-                        totals["currency"] = currency_match.group(1)
-                    else:
-                        # Recherche de symbole de devise
-                        currency_symbol = re.search(r'(\$|€|£|USD|EUR|GBP)', line_text)
-                        totals["currency"] = currency_symbol.group(1) if currency_symbol else "EUR"
-        
-        result["totals"] = totals
-    
-    def _clean_numeric(self, value: str) -> float:
-        """Nettoie et convertit une valeur numérique."""
-        if not value:
-            return 0.0
-            
-        try:
-            # Supprimer les caractères non numériques sauf . et ,
-            value = re.sub(r'[^\d,\.-]', '', value)
-            
-            # Remplacer la virgule par un point pour le parsing
-            value = value.replace(',', '.')
-            
-            return float(value)
-        except Exception as e:
-            logger.debug(f"Erreur conversion numérique '{value}': {e}")
-            return 0.0
-    
-    def _cleanup_values(self, result: Dict[str, Any]):
-        """Nettoie et formate toutes les valeurs de la structure."""
-        # Formatage des montants avec 2 décimales
-        if "totals" in result:
-            for key, value in result["totals"].items():
-                if isinstance(value, (int, float)):
-                    result["totals"][key] = round(value, 2)
-                elif isinstance(value, list) and key == "vat":
-                    for vat_item in value:
-                        if "amount" in vat_item:
-                            vat_item["amount"] = round(vat_item["amount"], 2)
-        
-        # Formatage des montants des lignes
-        if "line_items" in result:
-            for item in result["line_items"]:
-                if "amount" in item and isinstance(item["amount"], (int, float)):
-                    item["amount"] = round(item["amount"], 2)
-        
-        # Formatage des dates
-        if "invoice_info" in result and "date" in result["invoice_info"]:
-            date_str = result["invoice_info"]["date"]
-            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                # Convertir la valeur en nombre
                 try:
-                    parsed_date = dateutil.parser.parse(date_str, dayfirst=True)
-                    result["invoice_info"]["date"] = parsed_date.strftime("%Y-%m-%d")
-                except Exception as e:
-                    logger.debug(f"Erreur parsing date '{date_str}': {e}")
+                    if isinstance(value, str):
+                        value = re.sub(r'[^\d.,]', '', value)
+                        value = value.replace(',', '.')
+                    value_clean = float(value)
+                except (ValueError, TypeError):
+                    value_clean = 0.0
+                
+                # Mapper les labels courants
+                if "total" in label_clean and "ht" in label_clean:
+                    totals["total_ht"] = value_clean
+                elif "total" in label_clean and "ttc" in label_clean:
+                    totals["total_ttc"] = value_clean
+                elif "tva" in label_clean or "vat" in label_clean or "tax" in label_clean:
+                    totals["tax"] = value_clean
+                elif "sous" in label_clean or "sub" in label_clean:
+                    totals["subtotal"] = value_clean
+                else:
+                    totals[label_clean] = value_clean
+        
+        return totals
     
-    def _validate_and_calculate_confidence(self, result: Dict[str, Any]) -> float:
+    def _process_client_info_table(self, table: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Valide les données et calcule un score de confiance.
-        
-        Returns:
-            Score de confiance (0-1)
-        """
-        score = 0.0
-        checks = 0
-        
-        # Vérification de la présence des informations essentielles
-        if result.get("invoice_info", {}).get("number"):
-            score += 1
-            checks += 1
-        
-        if result.get("invoice_info", {}).get("date"):
-            score += 1
-            checks += 1
-        
-        if result.get("invoice_info", {}).get("vendor"):
-            score += 1
-            checks += 1
-        
-        # Vérification du nombre de lignes
-        line_items = result.get("line_items", [])
-        if line_items:
-            if len(line_items) >= 1:
-                score += 1
-            checks += 1
-        
-        # Vérification des totaux
-        totals = result.get("totals", {})
-        if "total" in totals:
-            score += 1
-            checks += 1
-            
-            # Vérifier la cohérence entre les lignes et le total
-            if line_items:
-                try:
-                    items_total = sum(item.get("amount", 0) for item in line_items)
-                    total_diff = abs(items_total - totals["total"])
-                    
-                    # Si la différence est inférieure à 1€ ou 5%, c'est plutôt bon
-                    if total_diff < 1 or (totals["total"] > 0 and total_diff / totals["total"] < 0.05):
-                        score += 2
-                    checks += 2
-                except Exception:
-                    pass
-        
-        # Vérification de la TVA
-        if "vat" in totals or "vat_total" in totals:
-            score += 1
-            checks += 1
-        
-        # Calcul du score final
-        return round(score / max(1, checks), 2) if checks > 0 else 0.0
-    
-    def _determine_document_subtype(self, result: Dict[str, Any]) -> str:
-        """
-        Identifie le sous-type de document basé sur son contenu.
-        
-        Returns:
-            Sous-type de document (airline_ticket, hotel_invoice, etc.)
-        """
-        # Vérifier s'il s'agit d'un billet d'avion
-        if result.get("invoice_info", {}).get("vendor") in ["VOLOTEA", "AIR FRANCE", "LUFTHANSA", "EASYJET"]:
-            for item in result.get("line_items", []):
-                if item.get("type") == "flight" or item.get("route"):
-                    return "airline_ticket"
-        
-        # Vérifier s'il s'agit d'un billet de train
-        if result.get("invoice_info", {}).get("vendor") in ["SNCF", "EUROSTAR", "THALYS"]:
-            return "train_ticket"
-        
-        # Par défaut, c'est une facture générique
-        return "generic_invoice"
-    
-    def process_technical_invoice(self, extracted_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Traite les tableaux extraits pour les devis techniques (construction, métallurgie, etc.)
+        Traite un tableau d'informations client.
         
         Args:
-            extracted_tables: Liste des tableaux extraits
+            table: Tableau d'informations client
             
         Returns:
-            Structure de devis technique enrichie
+            Informations client structurées
         """
-        if not extracted_tables:
-            return {"error": "Aucun tableau trouvé"}
+        client_info = {}
         
-        # Structure de résultat spécifique aux devis techniques
-        result = {
-            "type_document": "devis_technique",
-            "metadata": {
-                "reference": None,
-                "date": None,
-                "client": None,
-                "contact": None,
-                "processor_version": "1.0",
-                "processing_date": datetime.utcnow().isoformat(),
-                "confidence": 0.0
-            },
-            "sections": [],
-            "totals": {
-                "montant_ht": None,
-                "tva": None,
-                "montant_ttc": None,
-                "currency": "EUR"
-            },
-            "conditions": {
-                "delai": None,
-                "paiement": None,
-                "validite": None
+        if not table or "data" not in table:
+            return client_info
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return client_info
+        
+        # Parcourir les données pour extraire les informations client
+        for col in data.columns:
+            col_lower = str(col).lower()
+            
+            # Identifier des champs spécifiques
+            if "nom" in col_lower or "name" in col_lower:
+                client_info["name"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "adresse" in col_lower or "address" in col_lower:
+                client_info["address"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "email" in col_lower or "courriel" in col_lower:
+                client_info["email"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "téléphone" in col_lower or "telephone" in col_lower or "phone" in col_lower:
+                client_info["phone"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            elif "contact" in col_lower:
+                client_info["contact"] = str(data[col].iloc[0]) if not data[col].empty else ""
+            else:
+                # Champs génériques
+                client_info[col_lower] = str(data[col].iloc[0]) if not data[col].empty else ""
+        
+        return client_info
+    
+    def _process_products_table(self, table: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Traite un tableau de produits.
+        
+        Args:
+            table: Tableau de produits
+            
+        Returns:
+            Liste des produits structurés
+        """
+        products = []
+        
+        if not table or "data" not in table:
+            return products
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return products
+        
+        # Normaliser les noms de colonnes
+        column_mapping = {}
+        for col in data.columns:
+            col_lower = str(col).lower()
+            if "référence" in col_lower or "reference" in col_lower or "ref" in col_lower:
+                column_mapping[col] = "reference"
+            elif "produit" in col_lower or "product" in col_lower or "description" in col_lower:
+                column_mapping[col] = "description"
+            elif "quantité" in col_lower or "quantity" in col_lower or "qty" in col_lower:
+                column_mapping[col] = "quantity"
+            elif "prix" in col_lower or "price" in col_lower or "unit" in col_lower:
+                column_mapping[col] = "price"
+            elif "total" in col_lower or "montant" in col_lower or "amount" in col_lower:
+                column_mapping[col] = "total"
+            else:
+                column_mapping[col] = col_lower
+        
+        # Renommer les colonnes
+        data_renamed = data.rename(columns=column_mapping)
+        
+        # Convertir en liste de dictionnaires
+        for _, row in data_renamed.iterrows():
+            item = {
+                "type": "product",
+                "id": str(uuid.uuid4())
             }
-        }
-        
-        try:
-            # Extraction des métadonnées
-            self._extract_technical_metadata(extracted_tables, result)
             
-            # Détection et extraction des sections techniques
-            self._extract_technical_sections(extracted_tables, result)
-            
-            # Extraction des totaux
-            self._extract_technical_totals(extracted_tables, result)
-            
-            # Extraction des conditions
-            self._extract_technical_conditions(extracted_tables, result)
-            
-            # Nettoyage et formatage final
-            self._cleanup_technical_values(result)
-            
-            # Calcul du score de confiance
-            confidence = self._calculate_technical_confidence(result)
-            result["metadata"]["confidence"] = confidence
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Erreur lors du traitement du devis technique: {e}")
-            result["error"] = str(e)
-            return result
-
-    def _extract_technical_metadata(self, extracted_tables: List[Dict[str, Any]], result: Dict[str, Any]):
-        """
-        Extrait les métadonnées du devis technique.
-        
-        Args:
-            extracted_tables: Tableaux extraits
-            result: Structure de résultat à compléter
-        """
-        # Patterns réguliers spécifiques aux devis techniques
-        devis_patterns = {
-            'reference': r'(?i)(?:Devis|Réf)[\.:\s]*([A-Z0-9\/-]+)',
-            'date': r'(?i)(?:Le|Date)[\s:]*(\d{1,2}[\s/.-]+\w+[\s/.-]+\d{4}|\d{1,2}[\s/.-]\d{1,2}[\s/.-]\d{2,4})',
-            'client': r'(?i)(?:A l\'attention de|Client)[\.:\s]*([^\n.]+)',
-            'delai': r'(?i)Délai[\s:]*([^\n.]+)',
-            'payment': r'(?i)(?:paiement|règlement)[\s:]*([^\n.]+)',
-        }
-        
-        # Fusion de tous les textes pour la recherche
-        all_text = self._get_combined_text(extracted_tables)
-        
-        # Extraction des métadonnées avec les patterns spécifiques
-        for field, pattern in devis_patterns.items():
-            match = re.search(pattern, all_text)
-            if match:
-                value = match.group(1).strip()
+            for col in data_renamed.columns:
+                value = row[col]
                 
-                if field == 'reference':
-                    result["metadata"]["reference"] = value
-                elif field == 'date':
+                # Convertir les colonnes numériques
+                if col in ["quantity", "price", "total"]:
                     try:
-                        # Parsing de la date avec gestion des formats français
-                        value = value.replace("janvier", "January").replace("février", "February") \
-                                    .replace("mars", "March").replace("avril", "April") \
-                                    .replace("mai", "May").replace("juin", "June") \
-                                    .replace("juillet", "July").replace("août", "August") \
-                                    .replace("septembre", "September").replace("octobre", "October") \
-                                    .replace("novembre", "November").replace("décembre", "December")
-                        
-                        parsed_date = dateutil.parser.parse(value, dayfirst=True)
-                        result["metadata"]["date"] = parsed_date.strftime("%Y-%m-%d")
-                    except Exception as e:
-                        logger.warning(f"Erreur parsing date '{value}': {e}")
-                        result["metadata"]["date"] = value
-                elif field == 'client':
-                    result["metadata"]["client"] = value
-                elif field == 'delai':
-                    result["conditions"]["delai"] = value
-                elif field == 'payment':
-                    result["conditions"]["paiement"] = value
+                        if pd.notna(value):
+                            # Si c'est une chaîne, nettoyer et convertir
+                            if isinstance(value, str):
+                                value = re.sub(r'[^\d.,]', '', value)
+                                value = value.replace(',', '.')
+                            item[col] = float(value)
+                        else:
+                            item[col] = 0.0
+                    except (ValueError, TypeError):
+                        item[col] = 0.0
+                else:
+                    item[col] = str(value) if pd.notna(value) else ""
+            
+            products.append(item)
         
-        # Recherche d'informations de contact
-        contact_match = re.search(r'(?i)(?:tél|téléphone)[\.:\s]*([+\d\s.()-]{8,})', all_text)
-        if contact_match:
-            result["metadata"]["contact"] = contact_match.group(1).strip()
-
-    def _extract_technical_sections(self, extracted_tables: List[Dict[str, Any]], result: Dict[str, Any]):
+        return products
+    
+    def _process_services_table(self, table: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Extrait les sections techniques du devis.
+        Traite un tableau de services.
         
         Args:
-            extracted_tables: Tableaux extraits
-            result: Structure de résultat à compléter
+            table: Tableau de services
+            
+        Returns:
+            Liste des services structurés
         """
-        # Keywords pour détecter les sections techniques
-        section_keywords = {
-            "empannage": ["empannage", "empan", "entrait", "poutre"],
-            "lissage": ["lissage", "lisse", "bardage", "pannes"],
-            "pignon": ["pignon", "faîtage", "faitage", "poteau"],
-            "couverture": ["couverture", "toiture", "bac", "acier"],
-            "fondation": ["fondation", "semelle", "ancrage", "béton", "beton"]
-        }
+        services = []
         
-        # Parcourir les tableaux
-        for table_idx, table in enumerate(extracted_tables):
-            table_data = table.get("data", None)
-            if table_data is None or not isinstance(table_data, pd.DataFrame) or table_data.empty:
-                continue
+        if not table or "data" not in table:
+            return services
             
-            # Détecter la section en fonction des mots-clés
-            section_type = None
-            section_confidence = 0.0
-            
-            # Convertir le DataFrame en texte pour la recherche
-            table_text = " ".join(table_data.astype(str).values.flatten()).lower()
-            
-            for section_name, keywords in section_keywords.items():
-                for keyword in keywords:
-                    if keyword.lower() in table_text:
-                        section_type = section_name
-                        section_confidence = 0.8
-                        break
-                if section_type:
-                    break
-            
-            # Si aucune section détectée, utiliser un nom générique
-            if not section_type:
-                section_type = f"section_{table_idx+1}"
-                section_confidence = 0.4
-            
-            # Extraction des éléments de la section
-            elements = self._extract_technical_elements(table_data, section_type)
-            
-            # Extraction du prix de la section
-            section_price = self._extract_section_price(table_data)
-            
-            # Création de la section
-            section = {
-                "type": section_type,
-                "elements": elements,
-                "prix_ht": section_price,
-                "confidence": section_confidence
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return services
+        
+        # Normaliser les noms de colonnes
+        column_mapping = {}
+        for col in data.columns:
+            col_lower = str(col).lower()
+            if "service" in col_lower or "prestation" in col_lower or "description" in col_lower:
+                column_mapping[col] = "description"
+            elif "durée" in col_lower or "duration" in col_lower:
+                column_mapping[col] = "duration"
+            elif "quantité" in col_lower or "quantity" in col_lower or "qty" in col_lower:
+                column_mapping[col] = "quantity"
+            elif "prix" in col_lower or "price" in col_lower or "tarif" in col_lower:
+                column_mapping[col] = "price"
+            elif "total" in col_lower or "montant" in col_lower or "amount" in col_lower:
+                column_mapping[col] = "total"
+            else:
+                column_mapping[col] = col_lower
+        
+        # Renommer les colonnes
+        data_renamed = data.rename(columns=column_mapping)
+        
+        # Convertir en liste de dictionnaires
+        for _, row in data_renamed.iterrows():
+            item = {
+                "type": "service",
+                "id": str(uuid.uuid4())
             }
             
-            result["sections"].append(section)
-
-    def _extract_technical_elements(self, df: pd.DataFrame, section_type: str) -> List[Dict[str, Any]]:
+            for col in data_renamed.columns:
+                value = row[col]
+                
+                # Convertir les colonnes numériques
+                if col in ["quantity", "price", "total"]:
+                    try:
+                        if pd.notna(value):
+                            # Si c'est une chaîne, nettoyer et convertir
+                            if isinstance(value, str):
+                                value = re.sub(r'[^\d.,]', '', value)
+                                value = value.replace(',', '.')
+                            item[col] = float(value)
+                        else:
+                            item[col] = 0.0
+                    except (ValueError, TypeError):
+                        item[col] = 0.0
+                else:
+                    item[col] = str(value) if pd.notna(value) else ""
+            
+            services.append(item)
+        
+        return services
+    
+    def _process_options_table(self, table: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Extrait les éléments d'une section technique.
+        Traite un tableau d'options.
         
         Args:
-            df: DataFrame du tableau
-            section_type: Type de section
+            table: Tableau d'options
             
         Returns:
-            Liste des éléments
+            Liste des options structurées
         """
-        elements = []
+        options = []
         
-        # Recherche de mots-clés spécifiques aux éléments techniques
-        element_keywords = ["multibeam", "cours", "profile", "ipn", "ipe", "hea", "heb", "poutre"]
+        if not table or "data" not in table:
+            return options
+            
+        data = table["data"]
         
-        # Parcourir les lignes
-        for idx, row in df.iterrows():
-            # Chercher des mots-clés dans chaque cellule
-            for col in df.columns:
-                cell_value = str(row[col]).lower()
-                
-                # Vérifier si c'est une ligne d'élément
-                if any(keyword in cell_value for keyword in element_keywords):
-                    # Extraire les informations de l'élément
-                    element = self._extract_element_info(row, df.columns)
-                    
-                    if element and element.get("description"):
-                        elements.append(element)
-                    break
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return options
         
-        # Si aucun élément trouvé avec les mots-clés, essayer une approche plus générique
-        if not elements:
-            # Parcourir les lignes pour trouver des motifs numériques typiques des devis
-            for idx, row in df.iterrows():
-                # Recherche de quantités (ml, kg, m², pièces)
-                quantity_pattern = re.compile(r'(\d+(?:[,.]\d+)?)\s*(?:ml|kg|m²|m2|pièces|pieces|u)')
-                found_quantity = False
+        # Normaliser les noms de colonnes
+        column_mapping = {}
+        for col in data.columns:
+            col_lower = str(col).lower()
+            if "option" in col_lower or "accessoire" in col_lower or "description" in col_lower:
+                column_mapping[col] = "description"
+            elif "quantité" in col_lower or "quantity" in col_lower or "qty" in col_lower:
+                column_mapping[col] = "quantity"
+            elif "prix" in col_lower or "price" in col_lower or "tarif" in col_lower:
+                column_mapping[col] = "price"
+            elif "total" in col_lower or "montant" in col_lower or "amount" in col_lower:
+                column_mapping[col] = "total"
+            elif "inclus" in col_lower or "included" in col_lower:
+                column_mapping[col] = "included"
+            else:
+                column_mapping[col] = col_lower
+        
+        # Renommer les colonnes
+        data_renamed = data.rename(columns=column_mapping)
+        
+        # Convertir en liste de dictionnaires
+        for _, row in data_renamed.iterrows():
+            item = {
+                "type": "option",
+                "id": str(uuid.uuid4())
+            }
+            
+            for col in data_renamed.columns:
+                value = row[col]
                 
-                for col in df.columns:
-                    cell_value = str(row[col])
-                    if quantity_pattern.search(cell_value):
-                        found_quantity = True
-                        break
-                
-                if found_quantity:
-                    # Extraire les informations de l'élément
-                    element = self._extract_element_info(row, df.columns)
-                    
-                    if element and element.get("description"):
-                        elements.append(element)
-                        
-        return elements
-
-    def _extract_element_info(self, row: pd.Series, columns: pd.Index) -> Dict[str, Any]:
+                # Vérifier si l'option est incluse
+                if col == "included":
+                    item[col] = self._parse_boolean_value(value)
+                # Convertir les colonnes numériques
+                elif col in ["quantity", "price", "total"]:
+                    try:
+                        if pd.notna(value):
+                            # Si c'est une chaîne, nettoyer et convertir
+                            if isinstance(value, str):
+                                value = re.sub(r'[^\d.,]', '', value)
+                                value = value.replace(',', '.')
+                            item[col] = float(value)
+                        else:
+                            item[col] = 0.0
+                    except (ValueError, TypeError):
+                        item[col] = 0.0
+                else:
+                    item[col] = str(value) if pd.notna(value) else ""
+            
+            options.append(item)
+        
+        return options
+    
+    def _process_technical_totals_table(self, table: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extrait les informations d'un élément technique à partir d'une ligne de tableau.
+        Traite un tableau de totaux pour un devis technique.
         
         Args:
-            row: Ligne du DataFrame
-            columns: Colonnes du DataFrame
+            table: Tableau de totaux
             
         Returns:
-            Dictionnaire des informations de l'élément
+            Informations de totaux structurées
         """
-        element = {
-            "description": None,
-            "quantite": None,
-            "dimensions": None,
-            "unite": None,
-            "specifications": None,
-            "prix_unitaire": None
+        # Réutiliser la méthode pour les factures
+        return self._process_totals_table(table)
+    
+    def _process_terms_table(self, table: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Traite un tableau de conditions.
+        
+        Args:
+            table: Tableau de conditions
+            
+        Returns:
+            Liste des conditions structurées
+        """
+        terms = []
+        
+        if not table or "data" not in table:
+            return terms
+            
+        data = table["data"]
+        
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
+            else:
+                return terms
+        
+        # Convertir en liste de termes
+        for _, row in data.iterrows():
+            row_dict = row.to_dict()
+            
+            # Trouver la colonne contenant le texte des conditions
+            for col, val in row_dict.items():
+                if pd.notna(val) and isinstance(val, str) and len(val) > 10:
+                    terms.append({
+                        "id": str(uuid.uuid4()),
+                        "text": val,
+                        "category": self._identify_term_category(val)
+                    })
+        
+        return terms
+    
+    def _process_form_table(self, table: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Traite un tableau de formulaire.
+        
+        Args:
+            table: Tableau de formulaire
+            
+        Returns:
+            Données structurées du formulaire
+        """
+        result = {
+            "id": str(uuid.uuid4()),
+            "page": table.get("page", 1),
+            "table_id": table.get("table_id", 1),
+            "data": [],
+            "metadata": {}
         }
         
-        # Parcourir les colonnes pour identifier les informations
-        for col in columns:
-            cell_value = str(row[col]).strip()
-            if not cell_value or cell_value.lower() in ["nan", "none", "-"]:
-                continue
-                
-            # Profil technique (Multibeam, IPN, etc.)
-            profile_match = re.search(r'(?i)(multibeam|profile|ipn|ipe|hea|heb|poutre|plaque)[\s\w]+([a-z]\d{2,3})', cell_value)
-            if profile_match:
-                element["description"] = cell_value
-                continue
-                
-            # Quantité (avec unité)
-            qty_match = re.search(r'(\d+(?:[,.]\d+)?)\s*(ml|kg|m²|m2|pièces|pieces|u)', cell_value)
-            if qty_match:
-                element["quantite"] = self._clean_numeric(qty_match.group(1))
-                element["unite"] = qty_match.group(2)
-                continue
-                
-            # Dimensions
-            dim_match = re.search(r'(?i)(?:écartement|ecartement|espacement|dimensions?)\s+(?:maxi|max|de)?\s*(?:\w+\s+)?(\d+(?:[,.]\d+)?)\s*(?:x\s*(\d+(?:[,.]\d+)?))?\s*(?:mm|cm|m)', cell_value)
-            if dim_match:
-                element["dimensions"] = cell_value
-                continue
-                
-            # Spécifications (galvanisation, etc.)
-            if any(spec in cell_value.lower() for spec in ["galvanis", "standard", "qualité", "qualite", "acier", "face", "gr/m²"]):
-                element["specifications"] = cell_value
-                continue
-                
-            # Prix unitaire
-            price_match = re.search(r'(\d+(?:[,.]\d+)?)\s*(?:€|EUR|HT)?(?:/(?:ml|kg|m²|m2|pièce|u))?', cell_value)
-            if price_match and not element["prix_unitaire"]:
-                element["prix_unitaire"] = self._clean_numeric(price_match.group(1))
-                continue
-        
-        # Si aucune description trouvée mais d'autres champs sont remplis,
-        # construire une description générique
-        if not element["description"] and (element["quantite"] or element["dimensions"]):
-            desc_parts = []
-            if element["quantite"] and element["unite"]:
-                desc_parts.append(f"{element['quantite']} {element['unite']}")
-            if element["dimensions"]:
-                desc_parts.append(element["dimensions"])
-                
-            if desc_parts:
-                element["description"] = "Élément: " + " - ".join(desc_parts)
-        
-        return element
-
-    def _extract_section_price(self, df: pd.DataFrame) -> Optional[float]:
-        """
-        Extrait le prix total d'une section.
-        
-        Args:
-            df: DataFrame du tableau
+        if not table or "data" not in table:
+            return result
             
-        Returns:
-            Prix total ou None
-        """
-        # Recherche de prix total
-        price_value = None
+        data = table["data"]
         
-        # Convertir toutes les données en chaînes
-        df_str = df.astype(str)
-        
-        # Recherche par mots-clés
-        price_keywords = ["prix total", "total", "ht", "franco"]
-        
-        for idx, row in df_str.iterrows():
-            # Vérifier chaque cellule pour les mots-clés de prix
-            for col in df.columns:
-                cell_value = row[col].lower()
-                
-                if any(keyword in cell_value for keyword in price_keywords):
-                    # Rechercher un prix dans cette ligne
-                    price_match = None
-                    
-                    # D'abord chercher dans la même cellule
-                    price_match = re.search(r'(\d+(?:[\s,.]\d+)?)\s*(?:€|EUR|HT)?', cell_value)
-                    
-                    # Si pas trouvé, chercher dans les autres cellules de la ligne
-                    if not price_match:
-                        for other_col in df.columns:
-                            if other_col != col:
-                                other_value = str(row[other_col])
-                                price_match = re.search(r'(\d+(?:[\s,.]\d+)?)\s*(?:€|EUR|HT)?', other_value)
-                                if price_match:
-                                    price_value = self._clean_numeric(price_match.group(1))
-                                    break
-                    else:
-                        price_value = self._clean_numeric(price_match.group(1))
-                        
-                    if price_value:
-                        return price_value
-        
-        # Si aucun prix trouvé, recherche plus générique
-        for idx, row in df_str.iterrows():
-            for col in df.columns:
-                cell_value = str(row[col])
-                
-                # Rechercher un format typique de prix (nombre significatif)
-                price_match = re.search(r'(\d{3,}(?:[\s,.]\d{2}))\s*(?:€|EUR|HT)?$', cell_value)
-                if price_match:
-                    return self._clean_numeric(price_match.group(1))
-        
-        return None
-
-    def _extract_technical_totals(self, extracted_tables: List[Dict[str, Any]], result: Dict[str, Any]):
-        """
-        Extrait les totaux du devis.
-        
-        Args:
-            extracted_tables: Tableaux extraits
-            result: Structure de résultat à compléter
-        """
-        # Recherche de tableaux contenant les totaux (généralement à la fin)
-        total_ht = None
-        total_tva = None
-        total_ttc = None
-        currency = "EUR"
-        
-        # Parcourir tous les tableaux
-        for table in extracted_tables:
-            table_data = table.get("data", None)
-            if table_data is None or not isinstance(table_data, pd.DataFrame) or table_data.empty:
-                continue
-            
-            # Convertir en chaînes pour la recherche
-            df_str = table_data.astype(str)
-            
-            # Recherche de mots-clés liés aux totaux
-            for idx, row in df_str.iterrows():
-                row_text = " ".join(row.values).lower()
-                
-                # Total HT
-                if "total" in row_text and ("ht" in row_text or "h.t" in row_text):
-                    price_match = re.search(r'(\d+(?:[\s,.]\d+)?)', row_text)
-                    if price_match:
-                        total_ht = self._clean_numeric(price_match.group(1))
-                
-                # TVA
-                elif "tva" in row_text or "t.v.a" in row_text:
-                    price_match = re.search(r'(\d+(?:[\s,.]\d+)?)', row_text)
-                    if price_match:
-                        total_tva = self._clean_numeric(price_match.group(1))
-                        
-                        # Recherche du taux de TVA
-                        tva_rate_match = re.search(r'(\d+(?:[\s,.]\d+)?)[\s%]', row_text)
-                        if tva_rate_match:
-                            result["totals"]["tva_rate"] = self._clean_numeric(tva_rate_match.group(1))
-                
-                # Total TTC
-                elif "ttc" in row_text or "t.t.c" in row_text or "toutes taxes" in row_text:
-                    price_match = re.search(r'(\d+(?:[\s,.]\d+)?)', row_text)
-                    if price_match:
-                        total_ttc = self._clean_numeric(price_match.group(1))
-                        
-                # Devise
-                currency_match = re.search(r'(€|EUR|euros?|HT)', row_text)
-                if currency_match:
-                    currency_found = currency_match.group(1).upper()
-                    if currency_found == "€":
-                        currency = "EUR"
-                    elif currency_found == "EUROS" or currency_found == "EURO":
-                        currency = "EUR"
-                    elif currency_found != "HT":
-                        currency = currency_found
-        
-        # Si aucun total trouvé, calculer à partir des sections
-        if total_ht is None:
-            # Somme des prix des sections
-            section_prices = [section.get("prix_ht", 0) for section in result["sections"] if section.get("prix_ht")]
-            if section_prices:
-                total_ht = sum(section_prices)
-        
-        # Si total TTC non trouvé mais HT et TVA disponibles, calculer
-        if total_ht is not None and total_tva is not None and total_ttc is None:
-            total_ttc = total_ht + total_tva
-        
-        # Mise à jour des résultats
-        result["totals"]["montant_ht"] = total_ht
-        result["totals"]["tva"] = total_tva
-        result["totals"]["montant_ttc"] = total_ttc
-        result["totals"]["currency"] = currency
-
-    def _extract_technical_conditions(self, extracted_tables: List[Dict[str, Any]], result: Dict[str, Any]):
-        """
-        Extrait les conditions du devis.
-        
-        Args:
-            extracted_tables: Tableaux extraits
-            result: Structure de résultat à compléter
-        """
-        # Recherche de tableaux contenant les conditions
-        for table in extracted_tables:
-            table_data = table.get("data", None)
-            if table_data is None or not isinstance(table_data, pd.DataFrame) or table_data.empty:
-                continue
-            
-            # Convertir en chaînes pour la recherche
-            df_str = table_data.astype(str)
-            
-            # Recherche de mots-clés liés aux conditions
-            for idx, row in df_str.iterrows():
-                row_text = " ".join(row.values).lower()
-                
-                # Délai
-                if "délai" in row_text or "livraison" in row_text:
-                    delai_match = re.search(r'(?:délai|livraison)[:\s]*(.*?)(?:\.|$)', row_text)
-                    if delai_match:
-                        result["conditions"]["delai"] = delai_match.group(1).strip()
-                
-                # Paiement
-                elif "paiement" in row_text or "règlement" in row_text:
-                    payment_match = re.search(r'(?:paiement|règlement)[:\s]*(.*?)(?:\.|$)', row_text)
-                    if payment_match:
-                        result["conditions"]["paiement"] = payment_match.group(1).strip()
-                
-                # Validité
-                elif "valid" in row_text or "offre" in row_text:
-                    valid_match = re.search(r'(?:validité|offre\s+valable)[:\s]*(.*?)(?:\.|$)', row_text)
-                    if valid_match:
-                        result["conditions"]["validite"] = valid_match.group(1).strip()
-        
-        # Si conditions non trouvées dans les tableaux, chercher dans le texte global
-        if not any(result["conditions"].values()):
-            all_text = self._get_combined_text(extracted_tables).lower()
-            
-            # Délai
-            if not result["conditions"]["delai"]:
-                delai_match = re.search(r'(?:délai|livraison)[:\s]*(.*?)(?:\.|$)', all_text)
-                if delai_match:
-                    result["conditions"]["delai"] = delai_match.group(1).strip()
-            
-            # Paiement
-            if not result["conditions"]["paiement"]:
-                payment_match = re.search(r'(?:paiement|règlement)[:\s]*(.*?)(?:\.|$)', all_text)
-                if payment_match:
-                    result["conditions"]["paiement"] = payment_match.group(1).strip()
-            
-            # Validité
-            if not result["conditions"]["validite"]:
-                valid_match = re.search(r'(?:validité|offre\s+valable)[:\s]*(.*?)(?:\.|$)', all_text)
-                if valid_match:
-                    result["conditions"]["validite"] = valid_match.group(1).strip()
-
-    def _get_combined_text(self, extracted_tables: List[Dict[str, Any]]) -> str:
-        """
-        Combine tous les textes des tableaux pour la recherche.
-        
-        Args:
-            extracted_tables: Tableaux extraits
-            
-        Returns:
-            Texte combiné
-        """
-        all_text = []
-        
-        for table in extracted_tables:
-            table_data = table.get("data", None)
-            if table_data is None:
-                continue
-                
-            if isinstance(table_data, pd.DataFrame):
-                # Convertir le DataFrame en liste de chaînes
-                for idx, row in table_data.iterrows():
-                    row_text = " ".join(str(val) for val in row.values if not pd.isna(val))
-                    all_text.append(row_text)
-            elif isinstance(table_data, list):
-                # Si le tableau est déjà une liste, la parcourir
-                for row in table_data:
-                    if isinstance(row, dict):
-                        row_text = " ".join(str(val) for val in row.values() if val)
-                        all_text.append(row_text)
-                    elif isinstance(row, list):
-                        row_text = " ".join(str(val) for val in row if val)
-                        all_text.append(row_text)
-                    else:
-                        all_text.append(str(row))
+        # Convertir en DataFrame si nécessaire
+        if not isinstance(data, pd.DataFrame):
+            if isinstance(data, list):
+                data = pd.DataFrame(data)
             else:
-                # Fallback pour tout autre type
-                all_text.append(str(table_data))
+                return result
         
-        return " ".join(all_text)
-
-    def _cleanup_technical_values(self, result: Dict[str, Any]):
-        """
-        Nettoie et formate les valeurs du résultat.
+        # Traitement spécifique pour les formulaires
+        # Pour un formulaire, nous voulons conserver la structure du tableau
+        # tout en normalisant les valeurs
         
-        Args:
-            result: Structure de résultat à nettoyer
-        """
-        # Formatage des montants
-        if result["totals"]["montant_ht"] is not None:
-            result["totals"]["montant_ht"] = round(result["totals"]["montant_ht"], 2)
-        
-        if result["totals"]["tva"] is not None:
-            result["totals"]["tva"] = round(result["totals"]["tva"], 2)
-        
-        if result["totals"]["montant_ttc"] is not None:
-            result["totals"]["montant_ttc"] = round(result["totals"]["montant_ttc"], 2)
-        
-        # Formatage des prix dans les sections
-        for section in result["sections"]:
-            if section["prix_ht"] is not None:
-                section["prix_ht"] = round(section["prix_ht"], 2)
+        # Convertir le DataFrame en liste de dictionnaires
+        if hasattr(data, 'to_dict'):
+            table_data = data.to_dict(orient='records')
             
-            # Formatage des prix des éléments
-            for element in section["elements"]:
-                if element["prix_unitaire"] is not None:
-                    element["prix_unitaire"] = round(element["prix_unitaire"], 2)
-
-    def _calculate_technical_confidence(self, result: Dict[str, Any]) -> float:
+            # Nettoyer les valeurs
+            for row in table_data:
+                cleaned_row = {}
+                for key, value in row.items():
+                    # Vérifier si la valeur ressemble à un booléen
+                    if isinstance(value, str) and value.lower() in ['oui', 'non', 'yes', 'no', 'true', 'false']:
+                        cleaned_row[key] = self._parse_boolean_value(value)
+                    else:
+                        cleaned_row[key] = value
+                
+                result["data"].append(cleaned_row)
+        
+        # Ajouter des métadonnées
+        result["metadata"]["rows"] = len(result["data"])
+        result["metadata"]["columns"] = len(data.columns) if hasattr(data, 'columns') else 0
+        
+        return result
+    
+    def _extract_reference(self, tables: List[Dict[str, Any]]) -> str:
         """
-        Calcule un score de confiance pour l'extraction.
+        Extrait la référence du document à partir des tableaux.
         
         Args:
-            result: Résultat de l'extraction
+            tables: Liste des tableaux
             
         Returns:
-            Score de confiance (0-1)
+            Référence extraite
         """
-        # Points de score
-        score = 0
-        total_points = 0
+        reference = ""
         
-        # Métadonnées de base
-        for field in ["reference", "date", "client"]:
-            total_points += 1
-            if result["metadata"].get(field):
-                score += 1
-        
-        # Sections
-        if result["sections"]:
-            total_points += 1
-            score += 1
+        # Parcourir tous les tableaux pour trouver des références
+        for table in tables:
+            if not table or "data" not in table:
+                continue
+                
+            data = table["data"]
             
-            # Éléments dans les sections
-            section_with_elements = 0
-            for section in result["sections"]:
-                if section["elements"]:
-                    section_with_elements += 1
+            # Convertir en DataFrame si nécessaire
+            if not isinstance(data, pd.DataFrame):
+                if isinstance(data, list):
+                    data = pd.DataFrame(data)
+                else:
+                    continue
             
-            if section_with_elements > 0:
-                total_points += 1
-                score += min(1.0, section_with_elements / len(result["sections"]))
-            
-            # Prix des sections
-            section_with_price = 0
-            for section in result["sections"]:
-                if section["prix_ht"] is not None:
-                    section_with_price += 1
-            
-            if section_with_price > 0:
-                total_points += 1
-                score += min(1.0, section_with_price / len(result["sections"]))
+            # Rechercher des motifs de référence dans les colonnes et les valeurs
+            for col in data.columns:
+                col_lower = str(col).lower()
+                
+                # Vérifier si la colonne est liée à une référence
+                if any(keyword in col_lower for keyword in ["référence", "reference", "ref", "devis", "numéro", "number"]):
+                    for val in data[col].dropna():
+                        # Vérifier si la valeur ressemble à une référence
+                        val_str = str(val)
+                        if re.search(r'\b[A-Z0-9]{2,}[-/]?[A-Z0-9]{2,}\b', val_str, re.IGNORECASE):
+                            reference = val_str
+                            return reference
         
-        # Totaux
-        total_points += 1
-        if result["totals"].get("montant_ht") is not None:
-            score += 0.5
-        if result["totals"].get("montant_ttc") is not None:
-            score += 0.5
-        
-        # Conditions
-        conditions_found = sum(1 for val in result["conditions"].values() if val)
-        if conditions_found > 0:
-            total_points += 1
-            score += min(1.0, conditions_found / len(result["conditions"]))
-        
-        # Calcul final
-        return round(score / max(1, total_points), 2)
-
-    def detect_document_type(self, file_content: Union[str, bytes, io.BytesIO]) -> Dict[str, float]:
+        return reference
+    
+    def _identify_term_category(self, text: str) -> str:
         """
-        Détecte le type de document à partir de son contenu (version synchrone).
+        Identifie la catégorie d'une condition.
         
         Args:
-            file_content: Contenu du fichier (chemin, bytes ou BytesIO)
+            text: Texte de la condition
             
         Returns:
-            Dictionnaire des types de documents avec scores de confiance
+            Catégorie identifiée
         """
-        try:
-            # Préparation du contenu
-            if isinstance(file_content, io.BytesIO):
-                file_content.seek(0)
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                    temp_file.write(file_content.read())
-                    temp_path = temp_file.name
-                try:
-                    file_path = temp_path
-                    is_temp = True
-                except Exception as e:
-                    logger.error(f"Erreur création fichier temporaire: {e}")
-                    return {"generic": 1.0}
-            elif isinstance(file_content, bytes):
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                    temp_file.write(file_content)
-                    temp_path = temp_file.name
-                file_path = temp_path
-                is_temp = True
-            else:
-                file_path = file_content
-                is_temp = False
+        text_lower = text.lower()
+        
+        if any(keyword in text_lower for keyword in ["garantie", "warranty", "guarantee"]):
+            return "warranty"
+        elif any(keyword in text_lower for keyword in ["livraison", "delivery", "shipping"]):
+            return "delivery"
+        elif any(keyword in text_lower for keyword in ["paiement", "payment", "règlement", "settlement"]):
+            return "payment"
+        elif any(keyword in text_lower for keyword in ["annulation", "cancellation", "résiliation", "termination"]):
+            return "cancellation"
+        elif any(keyword in text_lower for keyword in ["confidentialité", "confidentiality", "privacy"]):
+            return "confidentiality"
+        else:
+            return "general"
+    
+    def _parse_boolean_value(self, value) -> bool:
+        """
+        Analyse une valeur pour déterminer si elle représente un booléen.
+        
+        Args:
+            value: Valeur à analyser
             
-            # Lecture du PDF
-            with fitz.open(file_path) as doc:
-                # Limiter à max 5 pages pour l'analyse
-                max_pages = min(5, len(doc))
-                
-                # Extraction du texte pour analyse
-                all_text = ""
-                for page_idx in range(max_pages):
-                    all_text += doc[page_idx].get_text().lower()
-                
-                # Détection des types de documents
-                types = {
-                    "devis_technique": 0.0,
-                    "facture": 0.0,
-                    "bon_livraison": 0.0,
-                    "document_standard": 0.0
-                }
-                
-                # Mots-clés pour devis techniques
-                devis_keywords = [
-                    "devis", "offre", "prix", "proposition", "empannage", "lissage", 
-                    "pignon", "multibeam", "poutre", "bardage", "couverture", 
-                    "acier", "charpente", "construction", "bâtiment", "ht", "franco"
-                ]
-                
-                # Mots-clés pour factures
-                facture_keywords = [
-                    "facture", "avoir", "acquitté", "règlement", "tva", "remise", 
-                    "client", "compte", "date d'échéance", "date de facturation"
-                ]
-                
-                # Mots-clés pour bons de livraison
-                livraison_keywords = [
-                    "bon de livraison", "livraison", "transporteur", "expédition", 
-                    "bls", "colis", "palette", "enlèvement", "réceptionné"
-                ]
-                
-                # Calcul des scores
-                devis_score = sum(10 if kw in all_text else 0 for kw in devis_keywords[:5]) + \
-                            sum(5 if kw in all_text else 0 for kw in devis_keywords[5:])
-                
-                facture_score = sum(10 if kw in all_text else 0 for kw in facture_keywords[:5]) + \
-                                sum(5 if kw in all_text else 0 for kw in facture_keywords[5:])
-                
-                livraison_score = sum(10 if kw in all_text else 0 for kw in livraison_keywords[:5]) + \
-                                sum(5 if kw in all_text else 0 for kw in livraison_keywords[5:])
-                
-                # Normalisation des scores
-                total_score = devis_score + facture_score + livraison_score + 10  # +10 pour éviter division par zéro
-                
-                types["devis_technique"] = min(0.95, devis_score / total_score)
-                types["facture"] = min(0.95, facture_score / total_score)
-                types["bon_livraison"] = min(0.95, livraison_score / total_score)
-                
-                # Score pour document standard (fallback)
-                types["document_standard"] = max(0.0, 1.0 - max(types["devis_technique"], types["facture"], types["bon_livraison"]))
-                
-                # Nettoyage si nécessaire
-                if is_temp and os.path.exists(file_path):
-                    os.unlink(file_path)
-                    
-                return types
-                    
-        except Exception as e:
-            logger.error(f"Erreur détection type document: {e}")
+        Returns:
+            Valeur booléenne
+        """
+        if isinstance(value, bool):
+            return value
             
-            # Nettoyage en cas d'erreur
-            if 'is_temp' in locals() and is_temp and 'file_path' in locals() and os.path.exists(file_path):
-                os.unlink(file_path)
-                
-            return {"document_standard": 1.0}
+        if pd.isna(value):
+            return False
+            
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            return value_lower in ["oui", "yes", "true", "vrai", "1", "x", "✓", "checked", "coché"]
+        
+        if isinstance(value, (int, float)):
+            return value > 0
+            
+        return False
+    
+    def _normalize_key(self, key: str) -> str:
+        """
+        Normalise un nom de clé pour la fusion des données.
+        
+        Args:
+            key: Nom de clé à normaliser
+            
+        Returns:
+            Nom de clé normalisé
+        """
+        if pd.isna(key) or not key:
+            return ""
+            
+        # Convertir en chaîne
+        key_str = str(key).strip()
+        
+        # Supprimer les caractères spéciaux et convertir en snake_case
+        key_clean = re.sub(r'[^\w\s]', '', key_str)
+        key_clean = re.sub(r'\s+', '_', key_clean)
+        key_clean = key_clean.lower()
+        
+        # Limiter la longueur
+        key_clean = key_clean[:50]
+        
+        return key_clean
