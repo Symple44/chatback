@@ -220,7 +220,11 @@ def main():
         return 1
     
     try:
-        results = asyncio.run(test_checkbox_extractor(
+        print("Démarrage de l'extraction...")
+    
+        # Exécutez l'extraction de manière synchrone pour mieux voir les erreurs
+        loop = asyncio.get_event_loop()
+        results = loop.run_until_complete(test_checkbox_extractor(
             args.pdf_path,
             verbose=args.verbose,
             include_images=args.images,
@@ -228,6 +232,9 @@ def main():
             output=args.output,
             debug=args.debug
         ))
+        
+        # Vérifiez si les résultats sont valides
+        print(f"Extraction terminée, obtenu: {type(results)}")
         
         # Utiliser l'encodeur personnalisé pour la sortie JSON
         if args.output:
@@ -237,5 +244,7 @@ def main():
                 
         return 0
     except Exception as e:
-        print(f"Erreur: {e}")
+        print(f"Erreur détaillée: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
