@@ -146,12 +146,7 @@ class CheckboxExtractor:
                     
                     # Extraire le texte des pages pour analyse contextuelle
                     doc = fitz.open(file_path)
-                    
-                    # Options d'extraction pour PyMuPDF
-                    opts = fitz.TextExtractFlags()
-                    opts.extra_spaces = False
-                    opts.rebuild_paragraphs = True
-                    
+
                     # Traiter chaque page
                     for idx, img in enumerate(page_images):
                         page_idx = page_indices[idx] if idx < len(page_indices) else idx
@@ -161,38 +156,51 @@ class CheckboxExtractor:
                         page_text = ""
                         if page_idx < len(doc):
                             page = doc[page_idx]
-                            page_text = page.get_text("text", flags=opts)
+                            # Utiliser la méthode get_text() sans options spéciales
+                            # Compatible avec PyMuPDF 1.25.3
+                            page_text = page.get_text("text")
                             
                             # Extraire les cases à cocher de type formulaire si présentes
                             widgets = page.widgets()
                             if widgets:
                                 for widget in widgets:
-                                    if widget.field_type == fitz.PDF_WIDGET_TYPE_BUTTON:  # Cases à cocher dans le PDF
-                                        checkbox_value = widget.field_value
-                                        checkbox_name = widget.field_name
-                                        checkbox_label = widget.field_label or ""
-                                        checkbox_rect = widget.rect
+                                    # Vérifier si c'est une case à cocher (en utilisant une méthode compatible)
+                                    try:
+                                        field_type = getattr(widget, 'field_type', None)
+                                        # Si nous ne pouvons pas accéder à field_type directement
+                                        if field_type is None and hasattr(widget, 'field_type_string'):
+                                            if widget.field_type_string == 'Button':
+                                                field_type = 4  # Code pour PDF_WIDGET_TYPE_BUTTON
                                         
-                                        # Ajouter à la liste des cases à cocher détectées
-                                        checkbox_data = {
-                                            "id": str(len(all_checkboxes) + 1),
-                                            "page": page_num,
-                                            "x": checkbox_rect.x0,
-                                            "y": checkbox_rect.y0,
-                                            "width": checkbox_rect.width,
-                                            "height": checkbox_rect.height,
-                                            "label": checkbox_label,
-                                            "field_name": checkbox_name,
-                                            "is_checked": bool(checkbox_value),
-                                            "confidence": 1.0,  # Confiance maximale pour les cases de formulaire
-                                            "type": "form_widget",
-                                            "text_context": ""
-                                        }
-                                        
-                                        all_checkboxes.append(checkbox_data)
-                                        
-                                        # Ajouter aux valeurs de formulaire
-                                        form_values[checkbox_name] = bool(checkbox_value)
+                                        # Si c'est un bouton (case à cocher)
+                                        if field_type == 4:  # PDF_WIDGET_TYPE_BUTTON dans les versions plus récentes
+                                            checkbox_value = widget.field_value
+                                            checkbox_name = widget.field_name
+                                            checkbox_label = getattr(widget, 'field_label', "") or ""
+                                            checkbox_rect = widget.rect
+                                            
+                                            # Ajouter à la liste des cases à cocher détectées
+                                            checkbox_data = {
+                                                "id": str(len(all_checkboxes) + 1),
+                                                "page": page_num,
+                                                "x": checkbox_rect.x0,
+                                                "y": checkbox_rect.y0,
+                                                "width": checkbox_rect.width,
+                                                "height": checkbox_rect.height,
+                                                "label": checkbox_label,
+                                                "field_name": checkbox_name,
+                                                "is_checked": bool(checkbox_value),
+                                                "confidence": 1.0,  # Confiance maximale pour les cases de formulaire
+                                                "type": "form_widget",
+                                                "text_context": ""
+                                            }
+                                            
+                                            all_checkboxes.append(checkbox_data)
+                                            
+                                            # Ajouter aux valeurs de formulaire
+                                            form_values[checkbox_name] = bool(checkbox_value)
+                                    except Exception as widget_error:
+                                        logger.debug(f"Erreur traitement widget: {widget_error}")
                         
                         # Détecter les cases à cocher visuelles
                         checkboxes = await self._detect_checkboxes_in_image(
@@ -230,35 +238,6 @@ class CheckboxExtractor:
                             
                             # Ajouter aux résultats
                             all_checkboxes.append(checkbox)
-                            
-                            # Ajouter l'image si demandé
-                            if include_images:
-                                # Extraire l'image de la case à cocher avec une marge
-                                margin = 5
-                                x, y, w, h = checkbox["x"], checkbox["y"], checkbox["width"], checkbox["height"]
-                                
-                                # Vérifier les limites de l'image
-                                x1 = max(0, x - margin)
-                                y1 = max(0, y - margin)
-                                x2 = min(img.shape[1], x + w + margin)
-                                y2 = min(img.shape[0], y + h + margin)
-                                
-                                # Extraire l'image avec marge
-                                checkbox_img = img[y1:y2, x1:x2]
-                                
-                                # Convertir en base64
-                                _, buffer = cv2.imencode(".png", checkbox_img)
-                                img_base64 = base64.b64encode(buffer).decode('utf-8')
-                                
-                                checkbox_images.append({
-                                    "checkbox_id": checkbox["id"],
-                                    "page": page_num,
-                                    "data": img_base64,
-                                    "mime_type": "image/png",
-                                    "width": x2 - x1,
-                                    "height": y2 - y1,
-                                    "is_checked": checkbox["is_checked"]
-                                })
                     
                     # Fermer le document
                     doc.close()
