@@ -202,13 +202,31 @@ class CheckboxExtractor:
                                     except Exception as widget_error:
                                         logger.debug(f"Erreur traitement widget: {widget_error}")
                         
-                        # Détecter les cases à cocher visuelles
-                        checkboxes = await self._detect_checkboxes_in_image(
-                            img, 
-                            page_num=page_num,
-                            confidence_threshold=confidence_threshold,
-                            enhance_detection=enhance_detection
-                        )
+                        # Post-validation pour éliminer les faux positifs
+                        checkboxes = await self._post_validate_checkboxes(checkboxes)
+                        
+                        # Si très peu de cases à cocher validées, tenter une approche plus permissive
+                        if len(checkboxes) < 2 and enhance_detection:
+                            logger.info(f"Peu de cases à cocher détectées, essai d'une approche plus permissive")
+                            # Approche plus permissive avec seuil de confiance plus bas
+                            permissive_checkboxes = await self._detect_checkboxes_in_image(
+                                img, 
+                                page_num=page_num,
+                                confidence_threshold=confidence_threshold * 0.8,
+                                enhance_detection=True
+                            )
+                            # Post-valider même avec l'approche permissive
+                            permissive_checkboxes = await self._post_validate_checkboxes(permissive_checkboxes)
+                            checkboxes = permissive_checkboxes
+                        
+                        # Pour les pages sans case à cocher détectée, ne pas perdre de temps avec le contexte
+                        if not checkboxes:
+                            continue
+                        
+                        # Optimisation pour limiter les cases à cocher similaires sur la même page
+                        if len(checkboxes) > 15:  # Si trop de cases détectées sur une page, filtrer davantage
+                            logger.info(f"Trop de cases à cocher détectées sur la page {page_num} ({len(checkboxes)}), filtrage supplémentaire")
+                            checkboxes = self._filter_similar_checkboxes(checkboxes)
                         
                         # Analyser et associer le contexte textuel pour chaque case à cocher
                         for checkbox in checkboxes:
@@ -218,6 +236,10 @@ class CheckboxExtractor:
                                 checkbox, 
                                 page_text
                             )
+                            
+                            # Vérifier si le contexte est significatif, sinon l'ignorer
+                            if context and not self._is_context_meaningful(context):
+                                context = ""
                             
                             checkbox["text_context"] = context
                             checkbox["id"] = str(len(all_checkboxes) + 1)
@@ -231,7 +253,7 @@ class CheckboxExtractor:
                             
                             # Identifier le nom de champ potentiel
                             field_name = await self._extract_field_name(context)
-                            if field_name:
+                            if field_name and len(field_name) >= 3:
                                 checkbox["field_name"] = field_name
                                 # Ajouter aux valeurs de formulaire structurées
                                 form_values[field_name] = checkbox["is_checked"]
@@ -273,6 +295,81 @@ class CheckboxExtractor:
                 "error": str(e)
             }
     
+    def _filter_similar_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filtre les cases à cocher similaires pour réduire les redondances.
+        
+        Args:
+            checkboxes: Liste de cases à cocher détectées
+            
+        Returns:
+            Liste filtrée sans doublons similaires
+        """
+        if len(checkboxes) <= 5:  # Pas besoin de filtrer s'il y a peu de cases
+            return checkboxes
+            
+        # Trier par confiance décroissante
+        sorted_checkboxes = sorted(checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)
+        
+        filtered = []
+        # Utiliser les positions pour détecter les doublons
+        used_positions = set()
+        
+        for checkbox in sorted_checkboxes:
+            x, y = checkbox.get("x", 0), checkbox.get("y", 0)
+            
+            # Vérifier si on a déjà une case similaire à proximité
+            is_duplicate = False
+            for used_x, used_y in used_positions:
+                # Si les cases sont trop proches l'une de l'autre
+                if abs(x - used_x) < 20 and abs(y - used_y) < 20:
+                    is_duplicate = True
+                    break
+                    
+            if not is_duplicate:
+                used_positions.add((x, y))
+                filtered.append(checkbox)
+                
+                # Limiter le nombre total de cases à cocher par page
+                if len(filtered) >= 10:  # Maximum 10 cases par page
+                    break
+        
+        return filtered
+
+    def _is_context_meaningful(self, context: str) -> bool:
+        """
+        Vérifie si un contexte textuel est significatif.
+        
+        Args:
+            context: Texte de contexte
+            
+        Returns:
+            True si le contexte est significatif
+        """
+        if not context:
+            return False
+            
+        # Supprimer les caractères spéciaux et espaces
+        clean_text = re.sub(r'[^\w]', '', context)
+        
+        # Vérifier la longueur utile
+        if len(clean_text) < 3:
+            return False
+            
+        # Vérifier s'il y a au moins un mot significatif
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', context)
+        if not words:
+            return False
+            
+        # Vérifier le ratio de caractères spéciaux vs alphabétiques
+        alpha_count = sum(1 for c in context if c.isalpha())
+        special_count = sum(1 for c in context if not c.isalnum() and not c.isspace())
+        
+        if alpha_count == 0 or special_count / (alpha_count + 1) > 0.7:
+            return False
+            
+        return True
+
     async def _detect_checkboxes_in_image(
         self,
         image: np.ndarray,
@@ -409,7 +506,7 @@ class CheckboxExtractor:
         confidence_threshold: float
     ) -> List[Dict[str, Any]]:
         """
-        Détecte les cases à cocher rectangulaires.
+        Détecte les cases à cocher rectangulaires avec filtrage amélioré.
         
         Args:
             image: Image prétraitée
@@ -430,40 +527,62 @@ class CheckboxExtractor:
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 
                 # Vérifier si c'est un rectangle (4 côtés) ou proche
-                if len(approx) >= 4 and len(approx) <= 6:
+                # Filtrage plus strict: uniquement 4 côtés
+                if len(approx) == 4:
                     # Obtenir le rectangle englobant
                     x, y, w, h = cv2.boundingRect(contour)
                     
-                    # Filtrer par taille
+                    # Filtrage par taille - plage plus étroite
                     if self.min_size <= w <= self.max_size and self.min_size <= h <= self.max_size:
-                        # Vérifier si le rapport largeur/hauteur est proche de 1 (carré)
+                        # Vérifier si le rapport largeur/hauteur est proche de 1 (carré) - plus strict
                         aspect_ratio = w / h
-                        if 0.7 <= aspect_ratio <= 1.3:
-                            # Calculer la confiance basée sur la régularité du rectangle
-                            # Plus le contour est proche d'un rectangle parfait, plus la confiance est élevée
+                        if 0.8 <= aspect_ratio <= 1.2:
+                            # Vérifier l'aire du contour comparée à l'aire du rectangle
                             rect_area = w * h
                             contour_area = cv2.contourArea(contour)
                             area_ratio = contour_area / rect_area if rect_area > 0 else 0
                             
-                            # Une case à cocher idéale a un ratio proche de 1
-                            confidence = area_ratio * (1 - abs(1 - aspect_ratio) * 0.5)
-                            
-                            if confidence >= confidence_threshold:
-                                checkboxes.append({
-                                    "x": int(x),
-                                    "y": int(y),
-                                    "width": int(w),
-                                    "height": int(h),
-                                    "confidence": float(confidence),
-                                    "type": "rectangular"
-                                })
+                            # Filtrage plus strict - le contour doit correspondre au rectangle
+                            if area_ratio > 0.7:
+                                # Une case à cocher idéale a un ratio proche de 1
+                                confidence = area_ratio * (1 - abs(1 - aspect_ratio))
+                                
+                                # Vérification supplémentaire: au moins 3 points distants
+                                if self._has_distant_corners(approx):
+                                    if confidence >= confidence_threshold:
+                                        checkboxes.append({
+                                            "x": int(x),
+                                            "y": int(y),
+                                            "width": int(w),
+                                            "height": int(h),
+                                            "confidence": float(confidence),
+                                            "type": "rectangular"
+                                        })
             
             return checkboxes
             
         except Exception as e:
             logger.error(f"Erreur détection cases rectangulaires: {e}")
             return []
+        
+    def _has_distant_corners(self, approx) -> bool:
+        """Vérifie si les points du contour forment un vrai rectangle."""
+        if len(approx) != 4:
+            return False
+            
+        # Extraire les points
+        points = [p[0] for p in approx]
+        
+        # Calculer les distances entre tous les points
+        min_dist = float('inf')
+        for i in range(len(points)):
+            for j in range(i+1, len(points)):
+                dist = np.sqrt((points[i][0] - points[j][0])**2 + (points[i][1] - points[j][1])**2)
+                min_dist = min(min_dist, dist)
     
+        # Pour être un vrai rectangle, les points doivent être suffisamment distants
+        return min_dist >= self.min_size * 0.8
+
     async def _detect_circular_checkboxes(
         self,
         image: np.ndarray,
@@ -736,7 +855,7 @@ class CheckboxExtractor:
         checkbox_type: str
     ) -> Tuple[bool, float]:
         """
-        Détermine si une case à cocher est cochée.
+        Détermine si une case à cocher est cochée avec une approche améliorée.
         
         Args:
             checkbox_region: Image de la case à cocher
@@ -755,87 +874,141 @@ class CheckboxExtractor:
             else:
                 gray = checkbox_region
             
-            # Binarisation
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            # Appliquer un débruitage
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            
+            # Binarisation avec seuil adaptatif pour une meilleure sensibilité aux marques
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY_INV, 11, 2)
             
             # Calculer le pourcentage de pixels noirs (cochés) dans la région
             total_pixels = binary.size
-            filled_pixels = np.sum(binary > 0)
-            
             if total_pixels == 0:
                 return False, 0.0
                 
-            fill_ratio = filled_pixels / total_pixels
+            # Trouver les contours dans la région binaire
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            # Différents critères selon le type de case à cocher
+            # Extraire uniquement les contours significatifs (pas de bruit)
+            significant_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > total_pixels * 0.01]
+            
+            # Filtrer les contours basés sur la position (ignorer les contours de bordure)
+            center_contours = []
+            h, w = binary.shape
+            for cnt in significant_contours:
+                x, y, cw, ch = cv2.boundingRect(cnt)
+                # Vérifier si le contour est principalement au centre (pas sur les bords)
+                if x > w*0.1 and y > h*0.1 and x+cw < w*0.9 and y+ch < h*0.9:
+                    center_contours.append(cnt)
+            
+            # Calcul du taux de remplissage intérieur
+            filled_pixels = sum(cv2.contourArea(cnt) for cnt in center_contours)
+            fill_ratio = filled_pixels / total_pixels if total_pixels > 0 else 0
+            
+            # Vérifier la disposition des pixels pour les marques caractéristiques (X, ✓)
+            has_mark_pattern = self._detect_mark_pattern(binary)
+            
+            # Déterminer l'état selon le type de case
             is_checked = False
             confidence = 0.0
             
             if checkbox_type == "rectangular":
-                # Pour les cases rectangulaires
-                # Une case vide a généralement un ratio < 0.2 (seulement le contour)
-                # Une case cochée a un ratio > 0.2 (contenu intérieur)
-                if fill_ratio > 0.2:
+                # Pour les cases rectangulaires: combine le ratio de remplissage et la détection de marque
+                if fill_ratio > 0.2 or has_mark_pattern:
                     is_checked = True
-                    # Confiance proportionnelle au taux de remplissage
-                    confidence = min(1.0, fill_ratio * 1.5)
+                    confidence = max(0.7, fill_ratio) if has_mark_pattern else min(1.0, fill_ratio * 1.5)
                 else:
                     is_checked = False
-                    # Confiance inversement proportionnelle pour les cases vides
-                    confidence = min(1.0, (1.0 - fill_ratio * 3.0))
-                    
+                    confidence = max(0.7, 1.0 - fill_ratio * 2.0)
             elif checkbox_type == "circular":
-                # Pour les cases circulaires
-                # Un cercle vide a un ratio d'environ 0.15-0.3 (juste le contour)
-                # Un cercle coché a un ratio > 0.3
-                if fill_ratio > 0.3:
+                # Pour les boutons radio: le remplissage central est déterminant
+                if fill_ratio > 0.25:
                     is_checked = True
                     confidence = min(1.0, fill_ratio * 1.2)
                 else:
                     is_checked = False
                     confidence = min(1.0, (1.0 - fill_ratio * 2.0))
-                    
             elif checkbox_type == "symbol":
-                # Pour les symboles (déjà détectés comme cochés ou non)
-                # Vérifier si le symbole ressemble plus à '☑' qu'à '□'
-                if fill_ratio > 0.25:
+                # Pour les symboles: combiner plusieurs facteurs
+                if fill_ratio > 0.25 or has_mark_pattern or len(center_contours) > 0:
                     is_checked = True
-                    confidence = min(1.0, fill_ratio * 1.3)
+                    confidence = 0.7 if has_mark_pattern else min(1.0, fill_ratio * 1.3)
                 else:
                     is_checked = False
                     confidence = min(1.0, (1.0 - fill_ratio * 2.5))
-            
-            # Détection supplémentaire pour les marques de type X ou ✓
-            # Trouver les contours intérieurs
-            contours, _ = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if len(contours) > 1:  # Plus d'un contour indique souvent une marque
-                # Vérifier les diagonales ou formes de coche
-                for contour in contours:
-                    # Ignorer les contours très petits
-                    if cv2.contourArea(contour) < total_pixels * 0.05:
-                        continue
-                        
-                    # Calculer le rapport de la boîte englobante
-                    x, y, w, h = cv2.boundingRect(contour)
-                    
-                    if w > 0 and h > 0:
-                        # Vérifier si la forme ressemble à une croix (X) ou une coche (✓)
-                        aspect_ratio = w / h
-                        
-                        # Une diagonale a un ratio proche de 1
-                        if 0.5 <= aspect_ratio <= 2.0:
-                            # C'est probablement une marque
-                            is_checked = True
-                            # Augmenter la confiance
-                            confidence = max(confidence, 0.85)
-                            break
             
             return is_checked, confidence
             
         except Exception as e:
             logger.error(f"Erreur vérification état case à cocher: {e}")
             return False, 0.0
+    
+    def _detect_mark_pattern(self, binary_img: np.ndarray) -> bool:
+        """
+        Détecte les motifs caractéristiques des marques de case cochée (X, ✓).
+        
+        Args:
+            binary_img: Image binaire de la case à cocher
+            
+        Returns:
+            True si un motif de marque est détecté
+        """
+        try:
+            # Réduire le bruit
+            kernel = np.ones((2, 2), np.uint8)
+            cleaned = cv2.morphologyEx(binary_img, cv2.MORPH_OPEN, kernel)
+            
+            # Détection des lignes avec Hough Transform
+            lines = cv2.HoughLinesP(cleaned, 1, np.pi/180, 
+                                threshold=int(min(binary_img.shape) * 0.3), 
+                                minLineLength=int(min(binary_img.shape) * 0.3), 
+                                maxLineGap=int(min(binary_img.shape) * 0.1))
+            
+            if lines is None or len(lines) == 0:
+                return False
+                
+            # Regrouper les lignes par angle
+            diagonals = []
+            verticals = []
+            horizontals = []
+            
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                if x2 == x1:  # Division par zéro
+                    angle = 90
+                else:
+                    angle = abs(np.arctan((y2 - y1) / (x2 - x1)) * 180 / np.pi)
+                    
+                # Classer la ligne selon son angle
+                if 70 <= angle <= 110:  # Presque vertical
+                    verticals.append(line)
+                elif angle <= 20 or angle >= 160:  # Presque horizontal
+                    horizontals.append(line)
+                else:  # Diagonal
+                    diagonals.append(line)
+            
+            # Motif X = au moins 2 diagonales dans des directions différentes
+            if len(diagonals) >= 2:
+                angles = []
+                for line in diagonals:
+                    x1, y1, x2, y2 = line[0]
+                    if x2 != x1:  # Éviter division par zéro
+                        angle = np.arctan((y2 - y1) / (x2 - x1)) * 180 / np.pi
+                        angles.append(angle)
+                
+                # Vérifier s'il y a des angles de signes opposés (diagonales croisées)
+                if angles and any(a > 0 for a in angles) and any(a < 0 for a in angles):
+                    return True
+            
+            # Motif ✓ = une diagonale + possiblement une horizontale/verticale
+            if len(diagonals) >= 1 and (len(horizontals) >= 1 or len(verticals) >= 1):
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Erreur détection pattern: {e}")
+            return False
     
     async def _extract_checkbox_context(
         self,
@@ -964,7 +1137,7 @@ class CheckboxExtractor:
     
     async def _extract_label_from_context(self, context: str) -> str:
         """
-        Extrait un label potentiel d'un texte de contexte.
+        Extrait un label potentiel d'un texte de contexte avec filtrage amélioré.
         
         Args:
             context: Texte de contexte
@@ -976,24 +1149,50 @@ class CheckboxExtractor:
             if not context:
                 return ""
                 
-            # Nettoyer le texte
+            # Nettoyer le texte - supprimer les caractères spéciaux et les séquences improbables
             context = context.replace('\n', ' ').strip()
             
-            # Rechercher des patterns typiques de libellés de cases à cocher
-            for pattern in self.label_patterns:
-                matches = re.findall(pattern, context)
-                if matches:
-                    # Prendre le premier match non vide
-                    for match in matches:
-                        if match and len(match) > 2:
-                            # Nettoyer et retourner
-                            return match.strip()
+            # Filtrer les caractères spéciaux isolés et les séquences non significatives
+            context = re.sub(r'(\s|^)[^\w\s]{1,2}(\s|$)', ' ', context)
+            context = re.sub(r'\s+', ' ', context)
             
-            # Si aucun pattern ne correspond, prendre le premier groupe de mots
+            # Supprimer les séquences aléatoires de lettres/chiffres qui semblent être du bruit OCR
+            context = re.sub(r'(\s|^)[a-zA-Z0-9]{1,2}(\s|$)', ' ', context)
+            
+            # Rechercher des motifs plus stricts pour les libellés
+            label_patterns = [
+                # Option 1: Texte suivi d'une case à cocher
+                r'([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})[\s\:]*[□☐☑✓✔✕✖✗✘]',
+                
+                # Option 2: Case à cocher suivie d'un texte
+                r'[□☐☑✓✔✕✖✗✘][\s\:]*([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})',
+                
+                # Option 3: Texte entre guillemets
+                r'[\"\']([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})[\"\']',
+                
+                # Option 4: Chaîne significative avec majuscule
+                r'(\b[A-Z][a-zÀ-ÿ]{2,}\s*(?:[A-Za-zÀ-ÿ]+\s*){0,3})'
+            ]
+            
+            # Rechercher les motifs dans le texte
+            for pattern in label_patterns:
+                matches = re.findall(pattern, context)
+                for match in matches:
+                    if match and len(match) >= 3:
+                        # Nettoyer et retourner
+                        label = match.strip()
+                        # Filtrer les labels qui semblent être des codes ou des nombres
+                        if not re.match(r'^[0-9]+$', label) and not re.match(r'^[A-Z0-9_]+$', label):
+                            return label
+            
+            # Si aucun motif ne correspond, prendre le premier groupe de mots significatif
             words = context.split()
+            words = [w for w in words if len(w) > 2 and not w.isdigit() and not all(c in '.,;:/_-+!?' for c in w)]
+            
             if len(words) >= 2:
                 # Prendre les premiers mots (probablement le label)
-                return ' '.join(words[:min(5, len(words))]).strip()
+                label = ' '.join(words[:min(4, len(words))]).strip()
+                return label
             elif words:
                 return words[0].strip()
             
@@ -1002,7 +1201,7 @@ class CheckboxExtractor:
         except Exception as e:
             logger.error(f"Erreur extraction label: {e}")
             return ""
-    
+  
     async def _identify_form_section(self, text: str) -> str:
         """
         Identifie la section du formulaire basée sur le contexte textuel.
@@ -1053,7 +1252,7 @@ class CheckboxExtractor:
     
     async def _extract_field_name(self, text: str) -> str:
         """
-        Extrait un nom de champ potentiel du texte de contexte.
+        Extrait un nom de champ potentiel du texte de contexte avec validation améliorée.
         
         Args:
             text: Texte de contexte
@@ -1062,52 +1261,211 @@ class CheckboxExtractor:
             Nom de champ ou chaîne vide
         """
         try:
-            if not text:
+            if not text or len(text) < 3:
                 return ""
                 
             # Nettoyer le texte
             text = text.replace('\n', ' ').strip()
             
-            # Rechercher des patterns typiques de noms de champs
+            # Supprimer les caractères spéciaux isolés et les chiffres isolés
+            text = re.sub(r'(\s|^)[^\w\s]{1,2}(\s|$)', ' ', text)
+            text = re.sub(r'(\s|^)\d{1,2}(\s|$)', ' ', text)
+            text = re.sub(r'\s+', ' ', text)
+            
+            # Rechercher des motifs plus spécifiques de noms de champs
             field_patterns = [
-                r"(?:^|\s)([A-Za-z][A-Za-z0-9_]{2,30})(?:\s*[:=])",  # Mots suivis de : ou =
-                r"(?:champ|field|input)(?:\s*[:=]\s*)([A-Za-z][A-Za-z0-9_]{2,30})",  # Précédés par "champ", "field", etc.
-                r"\[([A-Za-z][A-Za-z0-9_]{2,30})\]"  # Entre crochets [nom_champ]
+                # Format: label: valeur
+                r'(?:^|\s)([A-Za-z][A-Za-z0-9_]{3,30})(?:\s*[:=])',
+                
+                # Format: préfixe_mot significatif
+                r'(?:champ|field|input|form|formulaire|question)(?:\s*[:=]\s*)([A-Za-z][A-Za-z0-9_]{3,30})',
+                
+                # Format: [nom_champ]
+                r'\[([A-Za-z][A-Za-z0-9_]{3,30})\]',
+                
+                # Format: nom significatif (>3 lettres, commençant par une lettre)
+                r'\b([A-Za-z][A-Za-z]{3,}[A-Za-z0-9_]*)\b'
             ]
             
+            # Rechercher les motifs
             for pattern in field_patterns:
                 matches = re.search(pattern, text, re.IGNORECASE)
                 if matches and matches.group(1):
-                    # Convertir en format snake_case pour normalisation
+                    # Valider si le nom de champ est significatif (pas de noms génériques)
                     field_name = matches.group(1).strip()
-                    field_name = re.sub(r'\s+', '_', field_name).lower()
-                    return field_name
-            
-            # Si aucun pattern ne correspond, générer un nom basé sur les premiers mots
-            words = text.split()
-            if words:
-                # Prendre le premier mot significatif
-                for word in words:
-                    if len(word) >= 3 and re.match(r'^[A-Za-z]', word):
-                        # Convertir en format snake_case
-                        field_name = re.sub(r'[^A-Za-z0-9]', '_', word).lower()
-                        # Limiter la longueur
-                        field_name = field_name[:30]
-                        # Éviter les underscores multiples
-                        field_name = re.sub(r'_+', '_', field_name)
-                        # Supprimer les underscores au début et à la fin
-                        field_name = field_name.strip('_')
+                    
+                    # Vérifier si ce n'est pas un mot vide ou trop général
+                    if field_name.lower() not in ['champ', 'field', 'input', 'form', 'the', 'les', 'des', 'pour']:
+                        # Normaliser en format snake_case
+                        field_name = re.sub(r'\s+', '_', field_name).lower()
+                        field_name = re.sub(r'[^a-z0-9_]', '', field_name)
                         
-                        if field_name:
+                        # Vérifier longueur minimale après traitement
+                        if len(field_name) >= 3:
                             return field_name
             
-            # Dernier recours : générer un nom générique
-            return f"field_{abs(hash(text)) % 1000}"
+            # Si aucun pattern ne correspond, utiliser une approche plus simple mais robuste
+            # Extraire le premier mot significatif (au moins 4 lettres)
+            words = text.split()
+            for word in words:
+                # Nettoyer le mot
+                clean_word = re.sub(r'[^a-zA-Z0-9]', '', word)
+                if len(clean_word) >= 4 and not clean_word.isdigit():
+                    # Convertir en format snake_case
+                    field_name = clean_word.lower()
+                    field_name = re.sub(r'[^a-z0-9]', '_', field_name)
+                    
+                    # Limiter la longueur
+                    field_name = field_name[:30]
+                    
+                    return field_name
+            
+            # Dernier recours: générer un nom basé sur les premiers caractères du texte
+            if len(text) >= 3:
+                # Extraire les premiers caractères alphabétiques
+                alpha_chars = ''.join(c for c in text[:20] if c.isalpha()).lower()
+                if len(alpha_chars) >= 3:
+                    return alpha_chars[:20]
+            
+            # Si tout échoue, générer un nom générique mais éviter field_xxx si possible
+            seed = abs(hash(text)) % 1000
+            return f"checkbox_{seed}"
             
         except Exception as e:
             logger.error(f"Erreur extraction nom de champ: {e}")
-            return f"field_{int(time.time()) % 1000}"
+            return f"checkbox_{int(time.time()) % 1000}"
     
+    async def _post_validate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Effectue une validation finale pour éliminer les faux positifs.
+        
+        Args:
+            checkboxes: Liste de cases à cocher détectées
+            
+        Returns:
+            Liste filtrée de cases à cocher validées
+        """
+        if not checkboxes:
+            return []
+            
+        valid_checkboxes = []
+        
+        for checkbox in checkboxes:
+            # Validation basée sur plusieurs critères
+            
+            # 1. Validation par score de confiance
+            if checkbox["confidence"] < 0.55:  # Seuil plus élevé pour la confiance
+                continue
+                
+            # 2. Validation par contexte textuel
+            context = checkbox.get("text_context", "")
+            if context:
+                # Vérifier s'il y a un texte sensé (pas juste des caractères spéciaux)
+                has_meaningful_text = bool(re.search(r'[a-zA-Z]{3,}', context))
+                if not has_meaningful_text:
+                    # Réduire la confiance pour les cases sans contexte textuel significatif
+                    checkbox["confidence"] *= 0.8
+                    if checkbox["confidence"] < 0.55:
+                        continue
+            
+            # 3. Validation par cohérence de type
+            checkbox_type = checkbox.get("type", "")
+            if checkbox_type == "symbol":
+                # Les cases de type symbol doivent avoir un score élevé pour être acceptées
+                if checkbox["confidence"] < 0.6:
+                    continue
+            
+            # 4. Validation des dimensions (rapport hauteur/largeur)
+            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
+            if w > 0 and h > 0:
+                aspect_ratio = w / h
+                # Filtrer les formes trop allongées
+                if aspect_ratio < 0.6 or aspect_ratio > 1.7:
+                    continue
+            
+            # 5. Validation du nom de champ
+            field_name = checkbox.get("field_name", "")
+            if field_name:
+                # Ignorer les noms de champs trop courts ou générés
+                if len(field_name) < 3 or field_name.startswith("field_"):
+                    # Essayer de générer un meilleur nom basé sur le contexte
+                    better_name = await self._extract_better_field_name(context)
+                    if better_name:
+                        checkbox["field_name"] = better_name
+            else:
+                # Essayer de générer un nom basé sur le contexte
+                checkbox["field_name"] = await self._extract_better_field_name(context)
+            
+            # 6. Validation du label
+            label = checkbox.get("label", "")
+            if not label and context:
+                # Essayer de détecter un meilleur label
+                better_label = await self._extract_better_label(context)
+                if better_label:
+                    checkbox["label"] = better_label
+            
+            # La case a passé toutes les validations
+            valid_checkboxes.append(checkbox)
+        
+        return valid_checkboxes
+
+    async def _extract_better_field_name(self, context: str) -> str:
+        """Tente d'extraire un meilleur nom de champ du contexte."""
+        if not context or len(context) < 3:
+            return ""
+            
+        # Nettoyer le contexte
+        context = re.sub(r'[^\w\s\-_]', ' ', context)
+        context = re.sub(r'\s+', ' ', context).strip().lower()
+        
+        # Extraire des mots clés significatifs
+        words = context.split()
+        words = [w for w in words if len(w) >= 3 and not w.isdigit()]
+        
+        if not words:
+            return ""
+            
+        # Utiliser le premier mot significatif comme nom de base
+        base_name = words[0]
+        
+        # Si possible, combiner avec un second mot pour plus de spécificité
+        if len(words) > 1:
+            return f"{base_name}_{words[1]}"
+        
+        return base_name
+
+    async def _extract_better_label(self, context: str) -> str:
+        """Tente d'extraire un meilleur label du contexte."""
+        if not context:
+            return ""
+            
+        # Nettoyer le contexte
+        clean_context = re.sub(r'[^\w\s\-_.,;:]', ' ', context)
+        clean_context = re.sub(r'\s+', ' ', clean_context).strip()
+        
+        # Extraire les phrases ou groupes de mots
+        parts = re.split(r'[.;:]', clean_context)
+        parts = [p.strip() for p in parts if len(p.strip()) > 3]
+        
+        if parts:
+            # Prendre la première partie qui a un sens
+            for part in parts:
+                # Vérifier si la partie contient des mots significatifs
+                if re.search(r'[A-Za-z]{3,}', part):
+                    # Limiter la longueur
+                    if len(part) > 50:
+                        return part[:47] + "..."
+                    return part
+        
+        # Si rien n'est trouvé, prendre au moins quelques mots
+        words = clean_context.split()
+        if len(words) >= 3:
+            return " ".join(words[:3]) + "..."
+        elif words:
+            return " ".join(words)
+        
+        return ""
+
     async def _detect_checkboxes_with_ai(
         self,
         image: np.ndarray,
