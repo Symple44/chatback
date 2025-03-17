@@ -189,10 +189,10 @@ async def extract_checkboxes(
                 )
                 
                 metrics.finish_request_tracking(extraction_id)
-                metrics.track_cache_operation(hit=True, namespace="checkbox_extraction")
+                metrics.track_cache_operation(hit=True)
                 return response
             
-            metrics.track_cache_operation(hit=False, namespace="checkbox_extraction")
+            metrics.track_cache_operation(hit=False)
         
         # Extraction effective
         checkbox_results = await checkbox_extractor.extract_checkboxes_from_pdf(
