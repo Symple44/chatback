@@ -202,8 +202,17 @@ class CheckboxExtractor:
                                     except Exception as widget_error:
                                         logger.debug(f"Erreur traitement widget: {widget_error}")
                         
+                        # Détecter les cases à cocher visuelles
+                        checkboxes = await self._detect_checkboxes_in_image(
+                            img, 
+                            page_num=page_num,
+                            confidence_threshold=confidence_threshold,
+                            enhance_detection=enhance_detection
+                        )
+                        
                         # Post-validation pour éliminer les faux positifs
-                        checkboxes = await self._post_validate_checkboxes(checkboxes)
+                        if hasattr(self, '_post_validate_checkboxes'):
+                            checkboxes = await self._post_validate_checkboxes(checkboxes)
                         
                         # Si très peu de cases à cocher validées, tenter une approche plus permissive
                         if len(checkboxes) < 2 and enhance_detection:
@@ -216,7 +225,8 @@ class CheckboxExtractor:
                                 enhance_detection=True
                             )
                             # Post-valider même avec l'approche permissive
-                            permissive_checkboxes = await self._post_validate_checkboxes(permissive_checkboxes)
+                            if hasattr(self, '_post_validate_checkboxes'):
+                                permissive_checkboxes = await self._post_validate_checkboxes(permissive_checkboxes)
                             checkboxes = permissive_checkboxes
                         
                         # Pour les pages sans case à cocher détectée, ne pas perdre de temps avec le contexte
