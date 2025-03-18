@@ -1640,6 +1640,91 @@ class CheckboxExtractor:
             logger.error(f"Erreur détection IA des cases à cocher: {e}")
             return []
             
+    async def _extract_field_name(self, text: str) -> str:
+        """
+        Extrait un nom de champ potentiel du texte de contexte avec validation améliorée.
+        
+        Args:
+            text: Texte de contexte
+            
+        Returns:
+            Nom de champ ou chaîne vide
+        """
+        try:
+            if not text or len(text) < 3:
+                return ""
+                
+            # Nettoyer le texte
+            text = text.replace('\n', ' ').strip()
+            
+            # Supprimer les caractères spéciaux isolés et les chiffres isolés
+            text = re.sub(r'(\s|^)[^\w\s]{1,2}(\s|$)', ' ', text)
+            text = re.sub(r'(\s|^)\d{1,2}(\s|$)', ' ', text)
+            text = re.sub(r'\s+', ' ', text)
+            
+            # Rechercher des motifs plus spécifiques de noms de champs
+            field_patterns = [
+                # Format: label: valeur
+                r'(?:^|\s)([A-Za-z][A-Za-z0-9_]{3,30})(?:\s*[:=])',
+                
+                # Format: préfixe_mot significatif
+                r'(?:champ|field|input|form|formulaire|question)(?:\s*[:=]\s*)([A-Za-z][A-Za-z0-9_]{3,30})',
+                
+                # Format: [nom_champ]
+                r'\[([A-Za-z][A-Za-z0-9_]{3,30})\]',
+                
+                # Format: nom significatif (>3 lettres, commençant par une lettre)
+                r'\b([A-Za-z][A-Za-z]{3,}[A-Za-z0-9_]*)\b'
+            ]
+            
+            # Rechercher les motifs
+            for pattern in field_patterns:
+                matches = re.search(pattern, text, re.IGNORECASE)
+                if matches and matches.group(1):
+                    # Valider si le nom de champ est significatif (pas de noms génériques)
+                    field_name = matches.group(1).strip()
+                    
+                    # Vérifier si ce n'est pas un mot vide ou trop général
+                    if field_name.lower() not in ['champ', 'field', 'input', 'form', 'the', 'les', 'des', 'pour']:
+                        # Normaliser en format snake_case
+                        field_name = re.sub(r'\s+', '_', field_name).lower()
+                        field_name = re.sub(r'[^a-z0-9_]', '', field_name)
+                        
+                        # Vérifier longueur minimale après traitement
+                        if len(field_name) >= 3:
+                            return field_name
+            
+            # Si aucun pattern ne correspond, utiliser une approche plus simple mais robuste
+            # Extraire le premier mot significatif (au moins 4 lettres)
+            words = text.split()
+            for word in words:
+                # Nettoyer le mot
+                clean_word = re.sub(r'[^a-zA-Z0-9]', '', word)
+                if len(clean_word) >= 4 and not clean_word.isdigit():
+                    # Convertir en format snake_case
+                    field_name = clean_word.lower()
+                    field_name = re.sub(r'[^a-z0-9]', '_', field_name)
+                    
+                    # Limiter la longueur
+                    field_name = field_name[:30]
+                    
+                    return field_name
+            
+            # Dernier recours: générer un nom basé sur les premiers caractères du texte
+            if len(text) >= 3:
+                # Extraire les premiers caractères alphabétiques
+                alpha_chars = ''.join(c for c in text[:20] if c.isalpha()).lower()
+                if len(alpha_chars) >= 3:
+                    return alpha_chars[:20]
+            
+            # Si tout échoue, générer un nom générique mais éviter field_xxx si possible
+            seed = abs(hash(text)) % 1000
+            return f"checkbox_{seed}"
+            
+        except Exception as e:
+            logger.error(f"Erreur extraction nom de champ: {e}")
+            return f"checkbox_{int(time.time()) % 1000}"
+        
     async def cleanup(self):
         """Nettoie les ressources."""
         try:
