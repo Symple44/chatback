@@ -54,9 +54,9 @@ class CheckboxExtractor:
                 self.default_confidence = checkbox_config.DEFAULT_CONFIDENCE if hasattr(checkbox_config, 'DEFAULT_CONFIDENCE') else 0.6
             else:
                 # Valeurs par défaut
-                self.min_size = 10  # Taille minimale en pixels
-                self.max_size = 50  # Taille maximale en pixels
-                self.default_confidence = 0.6  # Seuil de confiance par défaut
+                self.min_size = 12  # Taille minimale en pixels
+                self.max_size = 40  # Taille maximale en pixels
+                self.default_confidence = 0.7  # Seuil de confiance par défaut
         except Exception as e:
             logger.warning(f"Erreur lors du chargement des configurations: {e}, utilisation des valeurs par défaut")
             self.min_size = 10
@@ -234,9 +234,15 @@ class CheckboxExtractor:
                             continue
                         
                         # Optimisation pour limiter les cases à cocher similaires sur la même page
-                        if len(checkboxes) > 15:  # Si trop de cases détectées sur une page, filtrer davantage
+                        if len(checkboxes) > 10:  # Seuil réduit de 15 à 10
                             logger.info(f"Trop de cases à cocher détectées sur la page {page_num} ({len(checkboxes)}), filtrage supplémentaire")
                             checkboxes = self._filter_similar_checkboxes(checkboxes)
+                            
+                            # Filtrage additionnel si toujours trop de cases
+                            if len(checkboxes) > 15:
+                                logger.info(f"Filtrage additionnel nécessaire sur la page {page_num}, application de critères plus stricts")
+                                # Appliquer un tri par confiance et limiter strictement
+                                checkboxes = sorted(checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:10]
                         
                         # Analyser et associer le contexte textuel pour chaque case à cocher
                         for checkbox in checkboxes:
@@ -286,6 +292,47 @@ class CheckboxExtractor:
                     if include_images:
                         result["checkbox_images"] = checkbox_images
                     
+                    # Validation statistique globale finale
+                    if len(all_checkboxes) > 30:
+                        logger.info(f"Nombre élevé de cases détectées ({len(all_checkboxes)}), application d'un filtrage statistique global")
+                        
+                        # Regrouper par page
+                        checkboxes_by_page = {}
+                        for checkbox in all_checkboxes:
+                            page = checkbox.get("page", 1)
+                            if page not in checkboxes_by_page:
+                                checkboxes_by_page[page] = []
+                            checkboxes_by_page[page].append(checkbox)
+                        
+                        # Pour chaque page avec beaucoup de cases, appliquer un filtrage plus strict
+                        filtered_checkboxes = []
+                        for page, page_checkboxes in checkboxes_by_page.items():
+                            if len(page_checkboxes) > 8:
+                                # Trier par confiance et prendre les N meilleurs
+                                page_checkboxes = sorted(page_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)
+                                # Limiter à maximum 8 par page
+                                filtered_checkboxes.extend(page_checkboxes[:8])
+                            else:
+                                filtered_checkboxes.extend(page_checkboxes)
+                        
+                        all_checkboxes = filtered_checkboxes
+                        
+                        # Recalculer les valeurs et sections du formulaire
+                        form_values = {}
+                        form_sections = {}
+                        
+                        for checkbox in all_checkboxes:
+                            field_name = checkbox.get("field_name")
+                            if field_name:
+                                form_values[field_name] = checkbox.get("is_checked", False)
+                                
+                            # Identifier la section
+                            section = checkbox.get("section")
+                            if section:
+                                if section not in form_sections:
+                                    form_sections[section] = []
+                                form_sections[section].append(checkbox.get("id", ""))
+                                
                     logger.info(f"Extraction de {len(all_checkboxes)} cases à cocher terminée")
                     return result
                     
@@ -311,38 +358,96 @@ class CheckboxExtractor:
         
         Args:
             checkboxes: Liste de cases à cocher détectées
-            
+                
         Returns:
             Liste filtrée sans doublons similaires
         """
         if len(checkboxes) <= 5:  # Pas besoin de filtrer s'il y a peu de cases
             return checkboxes
             
-        # Trier par confiance décroissante
-        sorted_checkboxes = sorted(checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)
+        # Calculer la taille médiane pour adapter le seuil de proximité
+        widths = [cb.get("width", 0) for cb in checkboxes]
+        heights = [cb.get("height", 0) for cb in checkboxes]
+        
+        if not widths or not heights:
+            return []
+            
+        median_width = sorted(widths)[len(widths) // 2]
+        median_height = sorted(heights)[len(heights) // 2]
+        median_size = (median_width + median_height) / 2
+        
+        # Seuil adaptatif: plus les cases sont grandes, plus le seuil est élevé
+        proximity_threshold = max(median_size * 0.75, 30)
+        
+        # Calcul de scores de qualité pour chaque case
+        for checkbox in checkboxes:
+            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
+            base_score = checkbox.get("confidence", 0)
+            
+            # Facteur de forme: les cases carrées sont préférées
+            if w > 0 and h > 0:
+                aspect_ratio = w / h
+                squareness = 1.0 - min(abs(1.0 - aspect_ratio), 0.5) * 2.0
+            else:
+                squareness = 0.0
+            
+            # La cohérence de la taille par rapport à la médiane
+            size_diff = abs((w + h) / 2 - median_size) / median_size
+            size_consistency = max(0, 1.0 - size_diff)
+            
+            # Bonus pour certains types de cases
+            type_factor = {
+                "circular": 1.1,     # Les boutons radio sont généralement fiables
+                "rectangular": 1.0,  # Les rectangles sont standard 
+                "symbol": 0.9,       # Les symboles peuvent être plus ambigus
+                "form_widget": 1.2   # Les widgets de formulaire sont très fiables
+            }.get(checkbox.get("type", ""), 0.9)
+            
+            # Score final pondéré
+            quality_score = base_score * squareness * size_consistency * type_factor
+            checkbox["quality_score"] = quality_score
+        
+        # Trier par score de qualité décroissant
+        sorted_checkboxes = sorted(checkboxes, key=lambda x: x.get("quality_score", 0), reverse=True)
         
         filtered = []
-        # Utiliser les positions pour détecter les doublons
         used_positions = set()
         
+        # Première passe: conserver les cases très fiables (score > 0.8)
         for checkbox in sorted_checkboxes:
-            x, y = checkbox.get("x", 0), checkbox.get("y", 0)
-            
-            # Vérifier si on a déjà une case similaire à proximité
-            is_duplicate = False
-            for used_x, used_y in used_positions:
-                # Si les cases sont trop proches l'une de l'autre
-                if abs(x - used_x) < 20 and abs(y - used_y) < 20:
-                    is_duplicate = True
-                    break
-                    
-            if not is_duplicate:
-                used_positions.add((x, y))
-                filtered.append(checkbox)
+            if checkbox.get("quality_score", 0) > 0.8:
+                x, y = checkbox.get("x", 0), checkbox.get("y", 0)
                 
-                # Limiter le nombre total de cases à cocher par page
-                if len(filtered) >= 10:  # Maximum 10 cases par page
-                    break
+                # Vérifier s'il y a déjà une case à proximité
+                is_duplicate = False
+                for used_x, used_y in used_positions:
+                    if abs(x - used_x) < proximity_threshold and abs(y - used_y) < proximity_threshold:
+                        is_duplicate = True
+                        break
+                        
+                if not is_duplicate:
+                    used_positions.add((x, y))
+                    filtered.append(checkbox)
+        
+        # Seconde passe: ajouter les cases moyennement fiables si distance suffisante
+        for checkbox in sorted_checkboxes:
+            if checkbox not in filtered and checkbox.get("quality_score", 0) > 0.6:
+                x, y = checkbox.get("x", 0), checkbox.get("y", 0)
+                
+                # Vérifier s'il y a déjà une case à proximité avec seuil encore plus strict
+                is_duplicate = False
+                for used_x, used_y in used_positions:
+                    if abs(x - used_x) < proximity_threshold * 1.5 and abs(y - used_y) < proximity_threshold * 1.5:
+                        is_duplicate = True
+                        break
+                        
+                if not is_duplicate:
+                    used_positions.add((x, y))
+                    filtered.append(checkbox)
+                    
+                    # Limiter strictement le nombre de cases par page
+                    if len(filtered) >= 10:  # Maximum 10 cases par page
+                        break
         
         return filtered
 
@@ -510,11 +615,7 @@ class CheckboxExtractor:
             logger.error(f"Erreur prétraitement image: {e}")
             return image
     
-    async def _detect_rectangular_checkboxes(
-        self,
-        image: np.ndarray,
-        confidence_threshold: float
-    ) -> List[Dict[str, Any]]:
+    async def _detect_rectangular_checkboxes(self, image: np.ndarray, confidence_threshold: float) -> List[Dict[str, Any]]:
         """
         Détecte les cases à cocher rectangulaires avec filtrage amélioré.
         
@@ -528,46 +629,100 @@ class CheckboxExtractor:
         try:
             checkboxes = []
             
-            # Trouver les contours
-            contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Renforcement des contours avant détection
+            morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            enhanced_image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, morph_kernel, iterations=1)
             
-            for contour in contours:
+            # Trouver les contours
+            contours, hierarchy = cv2.findContours(enhanced_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if hierarchy is None:
+                return []
+                
+            hierarchy = hierarchy[0]
+            
+            for i, contour in enumerate(contours):
                 # Approcher le contour par un polygone
-                epsilon = 0.04 * cv2.arcLength(contour, True)
+                epsilon = 0.03 * cv2.arcLength(contour, True)  # Valeur plus faible pour meilleure précision
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 
-                # Vérifier si c'est un rectangle (4 côtés) ou proche
-                # Filtrage plus strict: uniquement 4 côtés
+                # Vérifier si c'est un quadrilatère (4 côtés)
                 if len(approx) == 4:
                     # Obtenir le rectangle englobant
                     x, y, w, h = cv2.boundingRect(contour)
                     
                     # Filtrage par taille - plage plus étroite
                     if self.min_size <= w <= self.max_size and self.min_size <= h <= self.max_size:
-                        # Vérifier si le rapport largeur/hauteur est proche de 1 (carré) - plus strict
+                        # Vérifier si le rapport largeur/hauteur est proche de 1 (carré)
                         aspect_ratio = w / h
-                        if 0.8 <= aspect_ratio <= 1.2:
+                        
+                        # Critère plus strict pour le rapport largeur/hauteur
+                        if 0.85 <= aspect_ratio <= 1.15:
                             # Vérifier l'aire du contour comparée à l'aire du rectangle
                             rect_area = w * h
                             contour_area = cv2.contourArea(contour)
                             area_ratio = contour_area / rect_area if rect_area > 0 else 0
                             
                             # Filtrage plus strict - le contour doit correspondre au rectangle
-                            if area_ratio > 0.7:
-                                # Une case à cocher idéale a un ratio proche de 1
-                                confidence = area_ratio * (1 - abs(1 - aspect_ratio))
+                            if area_ratio > 0.8:
+                                # Vérification des angles proches de 90 degrés
+                                is_rectangular = True
                                 
-                                # Vérification supplémentaire: au moins 3 points distants
-                                if self._has_distant_corners(approx):
-                                    if confidence >= confidence_threshold:
-                                        checkboxes.append({
-                                            "x": int(x),
-                                            "y": int(y),
-                                            "width": int(w),
-                                            "height": int(h),
-                                            "confidence": float(confidence),
-                                            "type": "rectangular"
-                                        })
+                                # Calcul des angles entre les segments
+                                points = [p[0] for p in approx]
+                                for j in range(4):
+                                    p1 = points[j]
+                                    p2 = points[(j+1) % 4]
+                                    p3 = points[(j+2) % 4]
+                                    
+                                    # Vecteurs des segments
+                                    v1 = [p2[0] - p1[0], p2[1] - p1[1]]
+                                    v2 = [p3[0] - p2[0], p3[1] - p2[1]]
+                                    
+                                    # Produit scalaire
+                                    dot_product = v1[0] * v2[0] + v1[1] * v2[1]
+                                    
+                                    # Magnitudes
+                                    mag1 = (v1[0]**2 + v1[1]**2)**0.5
+                                    mag2 = (v2[0]**2 + v2[1]**2)**0.5
+                                    
+                                    # Angle en degrés
+                                    if mag1 * mag2 > 0:
+                                        cos_angle = dot_product / (mag1 * mag2)
+                                        cos_angle = max(-1, min(1, cos_angle))  # Assurer que c'est dans [-1, 1]
+                                        angle = np.degrees(np.arccos(cos_angle))
+                                        
+                                        # Vérifier si l'angle est proche de 90 degrés
+                                        if abs(angle - 90) > 15:  # Tolérance de 15 degrés
+                                            is_rectangular = False
+                                            break
+                                
+                                # Vérification de la présence d'enfants dans la hiérarchie
+                                child_idx = hierarchy[i][2]
+                                has_inner_content = child_idx > -1
+                                
+                                # Confiance basée sur plusieurs facteurs
+                                squareness = 1.0 - abs(1.0 - aspect_ratio)
+                                area_quality = area_ratio
+                                
+                                # Pondération pour calculer la confiance finale
+                                confidence = 0.7 * squareness + 0.3 * area_quality
+                                
+                                # Bonus pour les rectangles avec contenu interne
+                                if has_inner_content:
+                                    confidence *= 1.1
+                                    confidence = min(confidence, 0.95)  # Plafonner à 0.95
+                                
+                                if is_rectangular and confidence >= confidence_threshold:
+                                    checkboxes.append({
+                                        "x": int(x),
+                                        "y": int(y),
+                                        "width": int(w),
+                                        "height": int(h),
+                                        "confidence": float(confidence),
+                                        "type": "rectangular",
+                                        "has_inner_content": has_inner_content
+                                    })
             
             return checkboxes
             
@@ -859,11 +1014,7 @@ class CheckboxExtractor:
         
         return keep
     
-    async def _is_checkbox_checked(
-        self,
-        checkbox_region: np.ndarray,
-        checkbox_type: str
-    ) -> Tuple[bool, float]:
+    async def _is_checkbox_checked(self, checkbox_region: np.ndarray, checkbox_type: str) -> Tuple[bool, float]:
         """
         Détermine si une case à cocher est cochée avec une approche améliorée.
         
@@ -878,74 +1029,98 @@ class CheckboxExtractor:
             if checkbox_region.size == 0:
                 return False, 0.0
                 
-            # Convertir en niveaux de gris si ce n'est pas déjà le cas
+            # Convertir en niveaux de gris si nécessaire
             if len(checkbox_region.shape) > 2:
                 gray = cv2.cvtColor(checkbox_region, cv2.COLOR_BGR2GRAY)
             else:
                 gray = checkbox_region
             
-            # Appliquer un débruitage
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-            
-            # Binarisation avec seuil adaptatif pour une meilleure sensibilité aux marques
-            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                        cv2.THRESH_BINARY_INV, 11, 2)
-            
-            # Calculer le pourcentage de pixels noirs (cochés) dans la région
-            total_pixels = binary.size
-            if total_pixels == 0:
-                return False, 0.0
+            # Prétraitement adapté selon le type de case
+            if checkbox_type == "circular":
+                # Pour les boutons radio: détection du remplissage central
+                processed = cv2.GaussianBlur(gray, (5, 5), 0)
+                binary = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                            cv2.THRESH_BINARY_INV, 11, 2)
+                                            
+                # Créer un masque circulaire pour isoler le centre
+                h, w = binary.shape
+                center_x, center_y = w // 2, h // 2
+                radius = min(w, h) // 4  # Rayon intérieur (25% de la case)
                 
-            # Trouver les contours dans la région binaire
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Extraire uniquement les contours significatifs (pas de bruit)
-            significant_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > total_pixels * 0.01]
-            
-            # Filtrer les contours basés sur la position (ignorer les contours de bordure)
-            center_contours = []
-            h, w = binary.shape
-            for cnt in significant_contours:
-                x, y, cw, ch = cv2.boundingRect(cnt)
-                # Vérifier si le contour est principalement au centre (pas sur les bords)
-                if x > w*0.1 and y > h*0.1 and x+cw < w*0.9 and y+ch < h*0.9:
-                    center_contours.append(cnt)
-            
-            # Calcul du taux de remplissage intérieur
-            filled_pixels = sum(cv2.contourArea(cnt) for cnt in center_contours)
-            fill_ratio = filled_pixels / total_pixels if total_pixels > 0 else 0
-            
-            # Vérifier la disposition des pixels pour les marques caractéristiques (X, ✓)
-            has_mark_pattern = self._detect_mark_pattern(binary)
-            
-            # Déterminer l'état selon le type de case
-            is_checked = False
-            confidence = 0.0
-            
-            if checkbox_type == "rectangular":
-                # Pour les cases rectangulaires: combine le ratio de remplissage et la détection de marque
-                if fill_ratio > 0.2 or has_mark_pattern:
+                mask = np.zeros_like(binary)
+                cv2.circle(mask, (center_x, center_y), radius, 255, -1)
+                
+                # Appliquer le masque
+                center_region = cv2.bitwise_and(binary, mask)
+                
+                # Calculer le taux de remplissage du centre
+                center_fill_ratio = np.sum(center_region > 0) / (np.pi * radius * radius) if radius > 0 else 0
+                
+                # Un bouton radio est coché si son centre est suffisamment rempli
+                is_checked = center_fill_ratio > 0.3
+                confidence = min(1.0, center_fill_ratio * 2.0) if is_checked else min(1.0, (1.0 - center_fill_ratio) * 1.5)
+                
+            else:  # Pour les cases rectangulaires et symboles
+                # Prétraitement avancé
+                processed = cv2.GaussianBlur(gray, (3, 3), 0)
+                
+                # Binarisation avec deux méthodes pour robustesse
+                binary1 = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                            cv2.THRESH_BINARY_INV, 11, 2)
+                                            
+                _, binary2 = cv2.threshold(processed, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                
+                # Combiner les deux méthodes
+                binary = cv2.bitwise_or(binary1, binary2)
+                
+                # 1. Analyse du taux de remplissage global
+                total_pixels = binary.size
+                filled_pixels = np.sum(binary > 0)
+                fill_ratio = filled_pixels / total_pixels if total_pixels > 0 else 0
+                
+                # 2. Détection des lignes (pour les X et ✓)
+                lines = cv2.HoughLinesP(binary, 1, np.pi/180, 
+                                threshold=max(5, min(binary.shape) // 8),
+                                minLineLength=max(5, min(binary.shape) // 5), 
+                                maxLineGap=max(2, min(binary.shape) // 10))
+                                
+                has_lines = lines is not None and len(lines) >= 2
+                
+                # 3. Détection de contours significatifs
+                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                significant_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > total_pixels * 0.05]
+                
+                # 4. Analyse des points de croisement des lignes
+                intersections = 0
+                if has_lines:
+                    # Créer une image pour les lignes détectées
+                    line_img = np.zeros_like(binary)
+                    for line in lines:
+                        x1, y1, x2, y2 = line[0]
+                        cv2.line(line_img, (x1, y1), (x2, y2), 255, 1)
+                    
+                    # Compter les intersections (approximation par érosion/dilatation)
+                    kernel = np.ones((3, 3), np.uint8)
+                    eroded = cv2.erode(line_img, kernel, iterations=1)
+                    intersections = np.sum(eroded > 0)
+                
+                # Fusion des résultats pour déterminer si la case est cochée
+                is_checked = False
+                confidence = 0.5  # Valeur par défaut
+                
+                # Règles de décision combinées
+                if fill_ratio > 0.3:  # Remplissage significatif
                     is_checked = True
-                    confidence = max(0.7, fill_ratio) if has_mark_pattern else min(1.0, fill_ratio * 1.5)
+                    confidence = min(1.0, fill_ratio * 1.5)
+                elif has_lines and len(significant_contours) >= 1:  # Lignes et contours significatifs
+                    is_checked = True
+                    confidence = 0.7 + (min(len(lines), 5) / 10.0)
+                elif intersections > 0:  # Intersections détectées (indice de croix)
+                    is_checked = True
+                    confidence = 0.7 + (min(intersections, total_pixels * 0.1) / (total_pixels * 0.1)) * 0.3
                 else:
                     is_checked = False
-                    confidence = max(0.7, 1.0 - fill_ratio * 2.0)
-            elif checkbox_type == "circular":
-                # Pour les boutons radio: le remplissage central est déterminant
-                if fill_ratio > 0.25:
-                    is_checked = True
-                    confidence = min(1.0, fill_ratio * 1.2)
-                else:
-                    is_checked = False
-                    confidence = min(1.0, (1.0 - fill_ratio * 2.0))
-            elif checkbox_type == "symbol":
-                # Pour les symboles: combiner plusieurs facteurs
-                if fill_ratio > 0.25 or has_mark_pattern or len(center_contours) > 0:
-                    is_checked = True
-                    confidence = 0.7 if has_mark_pattern else min(1.0, fill_ratio * 1.3)
-                else:
-                    is_checked = False
-                    confidence = min(1.0, (1.0 - fill_ratio * 2.5))
+                    confidence = max(0.6, 1.0 - fill_ratio * 2.0)
             
             return is_checked, confidence
             
@@ -1358,64 +1533,89 @@ class CheckboxExtractor:
         if not checkboxes:
             return []
             
+        # Collecte des statistiques sur les dimensions pour détecter les anomalies
+        widths = [cb.get("width", 0) for cb in checkboxes]
+        heights = [cb.get("height", 0) for cb in checkboxes]
+        
+        if not widths or not heights:
+            return []
+        
+        median_width = sorted(widths)[len(widths) // 2]
+        median_height = sorted(heights)[len(heights) // 2]
+        
+        # Calculer les écarts interquartiles pour détecter les anomalies
+        q1_width = sorted(widths)[len(widths) // 4]
+        q3_width = sorted(widths)[3 * len(widths) // 4]
+        iqr_width = q3_width - q1_width
+        
+        q1_height = sorted(heights)[len(heights) // 4]
+        q3_height = sorted(heights)[3 * len(heights) // 4]
+        iqr_height = q3_height - q1_height
+        
+        # Seuils pour détecter les anomalies (méthode de la boîte à moustaches)
+        min_valid_width = max(8, q1_width - 1.5 * iqr_width)
+        max_valid_width = min(50, q3_width + 1.5 * iqr_width)
+        min_valid_height = max(8, q1_height - 1.5 * iqr_height)
+        max_valid_height = min(50, q3_height + 1.5 * iqr_height)
+        
+        # Expressions régulières pour les indices textuels dans le contexte
+        import re
+        checkbox_context_patterns = [
+            r'\b(oui|non|yes|no)\b',
+            r'\b(cocher|check|tick|select)\b',
+            r'(?i)[□■☐☑✓✔✕✖✗✘]',
+            r'\[\s*\]|\(\s*\)',
+            r'\b(option|choix|choice)\b'
+        ]
+        
         valid_checkboxes = []
         
+        # Vérification individuelle des cases
         for checkbox in checkboxes:
-            # Validation basée sur plusieurs critères
-            
-            # 1. Validation par score de confiance
-            if checkbox["confidence"] < 0.55:  # Seuil plus élevé pour la confiance
+            # 1. Validation par score de confiance - plus strict
+            if checkbox.get("confidence", 0) < 0.65:  # Seuil augmenté
                 continue
                 
-            # 2. Validation par contexte textuel
+            # 2. Validation des dimensions
+            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
+            if not (min_valid_width <= w <= max_valid_width and min_valid_height <= h <= max_valid_height):
+                # Cas spécial: accepter les cases très carrées même si dimensions légèrement hors norme
+                aspect_ratio = w / h if h > 0 else 0
+                if not (0.9 <= aspect_ratio <= 1.1 and min(w, h) >= 8 and max(w, h) <= 60):
+                    continue
+            
+            # 3. Validation par contexte textuel - recherche d'indices clairs
             context = checkbox.get("text_context", "")
+            has_checkbox_indicators = False
+            
             if context:
-                # Vérifier s'il y a un texte sensé (pas juste des caractères spéciaux)
-                has_meaningful_text = bool(re.search(r'[a-zA-Z]{3,}', context))
-                if not has_meaningful_text:
-                    # Réduire la confiance pour les cases sans contexte textuel significatif
-                    checkbox["confidence"] *= 0.8
-                    if checkbox["confidence"] < 0.55:
+                # Vérifier si le contexte contient des indices d'une case à cocher
+                for pattern in checkbox_context_patterns:
+                    if re.search(pattern, context):
+                        has_checkbox_indicators = True
+                        break
+                        
+                # Bonus de confiance pour les cases avec contexte clair
+                if has_checkbox_indicators:
+                    checkbox["confidence"] = min(1.0, checkbox.get("confidence", 0) * 1.2)
+                else:
+                    # Pénaliser légèrement les cases sans indices contextuels
+                    checkbox["confidence"] *= 0.9
+                    if checkbox.get("confidence", 0) < 0.6:  # Re-vérifier après ajustement
                         continue
             
-            # 3. Validation par cohérence de type
-            checkbox_type = checkbox.get("type", "")
-            if checkbox_type == "symbol":
-                # Les cases de type symbol doivent avoir un score élevé pour être acceptées
-                if checkbox["confidence"] < 0.6:
-                    continue
-            
-            # 4. Validation des dimensions (rapport hauteur/largeur)
-            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
-            if w > 0 and h > 0:
-                aspect_ratio = w / h
-                # Filtrer les formes trop allongées
-                if aspect_ratio < 0.6 or aspect_ratio > 1.7:
-                    continue
-            
-            # 5. Validation du nom de champ
-            field_name = checkbox.get("field_name", "")
-            if field_name:
-                # Ignorer les noms de champs trop courts ou générés
-                if len(field_name) < 3 or field_name.startswith("field_"):
-                    # Essayer de générer un meilleur nom basé sur le contexte
-                    better_name = await self._extract_better_field_name(context)
-                    if better_name:
-                        checkbox["field_name"] = better_name
-            else:
-                # Essayer de générer un nom basé sur le contexte
-                checkbox["field_name"] = await self._extract_better_field_name(context)
-            
-            # 6. Validation du label
-            label = checkbox.get("label", "")
-            if not label and context:
-                # Essayer de détecter un meilleur label
-                better_label = await self._extract_better_label(context)
-                if better_label:
-                    checkbox["label"] = better_label
-            
-            # La case a passé toutes les validations
+            # 4. Validation du rapport hauteur/largeur (doit être proche d'un carré)
+            aspect_ratio = w / h if h > 0 else 0
+            if aspect_ratio < 0.7 or aspect_ratio > 1.5:
+                continue
+                
+            # Tout est bon, considérer comme valide
             valid_checkboxes.append(checkbox)
+        
+        # Dernière vérification: si trop de cases valides, appliquer un filtrage plus agressif
+        if len(valid_checkboxes) > 10:  # Limiter à 10 maximum
+            # Trier par confiance et prendre les 10 meilleures
+            valid_checkboxes = sorted(valid_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:10]
         
         return valid_checkboxes
 
