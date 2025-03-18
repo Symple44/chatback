@@ -50,18 +50,18 @@ class CheckboxExtractor:
             if hasattr(settings, 'table_extraction') and hasattr(settings.table_extraction, 'CHECKBOX'):
                 checkbox_config = settings.table_extraction.CHECKBOX
                 self.min_size = checkbox_config.MIN_SIZE if hasattr(checkbox_config, 'MIN_SIZE') else 10
-                self.max_size = checkbox_config.MAX_SIZE if hasattr(checkbox_config, 'MAX_SIZE') else 50
-                self.default_confidence = checkbox_config.DEFAULT_CONFIDENCE if hasattr(checkbox_config, 'DEFAULT_CONFIDENCE') else 0.6
+                self.max_size = checkbox_config.MAX_SIZE if hasattr(checkbox_config, 'MAX_SIZE') else 45
+                self.default_confidence = checkbox_config.DEFAULT_CONFIDENCE if hasattr(checkbox_config, 'DEFAULT_CONFIDENCE') else 0.65
             else:
                 # Valeurs par défaut
-                self.min_size = 12  # Taille minimale en pixels
-                self.max_size = 40  # Taille maximale en pixels
-                self.default_confidence = 0.7  # Seuil de confiance par défaut
+                self.min_size = 10  # Taille minimale en pixels
+                self.max_size = 45  # Taille maximale en pixels
+                self.default_confidence = 0.65  # Seuil de confiance par défaut
         except Exception as e:
             logger.warning(f"Erreur lors du chargement des configurations: {e}, utilisation des valeurs par défaut")
             self.min_size = 10
-            self.max_size = 50
-            self.default_confidence = 0.6
+            self.max_size = 45
+            self.default_confidence = 0.65
         
         # Initialiser un modèle dédié à la détection des cases à cocher si disponible
         self.checkbox_model = None
@@ -80,6 +80,31 @@ class CheckboxExtractor:
             if os.path.exists(tesseract_cmd) and os.access(tesseract_cmd, os.X_OK):
                 pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
     
+    def _convert_numpy_types(self, obj):
+        """
+        Convertit les types numpy en types Python standard pour la sérialisation JSON.
+        
+        Args:
+            obj: Objet à convertir
+            
+        Returns:
+            Objet avec des types Python standard
+        """
+        if isinstance(obj, dict):
+            return {k: self._convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return self._convert_numpy_types(obj.tolist())
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        else:
+            return obj
+            
     async def extract_checkboxes_from_pdf(
         self,
         file_obj: Union[str, bytes, BinaryIO],
@@ -234,15 +259,15 @@ class CheckboxExtractor:
                             continue
                         
                         # Optimisation pour limiter les cases à cocher similaires sur la même page
-                        if len(checkboxes) > 10:  # Seuil réduit de 15 à 10
+                        if len(checkboxes) > 50:  # Seuil élevé
                             logger.info(f"Trop de cases à cocher détectées sur la page {page_num} ({len(checkboxes)}), filtrage supplémentaire")
                             checkboxes = self._filter_similar_checkboxes(checkboxes)
                             
-                            # Filtrage additionnel si toujours trop de cases
-                            if len(checkboxes) > 15:
-                                logger.info(f"Filtrage additionnel nécessaire sur la page {page_num}, application de critères plus stricts")
-                                # Appliquer un tri par confiance et limiter strictement
-                                checkboxes = sorted(checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:10]
+                            # Filtrage additionnel seulement si vraiment beaucoup de cases
+                            if len(checkboxes) > 40:
+                                logger.info(f"Filtrage additionnel nécessaire sur la page {page_num}")
+                                # Limiter moins strictement
+                                checkboxes = sorted(checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:30]
                         
                         # Analyser et associer le contexte textuel pour chaque case à cocher
                         for checkbox in checkboxes:
@@ -272,13 +297,54 @@ class CheckboxExtractor:
                             if field_name and len(field_name) >= 3:
                                 checkbox["field_name"] = field_name
                                 # Ajouter aux valeurs de formulaire structurées
-                                form_values[field_name] = checkbox["is_checked"]
+                                form_values[field_name] = bool(checkbox["is_checked"])
                             
                             # Ajouter aux résultats
                             all_checkboxes.append(checkbox)
                     
                     # Fermer le document
                     doc.close()
+                    
+                    # Validation statistique globale finale, seulement si vraiment trop nombreuses
+                    if len(all_checkboxes) > 100:  # Seuil très élevé
+                        logger.info(f"Nombre très élevé de cases détectées ({len(all_checkboxes)}), application d'un filtrage global léger")
+                        
+                        # Regrouper par page
+                        checkboxes_by_page = {}
+                        for checkbox in all_checkboxes:
+                            page = checkbox.get("page", 1)
+                            if page not in checkboxes_by_page:
+                                checkboxes_by_page[page] = []
+                            checkboxes_by_page[page].append(checkbox)
+                        
+                        # Pour chaque page avec beaucoup de cases, appliquer un filtrage moins strict
+                        filtered_checkboxes = []
+                        for page, page_checkboxes in checkboxes_by_page.items():
+                            if len(page_checkboxes) > 30:  # Seuil beaucoup plus élevé
+                                # Trier par confiance et prendre les N meilleurs
+                                page_checkboxes = sorted(page_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)
+                                # Limiter à un nombre raisonnable par page
+                                filtered_checkboxes.extend(page_checkboxes[:30])
+                            else:
+                                filtered_checkboxes.extend(page_checkboxes)
+                        
+                        all_checkboxes = filtered_checkboxes
+                        
+                        # Recalculer les valeurs et sections du formulaire
+                        form_values = {}
+                        form_sections = {}
+                        
+                        for checkbox in all_checkboxes:
+                            field_name = checkbox.get("field_name")
+                            if field_name:
+                                form_values[field_name] = bool(checkbox.get("is_checked", False))
+                                
+                            # Identifier la section
+                            section = checkbox.get("section")
+                            if section:
+                                if section not in form_sections:
+                                    form_sections[section] = []
+                                form_sections[section].append(checkbox.get("id", ""))
                     
                     # Organiser les résultats
                     result = {
@@ -292,47 +358,9 @@ class CheckboxExtractor:
                     if include_images:
                         result["checkbox_images"] = checkbox_images
                     
-                    # Validation statistique globale finale
-                    if len(all_checkboxes) > 30:
-                        logger.info(f"Nombre élevé de cases détectées ({len(all_checkboxes)}), application d'un filtrage statistique global")
-                        
-                        # Regrouper par page
-                        checkboxes_by_page = {}
-                        for checkbox in all_checkboxes:
-                            page = checkbox.get("page", 1)
-                            if page not in checkboxes_by_page:
-                                checkboxes_by_page[page] = []
-                            checkboxes_by_page[page].append(checkbox)
-                        
-                        # Pour chaque page avec beaucoup de cases, appliquer un filtrage plus strict
-                        filtered_checkboxes = []
-                        for page, page_checkboxes in checkboxes_by_page.items():
-                            if len(page_checkboxes) > 8:
-                                # Trier par confiance et prendre les N meilleurs
-                                page_checkboxes = sorted(page_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)
-                                # Limiter à maximum 8 par page
-                                filtered_checkboxes.extend(page_checkboxes[:8])
-                            else:
-                                filtered_checkboxes.extend(page_checkboxes)
-                        
-                        all_checkboxes = filtered_checkboxes
-                        
-                        # Recalculer les valeurs et sections du formulaire
-                        form_values = {}
-                        form_sections = {}
-                        
-                        for checkbox in all_checkboxes:
-                            field_name = checkbox.get("field_name")
-                            if field_name:
-                                form_values[field_name] = checkbox.get("is_checked", False)
-                                
-                            # Identifier la section
-                            section = checkbox.get("section")
-                            if section:
-                                if section not in form_sections:
-                                    form_sections[section] = []
-                                form_sections[section].append(checkbox.get("id", ""))
-                                
+                    # Convertir les types numpy en types Python standard
+                    result = self._convert_numpy_types(result)
+                    
                     logger.info(f"Extraction de {len(all_checkboxes)} cases à cocher terminée")
                     return result
                     
@@ -358,7 +386,7 @@ class CheckboxExtractor:
         
         Args:
             checkboxes: Liste de cases à cocher détectées
-                
+            
         Returns:
             Liste filtrée sans doublons similaires
         """
@@ -377,17 +405,17 @@ class CheckboxExtractor:
         median_size = (median_width + median_height) / 2
         
         # Seuil adaptatif: plus les cases sont grandes, plus le seuil est élevé
-        proximity_threshold = max(median_size * 0.75, 30)
+        proximity_threshold = max(median_size * 0.75, 25)  # Seuil moins strict
         
         # Calcul de scores de qualité pour chaque case
         for checkbox in checkboxes:
             w, h = checkbox.get("width", 0), checkbox.get("height", 0)
             base_score = checkbox.get("confidence", 0)
             
-            # Facteur de forme: les cases carrées sont préférées
+            # Facteur de forme: les cases carrées sont préférées, mais moins strictement
             if w > 0 and h > 0:
                 aspect_ratio = w / h
-                squareness = 1.0 - min(abs(1.0 - aspect_ratio), 0.5) * 2.0
+                squareness = 1.0 - min(abs(1.0 - aspect_ratio), 0.6) * 1.5  # Moins strict
             else:
                 squareness = 0.0
             
@@ -413,9 +441,9 @@ class CheckboxExtractor:
         filtered = []
         used_positions = set()
         
-        # Première passe: conserver les cases très fiables (score > 0.8)
+        # Première passe: conserver les cases très fiables (score > 0.75)
         for checkbox in sorted_checkboxes:
-            if checkbox.get("quality_score", 0) > 0.8:
+            if checkbox.get("quality_score", 0) > 0.75:  # Moins strict
                 x, y = checkbox.get("x", 0), checkbox.get("y", 0)
                 
                 # Vérifier s'il y a déjà une case à proximité
@@ -429,15 +457,15 @@ class CheckboxExtractor:
                     used_positions.add((x, y))
                     filtered.append(checkbox)
         
-        # Seconde passe: ajouter les cases moyennement fiables si distance suffisante
+        # Seconde passe: ajouter les cases moyennement fiables
         for checkbox in sorted_checkboxes:
-            if checkbox not in filtered and checkbox.get("quality_score", 0) > 0.6:
+            if checkbox not in filtered and checkbox.get("quality_score", 0) > 0.5:  # Seuil réduit
                 x, y = checkbox.get("x", 0), checkbox.get("y", 0)
                 
-                # Vérifier s'il y a déjà une case à proximité avec seuil encore plus strict
+                # Vérifier s'il y a déjà une case à proximité
                 is_duplicate = False
                 for used_x, used_y in used_positions:
-                    if abs(x - used_x) < proximity_threshold * 1.5 and abs(y - used_y) < proximity_threshold * 1.5:
+                    if abs(x - used_x) < proximity_threshold * 0.9 and abs(y - used_y) < proximity_threshold * 0.9:  # Seuil réduit
                         is_duplicate = True
                         break
                         
@@ -445,8 +473,8 @@ class CheckboxExtractor:
                     used_positions.add((x, y))
                     filtered.append(checkbox)
                     
-                    # Limiter strictement le nombre de cases par page
-                    if len(filtered) >= 10:  # Maximum 10 cases par page
+                    # Limite augmentée
+                    if len(filtered) >= 30:  # Maximum 30 cases par page
                         break
         
         return filtered
@@ -566,8 +594,8 @@ class CheckboxExtractor:
                 # Déterminer si la case est cochée
                 is_checked, check_confidence = await self._is_checkbox_checked(checkbox_region, checkbox["type"])
                 
-                checkbox["is_checked"] = is_checked
-                checkbox["check_confidence"] = check_confidence
+                checkbox["is_checked"] = bool(is_checked)
+                checkbox["check_confidence"] = float(check_confidence)
                 checkbox["page"] = page_num
             
             return merged_checkboxes
@@ -615,7 +643,11 @@ class CheckboxExtractor:
             logger.error(f"Erreur prétraitement image: {e}")
             return image
     
-    async def _detect_rectangular_checkboxes(self, image: np.ndarray, confidence_threshold: float) -> List[Dict[str, Any]]:
+    async def _detect_rectangular_checkboxes(
+        self,
+        image: np.ndarray,
+        confidence_threshold: float
+    ) -> List[Dict[str, Any]]:
         """
         Détecte les cases à cocher rectangulaires avec filtrage amélioré.
         
@@ -656,15 +688,15 @@ class CheckboxExtractor:
                         # Vérifier si le rapport largeur/hauteur est proche de 1 (carré)
                         aspect_ratio = w / h
                         
-                        # Critère plus strict pour le rapport largeur/hauteur
-                        if 0.85 <= aspect_ratio <= 1.15:
+                        # Critère plus tolérant pour le rapport largeur/hauteur
+                        if 0.7 <= aspect_ratio <= 1.4:
                             # Vérifier l'aire du contour comparée à l'aire du rectangle
                             rect_area = w * h
                             contour_area = cv2.contourArea(contour)
                             area_ratio = contour_area / rect_area if rect_area > 0 else 0
                             
-                            # Filtrage plus strict - le contour doit correspondre au rectangle
-                            if area_ratio > 0.8:
+                            # Critère moins strict - le contour doit correspondre au rectangle
+                            if area_ratio > 0.7:
                                 # Vérification des angles proches de 90 degrés
                                 is_rectangular = True
                                 
@@ -693,7 +725,7 @@ class CheckboxExtractor:
                                         angle = np.degrees(np.arccos(cos_angle))
                                         
                                         # Vérifier si l'angle est proche de 90 degrés
-                                        if abs(angle - 90) > 15:  # Tolérance de 15 degrés
+                                        if abs(angle - 90) > 20:  # Tolérance plus grande (20 degrés)
                                             is_rectangular = False
                                             break
                                 
@@ -706,7 +738,7 @@ class CheckboxExtractor:
                                 area_quality = area_ratio
                                 
                                 # Pondération pour calculer la confiance finale
-                                confidence = 0.7 * squareness + 0.3 * area_quality
+                                confidence = 0.6 * squareness + 0.4 * area_quality  # Plus de poids sur l'aire
                                 
                                 # Bonus pour les rectangles avec contenu interne
                                 if has_inner_content:
@@ -729,24 +761,6 @@ class CheckboxExtractor:
         except Exception as e:
             logger.error(f"Erreur détection cases rectangulaires: {e}")
             return []
-        
-    def _has_distant_corners(self, approx) -> bool:
-        """Vérifie si les points du contour forment un vrai rectangle."""
-        if len(approx) != 4:
-            return False
-            
-        # Extraire les points
-        points = [p[0] for p in approx]
-        
-        # Calculer les distances entre tous les points
-        min_dist = float('inf')
-        for i in range(len(points)):
-            for j in range(i+1, len(points)):
-                dist = np.sqrt((points[i][0] - points[j][0])**2 + (points[i][1] - points[j][1])**2)
-                min_dist = min(min_dist, dist)
-    
-        # Pour être un vrai rectangle, les points doivent être suffisamment distants
-        return min_dist >= self.min_size * 0.8
 
     async def _detect_circular_checkboxes(
         self,
@@ -773,7 +787,7 @@ class CheckboxExtractor:
                 dp=1.2, 
                 minDist=20, 
                 param1=50, 
-                param2=30, 
+                param2=25,  # Moins strict (était 30)
                 minRadius=int(self.min_size / 2), 
                 maxRadius=int(self.max_size / 2)
             )
@@ -814,9 +828,10 @@ class CheckboxExtractor:
                             edge_ratio = contour_pixels / total_pixels
                             
                             # Un bon cercle a un ratio entre 0.2 et 0.5 (contour net, intérieur vide)
-                            if 0.1 <= edge_ratio <= 0.7:
+                            # Mais permet une plage plus large
+                            if 0.1 <= edge_ratio <= 0.8:  # Plage élargie (était 0.1-0.7)
                                 # Normaliser la confiance
-                                confidence = 1.0 - abs(0.3 - edge_ratio) * 2
+                                confidence = 1.0 - abs(0.3 - edge_ratio) * 1.8  # Moins pénalisant
                                 confidence = max(0.0, min(1.0, confidence))
                                 
                                 if confidence >= confidence_threshold:
@@ -864,22 +879,22 @@ class CheckboxExtractor:
                 
                 for i, contour in enumerate(contours):
                     # Ignorer les contours trop petits
-                    if cv2.contourArea(contour) < self.min_size * self.min_size * 0.5:
+                    if cv2.contourArea(contour) < self.min_size * self.min_size * 0.4:  # Moins strict
                         continue
                     
                     # Approcher le contour
                     epsilon = 0.04 * cv2.arcLength(contour, True)
                     approx = cv2.approxPolyDP(contour, epsilon, True)
                     
-                    # Vérifier si c'est un rectangle (4 côtés)
-                    if len(approx) == 4:
+                    # Pour les symboles, accepter 3-5 côtés
+                    if 3 <= len(approx) <= 6:  # Plus permissif (était exactement 4)
                         x, y, w, h = cv2.boundingRect(contour)
                         
                         # Filtrer par taille
                         if self.min_size <= w <= self.max_size and self.min_size <= h <= self.max_size:
                             # Vérifier le rapport largeur/hauteur
                             aspect_ratio = w / h
-                            if 0.7 <= aspect_ratio <= 1.3:
+                            if 0.65 <= aspect_ratio <= 1.5:  # Plus permissif (était 0.7-1.3)
                                 # Vérifier s'il y a des contours enfants (intérieurs)
                                 child_idx = hierarchy[i][2]
                                 
@@ -895,8 +910,8 @@ class CheckboxExtractor:
                                     # Ratio de surface enfant/parent
                                     area_ratio = child_area / parent_area if parent_area > 0 else 0
                                     
-                                    # Si le contour intérieur occupe entre 10% et 80% de la case
-                                    if 0.1 <= area_ratio <= 0.8:
+                                    # Si le contour intérieur occupe entre 5% et 90% de la case
+                                    if 0.05 <= area_ratio <= 0.9:  # Plus permissif (était 0.1-0.8)
                                         confidence += 0.2
                                 
                                 # Vérifier les sous-contours pour détecter les marques de cochage
@@ -912,7 +927,7 @@ class CheckboxExtractor:
                                         "height": int(h),
                                         "confidence": float(confidence),
                                         "type": "symbol",
-                                        "is_checked": is_checked
+                                        "is_checked": bool(is_checked)
                                     })
             
             return checkboxes
@@ -1014,7 +1029,11 @@ class CheckboxExtractor:
         
         return keep
     
-    async def _is_checkbox_checked(self, checkbox_region: np.ndarray, checkbox_type: str) -> Tuple[bool, float]:
+    async def _is_checkbox_checked(
+        self,
+        checkbox_region: np.ndarray,
+        checkbox_type: str
+    ) -> Tuple[bool, float]:
         """
         Détermine si une case à cocher est cochée avec une approche améliorée.
         
@@ -1029,7 +1048,7 @@ class CheckboxExtractor:
             if checkbox_region.size == 0:
                 return False, 0.0
                 
-            # Convertir en niveaux de gris si nécessaire
+            # Convertir en niveaux de gris si ce n'est pas déjà le cas
             if len(checkbox_region.shape) > 2:
                 gray = cv2.cvtColor(checkbox_region, cv2.COLOR_BGR2GRAY)
             else:
@@ -1040,8 +1059,8 @@ class CheckboxExtractor:
                 # Pour les boutons radio: détection du remplissage central
                 processed = cv2.GaussianBlur(gray, (5, 5), 0)
                 binary = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                            cv2.THRESH_BINARY_INV, 11, 2)
-                                            
+                                             cv2.THRESH_BINARY_INV, 11, 2)
+                                             
                 # Créer un masque circulaire pour isoler le centre
                 h, w = binary.shape
                 center_x, center_y = w // 2, h // 2
@@ -1066,8 +1085,8 @@ class CheckboxExtractor:
                 
                 # Binarisation avec deux méthodes pour robustesse
                 binary1 = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                            cv2.THRESH_BINARY_INV, 11, 2)
-                                            
+                                              cv2.THRESH_BINARY_INV, 11, 2)
+                                              
                 _, binary2 = cv2.threshold(processed, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 
                 # Combiner les deux méthodes
@@ -1080,10 +1099,10 @@ class CheckboxExtractor:
                 
                 # 2. Détection des lignes (pour les X et ✓)
                 lines = cv2.HoughLinesP(binary, 1, np.pi/180, 
-                                threshold=max(5, min(binary.shape) // 8),
-                                minLineLength=max(5, min(binary.shape) // 5), 
-                                maxLineGap=max(2, min(binary.shape) // 10))
-                                
+                                   threshold=max(5, min(binary.shape) // 8),
+                                   minLineLength=max(5, min(binary.shape) // 5), 
+                                   maxLineGap=max(2, min(binary.shape) // 10))
+                                   
                 has_lines = lines is not None and len(lines) >= 2
                 
                 # 3. Détection de contours significatifs
@@ -1122,7 +1141,8 @@ class CheckboxExtractor:
                     is_checked = False
                     confidence = max(0.6, 1.0 - fill_ratio * 2.0)
             
-            return is_checked, confidence
+            # Convertir explicitement en types Python standard
+            return bool(is_checked), float(confidence)
             
         except Exception as e:
             logger.error(f"Erreur vérification état case à cocher: {e}")
@@ -1145,9 +1165,9 @@ class CheckboxExtractor:
             
             # Détection des lignes avec Hough Transform
             lines = cv2.HoughLinesP(cleaned, 1, np.pi/180, 
-                                threshold=int(min(binary_img.shape) * 0.3), 
-                                minLineLength=int(min(binary_img.shape) * 0.3), 
-                                maxLineGap=int(min(binary_img.shape) * 0.1))
+                                threshold=int(min(binary_img.shape) * 0.25),  # Moins strict 
+                                minLineLength=int(min(binary_img.shape) * 0.25),  # Moins strict
+                                maxLineGap=int(min(binary_img.shape) * 0.15))  # Plus permissif
             
             if lines is None or len(lines) == 0:
                 return False
@@ -1164,10 +1184,10 @@ class CheckboxExtractor:
                 else:
                     angle = abs(np.arctan((y2 - y1) / (x2 - x1)) * 180 / np.pi)
                     
-                # Classer la ligne selon son angle
-                if 70 <= angle <= 110:  # Presque vertical
+                # Classer la ligne selon son angle avec des plages élargies
+                if 65 <= angle <= 115:  # Presque vertical (plage élargie)
                     verticals.append(line)
-                elif angle <= 20 or angle >= 160:  # Presque horizontal
+                elif angle <= 25 or angle >= 155:  # Presque horizontal (plage élargie)
                     horizontals.append(line)
                 else:  # Diagonal
                     diagonals.append(line)
@@ -1218,13 +1238,13 @@ class CheckboxExtractor:
             
             # 1. Approche par OCR - extraire le texte à proximité
             # Définir une zone de contexte plus large
-            context_margin = max(h * 5, 100)  # marge adaptative
+            context_margin = max(h * 6, 150)  # marge adaptative plus grande
             
             # Vérifier les limites de l'image
             x1 = max(0, x - context_margin)
             y1 = max(0, y - context_margin // 2)
             x2 = min(image.shape[1], x + w + context_margin)
-            y2 = min(image.shape[0], y + h + context_margin // 2)
+            y2 = min(image.shape[0], y + h + context_margin)
             
             # Extraire la région de contexte
             context_region = image[y1:y2, x1:x2]
@@ -1301,16 +1321,16 @@ class CheckboxExtractor:
             if paragraphs:
                 paragraph_index = min(int(relative_pos * len(paragraphs)), len(paragraphs) - 1)
                 
-                # Prendre le paragraphe estimé et quelques autres autour
-                start_idx = max(0, paragraph_index - 1)
-                end_idx = min(len(paragraphs), paragraph_index + 2)
+                # Prendre le paragraphe estimé et plus de paragraphes autour
+                start_idx = max(0, paragraph_index - 2)  # Prendre plus de contexte avant
+                end_idx = min(len(paragraphs), paragraph_index + 3)  # Et après
                 
                 # Joindre les paragraphes pertinents
                 relevant_text = '\n'.join(paragraphs[start_idx:end_idx])
                 
-                # Limiter la longueur du texte
-                if len(relevant_text) > 500:
-                    relevant_text = relevant_text[:500] + "..."
+                # Limiter la longueur du texte mais plus généreuse
+                if len(relevant_text) > 800:  # Plus de contexte
+                    relevant_text = relevant_text[:800] + "..."
                 
                 return relevant_text.strip()
             
@@ -1344,49 +1364,168 @@ class CheckboxExtractor:
             # Supprimer les séquences aléatoires de lettres/chiffres qui semblent être du bruit OCR
             context = re.sub(r'(\s|^)[a-zA-Z0-9]{1,2}(\s|$)', ' ', context)
             
-            # Rechercher des motifs plus stricts pour les libellés
+            # Rechercher des motifs plus spécifiques de noms de champs
             label_patterns = [
-                # Option 1: Texte suivi d'une case à cocher
-                r'([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})[\s\:]*[□☐☑✓✔✕✖✗✘]',
+                # Format: label: valeur
+                r'(?:^|\s)([A-Za-z][A-Za-z0-9_]{3,30})(?:\s*[:=])',
                 
-                # Option 2: Case à cocher suivie d'un texte
-                r'[□☐☑✓✔✕✖✗✘][\s\:]*([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})',
+                # Format: préfixe_mot significatif
+                r'(?:champ|field|input|form|formulaire|question)(?:\s*[:=]\s*)([A-Za-z][A-Za-z0-9_]{3,30})',
                 
-                # Option 3: Texte entre guillemets
-                r'[\"\']([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-_.,;:()/]{3,50})[\"\']',
+                # Format: [nom_champ]
+                r'\[([A-Za-z][A-Za-z0-9_]{3,30})\]',
                 
-                # Option 4: Chaîne significative avec majuscule
-                r'(\b[A-Z][a-zÀ-ÿ]{2,}\s*(?:[A-Za-zÀ-ÿ]+\s*){0,3})'
+                # Format: nom significatif (>3 lettres, commençant par une lettre)
+                r'\b([A-Za-z][A-Za-z]{2,}[A-Za-z0-9_]*)\b'  # Moins strict: min 3 caractères
             ]
             
-            # Rechercher les motifs dans le texte
+            # Rechercher les motifs
             for pattern in label_patterns:
-                matches = re.findall(pattern, context)
-                for match in matches:
-                    if match and len(match) >= 3:
-                        # Nettoyer et retourner
-                        label = match.strip()
-                        # Filtrer les labels qui semblent être des codes ou des nombres
-                        if not re.match(r'^[0-9]+$', label) and not re.match(r'^[A-Z0-9_]+$', label):
-                            return label
+                matches = re.search(pattern, context, re.IGNORECASE)
+                if matches and matches.group(1):
+                    # Valider si le nom de champ est significatif (pas de noms génériques)
+                    field_name = matches.group(1).strip()
+                    
+                    # Vérifier si ce n'est pas un mot vide ou trop général
+                    if field_name.lower() not in ['champ', 'field', 'input', 'form', 'the', 'les', 'des', 'pour']:
+                        # Normaliser en format snake_case
+                        field_name = re.sub(r'\s+', '_', field_name).lower()
+                        field_name = re.sub(r'[^a-z0-9_]', '', field_name)
+                        
+                        # Vérifier longueur minimale après traitement
+                        if len(field_name) >= 3:
+                            return field_name
             
-            # Si aucun motif ne correspond, prendre le premier groupe de mots significatif
+            # Si aucun pattern ne correspond, utiliser une approche plus simple mais robuste
+            # Extraire le premier mot significatif (au moins 3 lettres)
             words = context.split()
-            words = [w for w in words if len(w) > 2 and not w.isdigit() and not all(c in '.,;:/_-+!?' for c in w)]
+            for word in words:
+                # Nettoyer le mot
+                clean_word = re.sub(r'[^a-zA-Z0-9]', '', word)
+                if len(clean_word) >= 3 and not clean_word.isdigit():  # Assoupli: min 3 caractères
+                    # Convertir en format snake_case
+                    field_name = clean_word.lower()
+                    field_name = re.sub(r'[^a-z0-9]', '_', field_name)
+                    
+                    # Limiter la longueur
+                    field_name = field_name[:30]
+                    
+                    return field_name
             
-            if len(words) >= 2:
-                # Prendre les premiers mots (probablement le label)
-                label = ' '.join(words[:min(4, len(words))]).strip()
-                return label
-            elif words:
-                return words[0].strip()
+            # Dernier recours: générer un nom basé sur les premiers caractères du texte
+            if len(context) >= 3:
+                # Extraire les premiers caractères alphabétiques
+                alpha_chars = ''.join(c for c in context[:20] if c.isalpha()).lower()
+                if len(alpha_chars) >= 3:
+                    return alpha_chars[:20]
             
-            return ""
+            # Si tout échoue, générer un nom générique mais éviter field_xxx si possible
+            seed = abs(hash(context)) % 1000
+            return f"checkbox_{seed}"
             
         except Exception as e:
-            logger.error(f"Erreur extraction label: {e}")
-            return ""
-  
+            logger.error(f"Erreur extraction nom de champ: {e}")
+            return f"checkbox_{int(time.time()) % 1000}"
+    
+    async def _post_validate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Effectue une validation finale pour éliminer les faux positifs.
+        
+        Args:
+            checkboxes: Liste de cases à cocher détectées
+            
+        Returns:
+            Liste filtrée de cases à cocher validées
+        """
+        if not checkboxes:
+            return []
+            
+        # Collecte des statistiques sur les dimensions pour détecter les anomalies
+        widths = [cb.get("width", 0) for cb in checkboxes]
+        heights = [cb.get("height", 0) for cb in checkboxes]
+        
+        if not widths or not heights:
+            return []
+        
+        median_width = sorted(widths)[len(widths) // 2]
+        median_height = sorted(heights)[len(heights) // 2]
+        
+        # Calculer les écarts interquartiles pour détecter les anomalies
+        q1_width = sorted(widths)[len(widths) // 4]
+        q3_width = sorted(widths)[3 * len(widths) // 4]
+        iqr_width = q3_width - q1_width
+        
+        q1_height = sorted(heights)[len(heights) // 4]
+        q3_height = sorted(heights)[3 * len(heights) // 4]
+        iqr_height = q3_height - q1_height
+        
+        # Seuils pour détecter les anomalies (méthode de la boîte à moustaches) - plus permissif
+        min_valid_width = max(8, q1_width - 2.0 * iqr_width)  # Plus permissif
+        max_valid_width = min(50, q3_width + 2.0 * iqr_width)  # Plus permissif
+        min_valid_height = max(8, q1_height - 2.0 * iqr_height)  # Plus permissif
+        max_valid_height = min(50, q3_height + 2.0 * iqr_height)  # Plus permissif
+        
+        # Expressions régulières pour les indices textuels dans le contexte
+        import re
+        checkbox_context_patterns = [
+            r'\b(oui|non|yes|no)\b',
+            r'\b(cocher|check|tick|select)\b',
+            r'(?i)[□■☐☑✓✔✕✖✗✘]',
+            r'\[\s*\]|\(\s*\)',
+            r'\b(option|choix|choice)\b'
+        ]
+        
+        valid_checkboxes = []
+        
+        # Vérification individuelle des cases
+        for checkbox in checkboxes:
+            # 1. Validation par score de confiance - moins strict
+            if checkbox.get("confidence", 0) < 0.55:  # Seuil réduit
+                continue
+                
+            # 2. Validation des dimensions - plus permissive
+            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
+            if not (min_valid_width <= w <= max_valid_width and min_valid_height <= h <= max_valid_height):
+                # Cas spécial: accepter les cases même légèrement hors norme
+                aspect_ratio = w / h if h > 0 else 0
+                if not (0.7 <= aspect_ratio <= 1.4 and min(w, h) >= 7 and max(w, h) <= 60):  # Critères élargis
+                    continue
+            
+            # 3. Validation par contexte textuel - recherche d'indices clairs
+            context = checkbox.get("text_context", "")
+            has_checkbox_indicators = False
+            
+            if context:
+                # Vérifier si le contexte contient des indices d'une case à cocher
+                for pattern in checkbox_context_patterns:
+                    if re.search(pattern, context):
+                        has_checkbox_indicators = True
+                        break
+                        
+                # Bonus de confiance pour les cases avec contexte clair
+                if has_checkbox_indicators:
+                    checkbox["confidence"] = min(1.0, checkbox.get("confidence", 0) * 1.2)
+                else:
+                    # Pénaliser légèrement les cases sans indices contextuels (mais moins fortement)
+                    checkbox["confidence"] *= 0.95  # Pénalité réduite
+                    if checkbox.get("confidence", 0) < 0.52:  # Seuil assoupli
+                        continue
+            
+            # 4. Validation du rapport hauteur/largeur (plus permissive)
+            aspect_ratio = w / h if h > 0 else 0
+            if aspect_ratio < 0.65 or aspect_ratio > 1.55:  # Plage élargie
+                continue
+                
+            # Tout est bon, considérer comme valide
+            valid_checkboxes.append(checkbox)
+        
+        # Dernière vérification: seulement si VRAIMENT trop de cases valides
+        if len(valid_checkboxes) > 40:  # Limite beaucoup plus élevée
+            # Trier par confiance et prendre les meilleures
+            valid_checkboxes = sorted(valid_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:40]
+        
+        return valid_checkboxes
+    
     async def _identify_form_section(self, text: str) -> str:
         """
         Identifie la section du formulaire basée sur le contexte textuel.
@@ -1435,247 +1574,6 @@ class CheckboxExtractor:
             logger.error(f"Erreur identification section: {e}")
             return ""
     
-    async def _extract_field_name(self, text: str) -> str:
-        """
-        Extrait un nom de champ potentiel du texte de contexte avec validation améliorée.
-        
-        Args:
-            text: Texte de contexte
-            
-        Returns:
-            Nom de champ ou chaîne vide
-        """
-        try:
-            if not text or len(text) < 3:
-                return ""
-                
-            # Nettoyer le texte
-            text = text.replace('\n', ' ').strip()
-            
-            # Supprimer les caractères spéciaux isolés et les chiffres isolés
-            text = re.sub(r'(\s|^)[^\w\s]{1,2}(\s|$)', ' ', text)
-            text = re.sub(r'(\s|^)\d{1,2}(\s|$)', ' ', text)
-            text = re.sub(r'\s+', ' ', text)
-            
-            # Rechercher des motifs plus spécifiques de noms de champs
-            field_patterns = [
-                # Format: label: valeur
-                r'(?:^|\s)([A-Za-z][A-Za-z0-9_]{3,30})(?:\s*[:=])',
-                
-                # Format: préfixe_mot significatif
-                r'(?:champ|field|input|form|formulaire|question)(?:\s*[:=]\s*)([A-Za-z][A-Za-z0-9_]{3,30})',
-                
-                # Format: [nom_champ]
-                r'\[([A-Za-z][A-Za-z0-9_]{3,30})\]',
-                
-                # Format: nom significatif (>3 lettres, commençant par une lettre)
-                r'\b([A-Za-z][A-Za-z]{3,}[A-Za-z0-9_]*)\b'
-            ]
-            
-            # Rechercher les motifs
-            for pattern in field_patterns:
-                matches = re.search(pattern, text, re.IGNORECASE)
-                if matches and matches.group(1):
-                    # Valider si le nom de champ est significatif (pas de noms génériques)
-                    field_name = matches.group(1).strip()
-                    
-                    # Vérifier si ce n'est pas un mot vide ou trop général
-                    if field_name.lower() not in ['champ', 'field', 'input', 'form', 'the', 'les', 'des', 'pour']:
-                        # Normaliser en format snake_case
-                        field_name = re.sub(r'\s+', '_', field_name).lower()
-                        field_name = re.sub(r'[^a-z0-9_]', '', field_name)
-                        
-                        # Vérifier longueur minimale après traitement
-                        if len(field_name) >= 3:
-                            return field_name
-            
-            # Si aucun pattern ne correspond, utiliser une approche plus simple mais robuste
-            # Extraire le premier mot significatif (au moins 4 lettres)
-            words = text.split()
-            for word in words:
-                # Nettoyer le mot
-                clean_word = re.sub(r'[^a-zA-Z0-9]', '', word)
-                if len(clean_word) >= 4 and not clean_word.isdigit():
-                    # Convertir en format snake_case
-                    field_name = clean_word.lower()
-                    field_name = re.sub(r'[^a-z0-9]', '_', field_name)
-                    
-                    # Limiter la longueur
-                    field_name = field_name[:30]
-                    
-                    return field_name
-            
-            # Dernier recours: générer un nom basé sur les premiers caractères du texte
-            if len(text) >= 3:
-                # Extraire les premiers caractères alphabétiques
-                alpha_chars = ''.join(c for c in text[:20] if c.isalpha()).lower()
-                if len(alpha_chars) >= 3:
-                    return alpha_chars[:20]
-            
-            # Si tout échoue, générer un nom générique mais éviter field_xxx si possible
-            seed = abs(hash(text)) % 1000
-            return f"checkbox_{seed}"
-            
-        except Exception as e:
-            logger.error(f"Erreur extraction nom de champ: {e}")
-            return f"checkbox_{int(time.time()) % 1000}"
-    
-    async def _post_validate_checkboxes(self, checkboxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Effectue une validation finale pour éliminer les faux positifs.
-        
-        Args:
-            checkboxes: Liste de cases à cocher détectées
-            
-        Returns:
-            Liste filtrée de cases à cocher validées
-        """
-        if not checkboxes:
-            return []
-            
-        # Collecte des statistiques sur les dimensions pour détecter les anomalies
-        widths = [cb.get("width", 0) for cb in checkboxes]
-        heights = [cb.get("height", 0) for cb in checkboxes]
-        
-        if not widths or not heights:
-            return []
-        
-        median_width = sorted(widths)[len(widths) // 2]
-        median_height = sorted(heights)[len(heights) // 2]
-        
-        # Calculer les écarts interquartiles pour détecter les anomalies
-        q1_width = sorted(widths)[len(widths) // 4]
-        q3_width = sorted(widths)[3 * len(widths) // 4]
-        iqr_width = q3_width - q1_width
-        
-        q1_height = sorted(heights)[len(heights) // 4]
-        q3_height = sorted(heights)[3 * len(heights) // 4]
-        iqr_height = q3_height - q1_height
-        
-        # Seuils pour détecter les anomalies (méthode de la boîte à moustaches)
-        min_valid_width = max(8, q1_width - 1.5 * iqr_width)
-        max_valid_width = min(50, q3_width + 1.5 * iqr_width)
-        min_valid_height = max(8, q1_height - 1.5 * iqr_height)
-        max_valid_height = min(50, q3_height + 1.5 * iqr_height)
-        
-        # Expressions régulières pour les indices textuels dans le contexte
-        import re
-        checkbox_context_patterns = [
-            r'\b(oui|non|yes|no)\b',
-            r'\b(cocher|check|tick|select)\b',
-            r'(?i)[□■☐☑✓✔✕✖✗✘]',
-            r'\[\s*\]|\(\s*\)',
-            r'\b(option|choix|choice)\b'
-        ]
-        
-        valid_checkboxes = []
-        
-        # Vérification individuelle des cases
-        for checkbox in checkboxes:
-            # 1. Validation par score de confiance - plus strict
-            if checkbox.get("confidence", 0) < 0.65:  # Seuil augmenté
-                continue
-                
-            # 2. Validation des dimensions
-            w, h = checkbox.get("width", 0), checkbox.get("height", 0)
-            if not (min_valid_width <= w <= max_valid_width and min_valid_height <= h <= max_valid_height):
-                # Cas spécial: accepter les cases très carrées même si dimensions légèrement hors norme
-                aspect_ratio = w / h if h > 0 else 0
-                if not (0.9 <= aspect_ratio <= 1.1 and min(w, h) >= 8 and max(w, h) <= 60):
-                    continue
-            
-            # 3. Validation par contexte textuel - recherche d'indices clairs
-            context = checkbox.get("text_context", "")
-            has_checkbox_indicators = False
-            
-            if context:
-                # Vérifier si le contexte contient des indices d'une case à cocher
-                for pattern in checkbox_context_patterns:
-                    if re.search(pattern, context):
-                        has_checkbox_indicators = True
-                        break
-                        
-                # Bonus de confiance pour les cases avec contexte clair
-                if has_checkbox_indicators:
-                    checkbox["confidence"] = min(1.0, checkbox.get("confidence", 0) * 1.2)
-                else:
-                    # Pénaliser légèrement les cases sans indices contextuels
-                    checkbox["confidence"] *= 0.9
-                    if checkbox.get("confidence", 0) < 0.6:  # Re-vérifier après ajustement
-                        continue
-            
-            # 4. Validation du rapport hauteur/largeur (doit être proche d'un carré)
-            aspect_ratio = w / h if h > 0 else 0
-            if aspect_ratio < 0.7 or aspect_ratio > 1.5:
-                continue
-                
-            # Tout est bon, considérer comme valide
-            valid_checkboxes.append(checkbox)
-        
-        # Dernière vérification: si trop de cases valides, appliquer un filtrage plus agressif
-        if len(valid_checkboxes) > 10:  # Limiter à 10 maximum
-            # Trier par confiance et prendre les 10 meilleures
-            valid_checkboxes = sorted(valid_checkboxes, key=lambda x: x.get("confidence", 0), reverse=True)[:10]
-        
-        return valid_checkboxes
-
-    async def _extract_better_field_name(self, context: str) -> str:
-        """Tente d'extraire un meilleur nom de champ du contexte."""
-        if not context or len(context) < 3:
-            return ""
-            
-        # Nettoyer le contexte
-        context = re.sub(r'[^\w\s\-_]', ' ', context)
-        context = re.sub(r'\s+', ' ', context).strip().lower()
-        
-        # Extraire des mots clés significatifs
-        words = context.split()
-        words = [w for w in words if len(w) >= 3 and not w.isdigit()]
-        
-        if not words:
-            return ""
-            
-        # Utiliser le premier mot significatif comme nom de base
-        base_name = words[0]
-        
-        # Si possible, combiner avec un second mot pour plus de spécificité
-        if len(words) > 1:
-            return f"{base_name}_{words[1]}"
-        
-        return base_name
-
-    async def _extract_better_label(self, context: str) -> str:
-        """Tente d'extraire un meilleur label du contexte."""
-        if not context:
-            return ""
-            
-        # Nettoyer le contexte
-        clean_context = re.sub(r'[^\w\s\-_.,;:]', ' ', context)
-        clean_context = re.sub(r'\s+', ' ', clean_context).strip()
-        
-        # Extraire les phrases ou groupes de mots
-        parts = re.split(r'[.;:]', clean_context)
-        parts = [p.strip() for p in parts if len(p.strip()) > 3]
-        
-        if parts:
-            # Prendre la première partie qui a un sens
-            for part in parts:
-                # Vérifier si la partie contient des mots significatifs
-                if re.search(r'[A-Za-z]{3,}', part):
-                    # Limiter la longueur
-                    if len(part) > 50:
-                        return part[:47] + "..."
-                    return part
-        
-        # Si rien n'est trouvé, prendre au moins quelques mots
-        words = clean_context.split()
-        if len(words) >= 3:
-            return " ".join(words[:3]) + "..."
-        elif words:
-            return " ".join(words)
-        
-        return ""
-
     async def _detect_checkboxes_with_ai(
         self,
         image: np.ndarray,
@@ -1713,7 +1611,7 @@ class CheckboxExtractor:
                     
                     # Vérifier si c'est un carré approximatif
                     aspect_ratio = detection["width"] / detection["height"]
-                    if 0.7 <= aspect_ratio <= 1.3:
+                    if 0.7 <= aspect_ratio <= 1.4:  # Plus permissif
                         # Extraire la région
                         x, y = detection["x"], detection["y"]
                         w, h = detection["width"], detection["height"]
